@@ -1,0 +1,200 @@
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------
+ABS_DIFF	EXP	REAL
+WEIGHS
+BIASES
+---------------------------

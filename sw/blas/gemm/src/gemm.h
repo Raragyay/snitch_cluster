@@ -21,14 +21,19 @@ typedef __fp16 v4f16 __attribute__((vector_size(8)));
 typedef char v8f8 __attribute__((vector_size(8)));
 #endif
 
+dump_float(gemm, 8);
+dump_uint(index, 9);
+
 void gemm_fp64_baseline(uint32_t M, uint32_t N, uint32_t K, double* A,
                         uint32_t ldA, uint32_t ta, double* B, uint32_t ldB,
-                        uint32_t tb, double* C, uint32_t ldC, double ALPHA) {
+                        uint32_t tb, double* C, uint32_t ldC, double BETA) {
     if (!ta && !tb) {
         for (uint32_t m = 0; m < M; m++) {
             for (uint32_t n = 0; n < N; n++) {
-                register double c0 = ALPHA * C[m * ldC + n];
+                double c0 = BETA * C[m * ldC + n];
                 for (uint32_t k = 0; k < K; k++) {
+                    // dump_index(k + m * ldA);
+                    // dump_gemm(A[k + m * ldA]);
                     c0 += A[k + m * ldA] * B[k * ldB + n];
                 }
                 C[m * ldC + n] = c0;
@@ -37,7 +42,7 @@ void gemm_fp64_baseline(uint32_t M, uint32_t N, uint32_t K, double* A,
     } else if (ta && !tb) {
         for (uint32_t m = 0; m < M; m++) {
             for (uint32_t n = 0; n < N; n++) {
-                register double c0 = ALPHA * C[m * ldC + n];
+                register double c0 = BETA * C[m * ldC + n];
                 for (uint32_t k = 0; k < K; k++) {
                     c0 += A[k * M * ldA + m * ldA] * B[k * ldB + n];
                 }
@@ -47,7 +52,7 @@ void gemm_fp64_baseline(uint32_t M, uint32_t N, uint32_t K, double* A,
     } else if (!ta && tb) {
         for (uint32_t m = 0; m < M; m++) {
             for (uint32_t n = 0; n < N; n++) {
-                register double c0 = ALPHA * C[m * ldC + n];
+                register double c0 = BETA * C[m * ldC + n];
                 for (uint32_t k = 0; k < K; k++) {
                     c0 += A[k + m * ldA] * B[k + n * ldB];
                 }
@@ -57,7 +62,109 @@ void gemm_fp64_baseline(uint32_t M, uint32_t N, uint32_t K, double* A,
     } else {
         for (uint32_t m = 0; m < M; m++) {
             for (uint32_t n = 0; n < N; n++) {
-                register double c0 = ALPHA * C[m * ldC + n];
+                register double c0 = BETA * C[m * ldC + n];
+                for (uint32_t k = 0; k < K; k++) {
+                    c0 += A[k * M * ldA + m * ldA] * B[k + n * ldB];
+                }
+                C[m * ldC + n] = c0;
+            }
+        }
+    }
+}
+
+/* params:
+ * M: number of rows of A and C
+ * N: number of columns of B and C
+ * K: number of columns of A and rows of B
+ * A: pointer to matrix A
+ * ldA: row stride of A
+ * ta: transpose A
+ * B: pointer to matrix B
+ * ldB: row stride of B
+ * tb: transpose B
+ * C: pointer to matrix C
+ * ldC: row stride of C
+ * ALPHA: scalar alpha
+ * A is MxK, B is KxN, C is MxN
+ */
+void gemm_fp32_baseline(uint32_t M, uint32_t N, uint32_t K, float* A,
+                        uint32_t ldA, uint32_t ta, float* B, uint32_t ldB,
+                        uint32_t tb, float* C, uint32_t ldC, float ALPHA) {
+    // float c0, c1, c2, c3 = 0;
+    float c0 = 0.0f;
+    float c1 = 0.0f;
+    float c2 = 0.0f;
+    float c3 = 0.0f;
+    if (!ta && !tb) {
+        for (uint32_t m = 0; m < M; m++) {
+            for (uint32_t n = 0; n < N; n++) {
+                // register float c0 = ALPHA * C[m * ldC + n];
+                // c0, c1, c2, c3 = 0;
+                if (ALPHA == 0.0f) {
+                    c0 = 0.0f;
+                } else {
+                    c0 = ALPHA * C[m * ldC + n];
+                }
+                c1 = 0.0f;
+                c2 = 0.0f;
+                c3 = 0.0f;
+                for (uint32_t k = 0; k < K; k += 4) {
+                    c0 += A[(k + 0) + m * ldA] * B[(k + 0) * ldB + n];
+                    c1 += A[(k + 1) + m * ldA] * B[(k + 1) * ldB + n];
+                    c2 += A[(k + 2) + m * ldA] * B[(k + 2) * ldB + n];
+                    c3 += A[(k + 3) + m * ldA] * B[(k + 3) * ldB + n];
+                }
+                C[m * ldC + n] = c0 + c1 + c2 + c3;
+            }
+        }
+    } else if (ta && !tb) {
+        for (uint32_t m = 0; m < M; m++) {
+            for (uint32_t n = 0; n < N; n++) {
+                // register float c0 = ALPHA * C[m * ldC + n];
+                if (ALPHA == 0.0f) {
+                    c0 = 0.0f;
+                } else {
+                    c0 = ALPHA * C[m * ldC + n];
+                }
+                c1 = 0.0f;
+                c2 = 0.0f;
+                c3 = 0.0f;
+                for (uint32_t k = 0; k < K; k += 4) {
+                    c0 += A[(k + 0) * M * ldA + m * ldA] * B[(k + 0) * ldB + n];
+                    c1 += A[(k + 1) * M * ldA + m * ldA] * B[(k + 1) * ldB + n];
+                    c2 += A[(k + 2) * M * ldA + m * ldA] * B[(k + 2) * ldB + n];
+                    c3 += A[(k + 3) * M * ldA + m * ldA] * B[(k + 3) * ldB + n];
+                }
+                C[m * ldC + n] = c0 + c1 + c2 + c3;
+            }
+        }
+    } else if (!ta && tb) {
+        for (uint32_t m = 0; m < M; m++) {
+            for (uint32_t n = 0; n < N; n++) {
+                // register float c0 = ALPHA * C[m * ldC + n];
+                if (ALPHA == 0.0f) {
+                    c0 = 0.0f;
+                } else {
+                    c0 = ALPHA * C[m * ldC + n];
+                }
+                c1 = 0.0f;
+                c2 = 0.0f;
+                c3 = 0.0f;
+                for (uint32_t k = 0; k < K; k += 4) {
+                    // c0 += A[k + m * ldA] * B[k + n * ldB];
+                    c0 += A[(k + 0) + m * ldA] * B[(k + 0) + n * ldB];
+                    c1 += A[(k + 1) + m * ldA] * B[(k + 1) + n * ldB];
+                    c2 += A[(k + 2) + m * ldA] * B[(k + 2) + n * ldB];
+                    c3 += A[(k + 3) + m * ldA] * B[(k + 3) + n * ldB];
+                }
+                // C[m * ldC + n] = c0;
+                C[m * ldC + n] = c0 + c1 + c2 + c3;
+            }
+        }
+    } else {
+        for (uint32_t m = 0; m < M; m++) {
+            for (uint32_t n = 0; n < N; n++) {
+                register float c0 = ALPHA * C[m * ldC + n];
                 for (uint32_t k = 0; k < K; k++) {
                     c0 += A[k * M * ldA + m * ldA] * B[k + n * ldB];
                 }
@@ -69,7 +176,7 @@ void gemm_fp64_baseline(uint32_t M, uint32_t N, uint32_t K, double* A,
 
 void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
                    uint32_t ta, double* B, uint32_t ldB, uint32_t tb, double* C,
-                   uint32_t ldC, const uint32_t* ALPHA, uint32_t setup_SSR) {
+                   uint32_t ldC, const uint32_t* BETA, uint32_t setup_SSR) {
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
     // for maximum utilization
@@ -124,7 +231,7 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
             double c[unroll];
 
             // Load intermediate result
-            if (*ALPHA) {
+            if (*BETA) {
                 c[0] = C[m * ldC + n + 0];
                 c[1] = C[m * ldC + n + 1];
                 c[2] = C[m * ldC + n + 2];
@@ -177,7 +284,7 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
 
         for (; n < N; n++) {
             double c;
-            if (*ALPHA) {
+            if (*BETA) {
                 c = C[m * ldC + n];
             } else {
                 c = 0.0;
@@ -196,7 +303,7 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
 
 void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
                    float* A, const uint32_t ldA, float* B, const uint32_t ldB,
-                   float* C, const uint32_t ldC, const uint32_t* ALPHA,
+                   float* C, const uint32_t ldC, const uint32_t* BETA,
                    const uint32_t setup_SSR) {
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
@@ -237,7 +344,7 @@ void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
             v2f32 c[unroll], reduce_reg[unroll];
 
             asm volatile(
-                "lw      t0, 0(%[ALPHA]) \n"
+                "lw      t0, 0(%[BETA]) \n"
                 "beqz    t0, 1f \n"
                 // Load intermediate results
                 "flw %[reduce_reg0], 0(%[C]) \n"
@@ -315,7 +422,7 @@ void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
                   [ reduce_reg6 ] "+f"(reduce_reg[6]),
                   [ reduce_reg7 ] "+f"(reduce_reg[7])
                 : [ C ] "r"(_C), [ zero ] "f"(zero), [ n_frep ] "r"(n_frep - 1),
-                  [ ALPHA ] "r"(ALPHA)
+                  [ BETA ] "r"(BETA)
                 : "ft0", "ft1", "ft2");
 
             // Store results
@@ -332,7 +439,7 @@ void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
         snrt_ssr_disable();
 
         for (; n < N; n++) {
-            float c = (*ALPHA) ? C[m * ldC + n] : 0.0;
+            float c = (*BETA) ? C[m * ldC + n] : 0.0;
             for (uint32_t k = 0; k < K; k++) {
                 c += A[k + m * ldA] * B[k + n * ldB];
             }
@@ -347,7 +454,7 @@ void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
 
 void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
                    __fp16* B, uint32_t ldB, __fp16* C, uint32_t ldC,
-                   const uint32_t* ALPHA, uint32_t setup_SSR) {
+                   const uint32_t* BETA, uint32_t setup_SSR) {
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
     // for maximum utilization
@@ -386,11 +493,11 @@ void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
             const register float zero = 0.0;
             v4f16 c[unroll];
             v2f32 reduce_reg[unroll];
-            uint32_t alpha;
+            uint32_t beta;
 
             asm volatile(
-                "lw      %[alpha], 0(%[ALPHA]) \n"
-                "beqz    %[alpha], 1f \n"
+                "lw      %[beta], 0(%[BETA]) \n"
+                "beqz    %[beta], 1f \n"
                 // Load intermediate results
                 "flh %[reduce_reg0], 0(%[C]) \n"
                 "flh %[reduce_reg1], 2(%[C]) \n"
@@ -493,7 +600,7 @@ void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
                 "vfcpkb.h.s %[c1], %[c6], %[c7] \n"
                 : [ c0 ] "+f"(c[0]), [ c1 ] "+f"(c[1]), [ c2 ] "+f"(c[2]),
                   [ c3 ] "+f"(c[3]), [ c4 ] "+f"(c[4]), [ c5 ] "+f"(c[5]),
-                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]), [ alpha ] "=r"(alpha),
+                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]), [ beta ] "=r"(beta),
                   [ reduce_reg0 ] "+f"(reduce_reg[0]),
                   [ reduce_reg1 ] "+f"(reduce_reg[1]),
                   [ reduce_reg2 ] "+f"(reduce_reg[2]),
@@ -503,7 +610,7 @@ void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
                   [ reduce_reg6 ] "+f"(reduce_reg[6]),
                   [ reduce_reg7 ] "+f"(reduce_reg[7])
                 : [ C ] "r"(_C), [ zero ] "f"(zero), [ n_frep ] "r"(n_frep),
-                  [ ALPHA ] "r"(ALPHA)
+                  [ BETA ] "r"(BETA)
                 : "ft0", "ft1", "ft2");
 
             // Store results back
@@ -516,7 +623,7 @@ void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
         // snrt_ssr_disable();
 
         // for (; n < N; n++) {
-        //     __fp16 c = (*ALPHA) ? C[m * ldC + n] : 0.0;
+        //     __fp16 c = (*BETA) ? C[m * ldC + n] : 0.0;
         //     for (uint32_t k = 0; k < K; k++) {
         //         c += A[k + m * ldA] * B[k + n * ldB];
         //     }
@@ -531,7 +638,7 @@ void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
 
 void gemm_fp16_ex_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A,
                       uint32_t ldA, __fp16* B, uint32_t ldB, __fp16* C,
-                      uint32_t ldC, const uint32_t* ALPHA, uint32_t setup_SSR) {
+                      uint32_t ldC, const uint32_t* BETA, uint32_t setup_SSR) {
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
     // for maximum utilization
@@ -570,11 +677,11 @@ void gemm_fp16_ex_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A,
             const register float zero = 0.0;
             v4f16 c[unroll];
             v2f32 reduce_reg[unroll];
-            uint32_t alpha;
+            uint32_t beta;
 
             asm volatile(
-                "lw      %[alpha], 0(%[ALPHA]) \n"
-                "beqz    %[alpha], 1f \n"
+                "lw      %[beta], 0(%[BETA]) \n"
+                "beqz    %[beta], 1f \n"
                 "flh %[reduce_reg0], 0(%[C]) \n"
                 "flh %[reduce_reg1], 2(%[C]) \n"
                 "flh %[reduce_reg2], 4(%[C]) \n"
@@ -657,7 +764,7 @@ void gemm_fp16_ex_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A,
                 "vfcpkb.h.s %[c1], %[reduce_reg6], %[reduce_reg7] \n"
                 : [ c0 ] "+f"(c[0]), [ c1 ] "+f"(c[1]), [ c2 ] "+f"(c[2]),
                   [ c3 ] "+f"(c[3]), [ c4 ] "+f"(c[4]), [ c5 ] "+f"(c[5]),
-                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]), [ alpha ] "=r"(alpha),
+                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]), [ beta ] "=r"(beta),
                   [ reduce_reg0 ] "+f"(reduce_reg[0]),
                   [ reduce_reg1 ] "+f"(reduce_reg[1]),
                   [ reduce_reg2 ] "+f"(reduce_reg[2]),
@@ -667,7 +774,7 @@ void gemm_fp16_ex_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A,
                   [ reduce_reg6 ] "+f"(reduce_reg[6]),
                   [ reduce_reg7 ] "+f"(reduce_reg[7])
                 : [ C ] "r"(_C), [ zero ] "f"(zero), [ n_frep ] "r"(n_frep),
-                  [ ALPHA ] "r"(ALPHA)
+                  [ BETA ] "r"(BETA)
                 : "ft0", "ft1", "ft2");
 
             // Store results back
@@ -680,7 +787,7 @@ void gemm_fp16_ex_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A,
         // snrt_ssr_disable();
 
         // for (; n < N; n++) {
-        //     __fp16 c = (*ALPHA) ? C[m * ldC + n] : 0.0;
+        //     __fp16 c = (*BETA) ? C[m * ldC + n] : 0.0;
         //     for (uint32_t k = 0; k < K; k++) {
         //         c += A[k + m * ldA] * B[k + n * ldB];
         //     }
@@ -695,9 +802,9 @@ void gemm_fp16_ex_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A,
 
 void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
                      char* B, uint32_t ldB, char* C, uint32_t ldC,
-                     const uint32_t* ALPHA, uint32_t setup_SSR) {
+                     const uint32_t* BETA, uint32_t setup_SSR) {
     // Accumulating currently not implemented
-    if (*ALPHA != 0) return;
+    if (*BETA != 0) return;
 
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
@@ -737,11 +844,11 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
             const register float zero = 0.0;
             v8f8 c[unroll];
             v4f16 reduce_reg[unroll];
-            uint32_t alpha;
+            uint32_t beta;
 
             asm volatile(
-                "lw      %[alpha], 0(%[ALPHA]) \n"
-                "beqz    %[alpha], 1f \n"
+                "lw      %[beta], 0(%[BETA]) \n"
+                "beqz    %[beta], 1f \n"
                 "flb %[reduce_reg0], 0(%[C]) \n"
                 "flb %[reduce_reg1], 1(%[C]) \n"
                 "flb %[reduce_reg2], 2(%[C]) \n"
@@ -848,7 +955,7 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
                 // "vfcpkd.b.s %[c0], %[reduce_reg6], %[reduce_reg7] \n"
                 : [ c0 ] "+f"(c[0]), [ c1 ] "+f"(c[1]), [ c2 ] "+f"(c[2]),
                   [ c3 ] "+f"(c[3]), [ c4 ] "+f"(c[4]), [ c5 ] "+f"(c[5]),
-                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]), [ alpha ] "=r"(alpha),
+                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]), [ beta ] "=r"(beta),
                   [ reduce_reg0 ] "+f"(reduce_reg[0]),
                   [ reduce_reg1 ] "+f"(reduce_reg[1]),
                   [ reduce_reg2 ] "+f"(reduce_reg[2]),
@@ -857,7 +964,7 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
                   [ reduce_reg5 ] "+f"(reduce_reg[5]),
                   [ reduce_reg6 ] "+f"(reduce_reg[6]),
                   [ reduce_reg7 ] "+f"(reduce_reg[7])
-                : [ C ] "r"(_C), [ n_frep ] "r"(n_frep), [ ALPHA ] "r"(ALPHA),
+                : [ C ] "r"(_C), [ n_frep ] "r"(n_frep), [ BETA ] "r"(BETA),
                   [ zero ] "f"(zero)
                 : "ft0", "ft1", "ft2");
 
@@ -870,7 +977,7 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
         // snrt_ssr_disable();
 
         // for (; n < N; n++) {
-        //     char c = (*ALPHA) ? C[m * ldC + n] : 0.0;
+        //     char c = (*BETA) ? C[m * ldC + n] : 0.0;
         //     for (uint32_t k = 0; k < K; k++) {
         //         c += A[k + m * ldA] * B[k + n * ldB];
         //     }
@@ -886,12 +993,12 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
 // BLAS compliant GEMM kernel, with some additional arguments at the beginning
 // to specify Snitch implementation details. Matrix sizes and pointers are for
 // the whole cluster computation
-// TODO: alpha (and beta) should be of floating-point type (same precision as
+// TODO: beta (and alpha) should be of floating-point type (same precision as
 // operands)
 void gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
           uint32_t transa, uint32_t transb, uint32_t m, uint32_t n, uint32_t k,
-          uint32_t alpha, void* a, uint32_t lda, void* b, uint32_t ldb,
-          double beta, void* c, uint32_t ldc) {
+          double alpha, void* a, uint32_t lda, void* b, uint32_t ldb,
+          uint32_t beta, void* c, uint32_t ldc) {
     const uint32_t compute_num = snrt_cluster_compute_core_num();
     const uint32_t compute_id = snrt_cluster_core_idx();
 
@@ -910,27 +1017,27 @@ void gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
         case FP64:
             gemm_fp64_opt(frac_m, n, k, (double*)a + offsetA, lda_strided,
                           transa, (double*)b, ldb, transb, (double*)c + offsetC,
-                          ldc_strided, &alpha, setup_ssr);
+                          ldc_strided, &beta, setup_ssr);
             break;
         case FP32:
             gemm_fp32_opt(frac_m, n, k, (float*)a + offsetA, lda_strided,
                           (float*)b, ldb, (float*)c + offsetC, ldc_strided,
-                          &alpha, setup_ssr);
+                          &beta, setup_ssr);
             break;
         case FP16:
             if (expand) {
                 gemm_fp16_ex_opt(
                     frac_m, n, k, (__fp16*)a + offsetA, lda_strided, (__fp16*)b,
-                    ldb, (__fp16*)c + offsetC, ldc_strided, &alpha, setup_ssr);
+                    ldb, (__fp16*)c + offsetC, ldc_strided, &beta, setup_ssr);
             } else {
                 gemm_fp16_opt(frac_m, n, k, (__fp16*)a + offsetA, lda_strided,
                               (__fp16*)b, ldb, (__fp16*)c + offsetC,
-                              ldc_strided, &alpha, setup_ssr);
+                              ldc_strided, &beta, setup_ssr);
             }
             break;
         case FP8:
             gemm_fp8_ex_opt(frac_m, n, k, (char*)a + offsetA, lda, (char*)b,
-                            ldb, (char*)c + offsetC, ldc_strided, &alpha,
+                            ldb, (char*)c + offsetC, ldc_strided, &beta,
                             setup_ssr);
             break;
     }

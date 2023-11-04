@@ -6,17 +6,19 @@
 
 SUBDIRS  = lto
 SUBDIRS += nop
+# SUBDIRS += transformer
 SUBDIRS += blas/axpy
 SUBDIRS += blas/gemm
 SUBDIRS += dnn/batchnorm
-SUBDIRS += dnn/conv2d
-SUBDIRS += dnn/fusedconv
+# SUBDIRS += dnn/conv2d
+# SUBDIRS += dnn/fusedconv
 SUBDIRS += dnn/gelu
 SUBDIRS += dnn/gemm
 SUBDIRS += dnn/layernorm
 SUBDIRS += dnn/linear
 SUBDIRS += dnn/maxpool
 SUBDIRS += dnn/softmax
+SUBDIRS += dnn/flashattention_2
 SUBDIRS += montecarlo/pi_estimation
 
 .PHONY: all clean $(SUBDIRS)

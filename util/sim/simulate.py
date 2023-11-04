@@ -39,7 +39,7 @@ SIMULATOR_CMDS = {
 }
 
 
-def parse_args():
+def parser():
     # Argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -81,8 +81,7 @@ def parse_args():
         action='store_true',
         help=('Option to print simulation logs when multiple tests are run in parallel.'
               'Logs are always printed when n_procs == 1'))
-    args = parser.parse_args()
-    return args
+    return parser
 
 
 # Get tests from a test list file
@@ -156,10 +155,16 @@ def run_simulation(cmd, simulator, test, quiet=False):
 def run_test(test, args):
     # Extract args
     simulator = args.simulator
-    sim_bin = args.sim_bin if args.sim_bin else SIMULATOR_BINS[simulator]
     dry_run = args.dry_run
     testlist = args.testlist
     quiet = multiple_processes(args)
+
+    # Simulator binary can be overriden on the command-line or test-wise
+    sim_bin = SIMULATOR_BINS[simulator]
+    if args.sim_bin:
+        sim_bin = args.sim_bin
+    if 'sim_bin' in test:
+        sim_bin = test['sim_bin']
 
     # Check if simulator is supported for this test
     if 'simulators' in test:
@@ -180,7 +185,13 @@ def run_test(test, args):
     else:
         cmd = SIMULATOR_CMDS[simulator]
         cmd = cmd.format(sim_bin=sim_bin, elf=elf)
-    if not quiet:
+
+    # Check if the simulation should be run in a specific directory.
+    # This is useful, e.g. to preserve the logs of multiple simulations
+    # which are executed in parallel
+    if 'rundir' in test:
+        cmd = f'cd {test["rundir"]} && {cmd}'
+    if not quiet or args.verbose:
         print(f'$ {cmd}', flush=True)
 
     # Run simulation
@@ -261,7 +272,7 @@ def run_tests(tests, args):
 
 
 def main():
-    args = parse_args()
+    args = parser().parse_args()
     tests = get_tests(args.testlist)
     return run_tests(tests, args)
 

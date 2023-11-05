@@ -13,6 +13,8 @@ typedef struct {
     double *ofmap;
     double *gamma;
     double *beta;
+
+    float eps;
     precision_t dtype;
 } batchnorm_layer_t;
 
@@ -26,16 +28,18 @@ typedef struct {
  * @param ofmap pointer to output feature map
  * @param OW width of output feature map
  * @param CI number of input channels
- * @param compute_num number of compute units
+ * @param num_compute_cores number of compute units
  * @param setup_SSR setup SSR strides and bounds
  */
 static inline void batchnorm_fp64(double *ifmap, double *gamma, double *beta,
                                   double *ofmap, uint32_t OW, uint32_t CI,
-                                  uint32_t compute_num, uint32_t setup_SSR) {
+                                  uint32_t num_compute_cores,
+                                  uint32_t setup_SSR) {
     // initial SSR setup
     if (setup_SSR) {
-        uint32_t ssr_b[2] = {OW, CI / compute_num};
-        uint32_t ssr_i[2] = {CI * sizeof(double), compute_num * sizeof(double)};
+        uint32_t ssr_b[2] = {OW, CI / num_compute_cores};
+        uint32_t ssr_i[2] = {CI * sizeof(double),
+                             num_compute_cores * sizeof(double)};
 
         snrt_ssr_loop_2d(SNRT_SSR_DM0, ssr_b[0], ssr_b[1], ssr_i[0], ssr_i[1]);
         snrt_ssr_loop_2d(SNRT_SSR_DM1, ssr_b[0], ssr_b[1], ssr_i[0], ssr_i[1]);
@@ -46,7 +50,7 @@ static inline void batchnorm_fp64(double *ifmap, double *gamma, double *beta,
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, ofmap);
     snrt_ssr_enable();
 
-    for (uint32_t ci = 0; ci < CI; ci += compute_num) {
+    for (uint32_t ci = 0; ci < CI; ci += num_compute_cores) {
         register double g = gamma[ci];
         register double b = beta[ci];
 
@@ -54,7 +58,7 @@ static inline void batchnorm_fp64(double *ifmap, double *gamma, double *beta,
         asm volatile(
             "frep.o %[n_frep], 1, 0, 0 \n"
             "fmadd.d ft1, ft0, %[g], %[b] \n" ::[g] "f"(g),
-            [ b ] "f"(b), [ n_frep ] "r"(OW - 1)
+            [b] "f"(b), [n_frep] "r"(OW - 1)
             : "ft0", "ft1", "ft2");
     }
     snrt_fpu_fence();
@@ -63,10 +67,15 @@ static inline void batchnorm_fp64(double *ifmap, double *gamma, double *beta,
 }
 
 static inline void batchnorm_layer(const batchnorm_layer_t *l) {
-    const uint32_t cluster_num = snrt_cluster_num();
-    const uint32_t cluster_id = snrt_cluster_idx();
-    const uint32_t compute_num = snrt_cluster_compute_core_num();
-    const uint32_t compute_id = snrt_cluster_core_idx();
+    // data is in HWC format
+    const uint32_t num_clusters =
+        snrt_cluster_num();  // how many clusters are there in total? currently
+                             // 1 in the config i think
+    const uint32_t cluster_id = snrt_cluster_idx();  // which cluster are we?
+    const uint32_t num_compute_cores =
+        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
+    const uint32_t compute_id =
+        snrt_cluster_core_idx();  // which core are we in this cluster
 
     // Calculate output dimensions
     uint32_t OH = l->IH;
@@ -74,10 +83,16 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
     uint32_t CO = l->CI;
 
     // Each cluster loads one tile of a row
-    uint32_t ifmap_size = 2 * l->IW * l->TILE_CI;
-    uint32_t weights_size = l->CI;
+    // the tile being W x C?
+    uint32_t ifmap_size =
+        2 * l->IW * l->TILE_CI;     // one for read one for write or smth?
+    uint32_t weights_size = l->CI;  // we need C * sizeof(double) space
     uint32_t ofmap_size = 2 * l->IW * l->TILE_CI;
 
+    // here i think we're assuming it's already in dram or smth?
+    // no, i think we are just making our own little scratchpad
+
+    // dataflow:
     double *ptr = (double *)snrt_l1_start_addr();
     double *ifmap = ptr;
     ptr += ifmap_size;
@@ -95,38 +110,48 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
     uint32_t prev_ow;
     uint32_t prev_ci;
 
-    for (uint32_t oh = cluster_id; oh < OH; oh += cluster_num) {
+    // iterate over the rows of the output, skipping by num_clusters each time
+    // clusters are responsible for a set of rows
+    for (uint32_t row_idx = cluster_id; row_idx < OH; row_idx += num_clusters) {
+        // i gues like
         for (uint32_t ci = 0; ci < l->CI; ci += l->TILE_CI) {
             if (snrt_is_dm_core()) {
                 // Load weights once in the beginning
-                if (oh == cluster_id && ci == 0) {
+                if (row_idx == cluster_id && ci == 0) {
                     snrt_dma_start_1d(gamma, l->gamma, sizeof(double) * l->CI);
                     snrt_dma_start_1d(beta, l->beta, sizeof(double) * l->CI);
+                    // q: why do we need to block here?
                     snrt_dma_wait_all();
                 }
 
                 // Load some stuff
+                // art: i hate this comment
                 if (l->TILE_CI == l->CI) {
                     // data layout is consecutively in memory
-                    snrt_dma_start_1d(&ifmap[write_buf * ifmap_size / 2],
-                                      &l->ifmap[oh * l->IW * l->CI],
-                                      sizeof(double) * l->IW * l->TILE_CI);
+                    snrt_dma_start_1d(
+                        &ifmap[write_buf * ifmap_size /
+                               2],  // use half the write buffer
+                        &l->ifmap[row_idx * l->IW *
+                                  l->CI],  // IW*CI is W * C, so we are starting
+                                           // from the base of a row
+                        sizeof(double) * l->IW *
+                            l->TILE_CI);  // copy the whole thing W * C
                 } else {
                     // data is interleaved
                     snrt_dma_start_2d(
-                        &ifmap[write_buf * ifmap_size / 2], /* dst */
-                        &l->ifmap[oh * l->IW * l->CI + ci], /* src */
-                        sizeof(double) * l->TILE_CI,        /* size */
-                        sizeof(double) * l->TILE_CI,        /* dst_stride */
-                        sizeof(double) * l->CI,             /* src_stride */
-                        l->IW);                             /* repetitions */
+                        &ifmap[write_buf * ifmap_size / 2],      /* dst */
+                        &l->ifmap[row_idx * l->IW * l->CI + ci], /* src */
+                        sizeof(double) * l->TILE_CI,             /* size */
+                        sizeof(double) * l->TILE_CI, /* dst_stride */
+                        sizeof(double) * l->CI,      /* src_stride */
+                        l->IW);                      /* repetitions */
                 }
 
                 snrt_dma_wait_all();
 
                 snrt_cluster_hw_barrier();
 
-                if (!(oh == cluster_id && ci == 0)) {
+                if (!(row_idx == cluster_id && ci == 0)) {
                     if (l->TILE_CI == l->CI) {
                         // data is stored consecutively
                         snrt_dma_start_1d(&l->ofmap[prev_oh * OW * l->CI],
@@ -148,7 +173,7 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
                 write_buf = !write_buf;
                 read_buf = !read_buf;
                 prev_ci = ci;
-                prev_oh = oh;
+                prev_oh = row_idx;
                 /* prev_ow = ow; */
             }
 
@@ -156,13 +181,13 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
                 // Wait for data
                 snrt_cluster_hw_barrier();
                 // initially setup SSRs
-                uint32_t setup_SSR = (oh == cluster_id && ci == 0);
+                uint32_t setup_SSR = (row_idx == cluster_id && ci == 0);
 
                 // Start kernel
                 batchnorm_fp64(&ifmap[read_buf * ofmap_size / 2 + compute_id],
                                &gamma[ci + compute_id], &beta[ci + compute_id],
                                &ofmap[write_buf * ofmap_size / 2 + compute_id],
-                               OW, l->TILE_CI, compute_num, setup_SSR);
+                               OW, l->TILE_CI, num_compute_cores, setup_SSR);
 
                 write_buf = !write_buf;
                 read_buf = !read_buf;
@@ -192,4 +217,52 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
 
         snrt_dma_wait_all();
     }
+}
+
+static inline void my_batchnorm(const batchnorm_layer_t *layer) {
+    uint32_t N = 1, H = layer->IH, W = layer->IW, C = layer->CI;
+    double *X = layer->ifmap;
+    double *Y = layer->ofmap;
+    double *gamma = layer->gamma;
+    double *beta = layer->beta;
+    if (!snrt_is_compute_core()){
+        return;
+    }
+    const uint32_t num_compute_cores =
+        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
+    const uint32_t compute_id =
+        snrt_cluster_core_idx();  // which core are we in this cluster
+    // if (training == 1) {
+    //     printf("training mode not supported\n");
+    //     return;
+    // }
+
+    uint32_t num_points = N * H * W;
+    // [1_R,1_G,1_B,2_R,2_G,2_B]
+    for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
+        // in vector notation
+        // Y[i * H * W * C + h * W * C + w * C] =
+        //     (X[i * H * W * C + h * W * C + w * C] - input_mean) /
+        //         sqrt(input_var + eps) * weight + bias
+        for (uint32_t channel = 0; channel < C; ++channel) {
+            Y[i * C + channel] =
+                X[i * C + channel] * gamma[channel] + beta[channel];
+            // Y[i * C + channel] = (X[i * C + channel] - input_mean[channel]) /
+            //                          sqrt(input_var[channel] + eps) *
+            //                          weight[channel] +
+            //                      bias[channel];
+        }
+    }
+    // conv layer in NHWC format
+    // but conv_layer only has 1 batch
+
+    // compute mean and variance
+
+    // batch_norm_cpu_collect_stats_channels_last_impl
+    // batch_norm_cpu_collect_linear_and_constant_terms
+
+    // without beta or gamma passed in
+
+    // if training is 0 (then we don't need to calculate the mean and variance
+    // of X)
 }

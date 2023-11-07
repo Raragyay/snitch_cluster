@@ -41,13 +41,21 @@ def main():
     m = bytes_to_int(elf.get_symbol_contents('M'), prec='32', signedness='unsigned')[0]
     n = bytes_to_int(elf.get_symbol_contents('N'), prec='32', signedness='unsigned')[0]
     k = bytes_to_int(elf.get_symbol_contents('K'), prec='32', signedness='unsigned')[0]
+    ta = bytes_to_int(elf.get_symbol_contents('TA'), prec='32', signedness='unsigned')[0]
     tb = bytes_to_int(elf.get_symbol_contents('TB'), prec='32', signedness='unsigned')[0]
-    a = np.reshape(a, (m, k))
+
+    if ta:
+        a = np.reshape(a, (k, m))
+        a = a.transpose()
+    else:
+        a = np.reshape(a, (m, k))
+
     if tb:
         b = np.reshape(b, (n, k))
         b = b.transpose()
     else:
         b = np.reshape(b, (k, n))
+
     c = np.reshape(c, (m, n))
 
     # Verify results
@@ -56,8 +64,11 @@ def main():
     absolute_err = np.absolute(c_golden - c_actual)
     fail = np.any(absolute_err > ERR_THRESHOLD)
     if (fail):
+        print("FAIL\n")
         verification.dump_results_to_csv([c_golden, c_actual, absolute_err],
                                          Path.cwd() / 'gemm_results.csv')
+    else:
+        print("SUCCESS\n")
 
     return int(fail)
 

@@ -1,10 +1,3 @@
-// Copyright 2023 ETH Zurich and University of Bologna.
-// Licensed under the Apache License, Version 2.0, see LICENSE for details.
-// SPDX-License-Identifier: Apache-2.0
-//
-// Author: Tim Fischer <fischeti@iis.ee.ethz.ch>
-//         Luca Colagrande <colluca@iis.ee.ethz.ch>
-
 #include <math.h>
 #include <stdint.h>
 
@@ -12,105 +5,65 @@
 #include "gemm.h"
 #include "snrt.h"
 
-int main() {
-    void *local_a, *local_b, *local_c;
-    void *remote_a, *remote_b, *remote_c;
 
-    // Calculate size and pointers for each cluster
-    uint32_t frac_m = M / snrt_cluster_num();
-    uint32_t frac_a = frac_m * K;
-    uint32_t frac_c = frac_m * N;
-    uint32_t size_frac_a = frac_a * dtype_size;
-    uint32_t size_b = K * N * dtype_size;
-    uint32_t size_frac_c = frac_c * dtype_size;
-    uint32_t offset_a = frac_a * snrt_cluster_idx();
-    uint32_t offset_c = frac_c * snrt_cluster_idx();
-    remote_a = a + offset_a;
-    remote_b = b;
-    remote_c = c + offset_c;
+int main(int argc, char *argv[]) {
 
-    // Allocate space in TCDM
-    local_a = (void *)snrt_l1_next();
-    local_b = local_a + size_frac_a;
-    local_c = local_b + size_b;
+    DATA_TYPE t [M*N];
 
-    // Copy data in TCDM
-    if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(local_a, remote_a, size_frac_a);
-        snrt_dma_start_1d(local_b, remote_b, size_b);
-        snrt_dma_start_1d(local_c, remote_c, size_frac_c);
-        snrt_dma_wait_all();
-    }
-
+    for (uint32_t i = 0; i < M; i++)
+        for (uint32_t j = 0; j < N; j++)
+            t[i*N +j] = 0;
     snrt_cluster_hw_barrier();
 
-    // Compute
-    if (!snrt_is_dm_core()) {
-        const uint32_t setup_ssr = 1;
-        uint32_t start_cycle = snrt_mcycle();
 
-        volatile uint32_t lda = K;
-        volatile uint32_t ldb = N;
-        volatile uint32_t ldc = N;
+    DATA_TYPE *a11 = a,          *a12 = a + K/2;
+    DATA_TYPE *a21 = a + M/2 *K, *a22 = a + M/2 *K + K/2;
 
-        // Transpose of A unsopported
-        if (TA) return -1;
-        if (TB) {
-            // Transpose of B supported only in FP64
-            if (dtype_size != FP64) return -1;
-            ldb = K;
-        }
+    DATA_TYPE *b11 = b,          *b12 = b + N/2;
+    DATA_TYPE *b21 = b + K/2 *N, *b22 = a + K/2 *N + N/2;
 
-        gemm(dtype_size, expand, setup_ssr, TA, TB, frac_m, N, K, 1, local_a,
-             lda, local_b, ldb, BETA, local_c, ldc);
+    DATA_TYPE *c11 = c,          *c12 = c + N/2;
+    DATA_TYPE *c21 = c + M/2 *N, *c22 = c + M/2 *N + N/2;
 
-        uint32_t end_cycle = snrt_mcycle();
+    DATA_TYPE *t11 = t,          *t12 = t + N/2;
+    DATA_TYPE *t21 = t + M/2 *N, *t22 = t + M/2 *N + N/2;
+    
+    #ifdef SINGLE_CORE
+    if (snrt_cluster_core_idx() == 0)
+        gemm(M, N, K, M, N, K, a, TA, b, TB, c, BETA);
+    #else
+    switch (snrt_cluster_core_idx()) {
+        case 0:
+            gemm (M, N, K, M/2, N/2, K/2, a11, TA, b11, TB, c11, BETA);
+            break;
+        case 1:
+            gemm (M, N, K, M/2, N/2, K/2, a11, TA, b12, TB, c12, BETA);
+            break;
+        case 2:
+            gemm (M, N, K, M/2, N/2, K/2, a21, TA, b11, TB, c21, BETA);
+            break;
+        case 3:
+            gemm (M, N, K, M/2, N/2, K/2, a21, TA, b12, TB, c22, BETA);
+            break;
+        case 4:
+            gemm (M, N, K, M/2, N/2, K/2, a12, TA, b21, TB, t11, BETA);
+            break;
+        case 5:
+            gemm (M, N, K, M/2, N/2, K/2, a12, TA, b22, TB, t12, BETA);
+            break;
+        case 6:
+            gemm (M, N, K, M/2, N/2, K/2, a22, TA, b21, TB, t21, BETA);
+            break;
+        case 7:
+            gemm (M, N, K, M/2, N/2, K/2, a22, TA, b22, TB, t22, BETA);
+            break;
     }
+
 
     snrt_cluster_hw_barrier();
-
-    // Copy data out of TCDM
-    if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(remote_c, local_c, size_frac_c);
-        snrt_dma_wait_all();
-    }
-
-// TODO: currently only works for single cluster otherwise need to
-//       synchronize all cores here
-#ifdef BIST
-    uint32_t errors = M * N;
-
-    if (snrt_cluster_core_idx() == 0) {
-        for (uint32_t m = 0; m < M; m++) {
-            for (uint32_t n = 0; n < N; n++) {
-                uint32_t idx = m * N + n;
-                switch (dtype_size) {
-                    case FP64:
-                        if (fabs(result[idx] - ((double *)local_c)[idx]) >
-                            0.001)
-                            errors--;
-                        break;
-                    case FP32:
-                        if (fabs(result[idx] - ((float *)local_c)[idx]) > 0.001)
-                            errors--;
-                        break;
-                    case FP16:
-                        if (fabs(result[idx] - ((__fp16 *)local_c)[idx]) >
-                            0.001)
-                            errors--;
-                        break;
-                    case FP8:
-                        printf("No golden model yet for fp8!\n");
-                        return -1;
-                        break;
-                }
-            }
-        }
-        printf("%d/%d Errors\n", errors, M * N);
-    }
-
-    return errors;
-#endif
-
-    return 0;
-}
+    if (snrt_cluster_core_idx() == 0)
+        for (uint32_t i = 0; i < M; i++)
+            for (uint32_t j = 0; j < N; j++)
+                c[i*N +j] += t[i*N +j];
+    #endif
+}   

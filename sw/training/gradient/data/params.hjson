@@ -1,0 +1,9 @@
+// Parameters for gradient update
+
+{
+    M: 1,
+    N: 128,
+    K: 32,
+    prec: 64,
+    e: 0.001
+}

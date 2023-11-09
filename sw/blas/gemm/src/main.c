@@ -5,14 +5,11 @@
 #include "gemm.h"
 #include "snrt.h"
 
+DATA_TYPE t [16] = {0};
 
 int main(int argc, char *argv[]) {
 
-    DATA_TYPE t [M*N];
 
-    for (uint32_t i = 0; i < M; i++)
-        for (uint32_t j = 0; j < N; j++)
-            t[i*N +j] = 0;
     snrt_cluster_hw_barrier();
 
 
@@ -20,7 +17,7 @@ int main(int argc, char *argv[]) {
     DATA_TYPE *a21 = a + M/2 *K, *a22 = a + M/2 *K + K/2;
 
     DATA_TYPE *b11 = b,          *b12 = b + N/2;
-    DATA_TYPE *b21 = b + K/2 *N, *b22 = a + K/2 *N + N/2;
+    DATA_TYPE *b21 = b + K/2 *N, *b22 = b + K/2 *N + N/2;
 
     DATA_TYPE *c11 = c,          *c12 = c + N/2;
     DATA_TYPE *c21 = c + M/2 *N, *c22 = c + M/2 *N + N/2;
@@ -65,5 +62,8 @@ int main(int argc, char *argv[]) {
         for (uint32_t i = 0; i < M; i++)
             for (uint32_t j = 0; j < N; j++)
                 c[i*N +j] += t[i*N +j];
+    
+    snrt_cluster_hw_barrier(); 
+    snrt_fpu_fence();
     #endif
 }   

@@ -11,6 +11,7 @@
 #define Y(i,j)   Y[(i)*m + (j)]
 
 #define DATA_TYPE double
+//#define SSRFREP
 
 // alpha*A[m][k]*B[k][n] + beta*C[m][n] = Y[m][n]
 void gemm(uint32_t M, uint32_t N, uint32_t K, uint32_t sM, uint32_t sN, uint32_t sK, double* A,
@@ -18,12 +19,34 @@ void gemm(uint32_t M, uint32_t N, uint32_t K, uint32_t sM, uint32_t sN, uint32_t
                         uint32_t tb, double* C, double BETA){
 
     DATA_TYPE res;
+
+
     if (!ta && !tb) {
+
+
         for (uint32_t m = 0; m < sM; m++) {
             for (uint32_t n = 0; n < sN; n++) {
                 res = BETA * C[m * N + n];
+
+                #ifdef SSRFREP
+                snrt_ssr_loop_1d(SNRT_SSR_DM0, sK, 8);
+                snrt_ssr_loop_1d(SNRT_SSR_DM1, sK, 8*N);
+                snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, A + m*K);
+                snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, B + n);
+
+                asm volatile
+                ("frep.o %[n_frep], 1, 0, 0          \n"
+                 "fmadd.d %[res], ft1, ft2, %[res]   \n"
+                : [res] "+f"(res)
+                : [n_frep] "r"(sK-1)
+                : "ft0", "ft1"
+                );
+
+                #else
                 for (uint32_t k = 0; k < sK; k++)
                     res += A[k + m * K] * B[k * N + n];
+                #endif
+
                 C[m * N + n] = res;
             }
         }

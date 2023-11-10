@@ -352,15 +352,13 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
         snrt_cluster_compute_core_num();  // how many compute cores per cluster?
     const uint32_t compute_id =
         snrt_cluster_core_idx();  // which core are we in this cluster
-    if (compute_id != 0) {
-        return;
-    }
     // Calculate output dimensions
     uint32_t N = 1;
     uint32_t H = l->IH;
     uint32_t W = l->IW;
     uint32_t C = l->CI;
     double eps = l->eps;
+    uint32_t num_points = N * H * W;
 
     uint32_t buffer_len = l->CI;
     uint32_t invstd_scratch_len = l->CI;
@@ -375,17 +373,19 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     double *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
 
-    // double *gamma = ptr;
-    // ptr += weights_size;
-    // double *beta = ptr;
-    // ptr += weights_size;
-    // double *ofmap = ptr;
-    // ptr += ofmap_size;
+    if (snrt_is_dm_core()) {
+        snrt_cluster_hw_barrier();
+    } else if (snrt_is_compute_core()) {
+        // double *gamma = ptr;
+        // ptr += weights_size;
+        // double *beta = ptr;
+        // ptr += weights_size;
+        // double *ofmap = ptr;
+        // ptr += ofmap_size;
 
-    // snrt_cluster_hw_barrier();
-    // compute invstd. just single thread for now
-    if (compute_id == 0) {
-        #if 0
+        // compute invstd. just single thread for now
+        if (compute_id == 0) {
+#if 0
         // snrt_ssr_loop_1d(SNRT_SSR_DM0, C, sizeof(double));
         // snrt_ssr_loop_1d(SNRT_SSR_DM1, C, sizeof(double));
 
@@ -410,46 +410,70 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
         // // wait for writes to the ofmap to finish?
         // __builtin_ssr_barrier(SNRT_SSR_DM1);
         // snrt_ssr_disable();
-        #endif
+#endif
 
-        for (uint32_t channel = 0; channel < C;++channel){
-            invstd_scratch[channel] = 1/sqrt(l->running_var[channel]+eps);
+            for (uint32_t channel = 0; channel < C; ++channel) {
+                invstd_scratch[channel] =
+                    1 / sqrt(l->running_var[channel] + eps);
+            }
+        }
+        snrt_cluster_hw_barrier();
+        // reduce over [num_points, C] to [num_threads, C] by splitting over
+        // num_points
+        // assumes divisibility for now
+        // Read from ofmap.
+        for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
+            for (uint32_t channel = 0; channel < C; ++channel) {
+                double dy = l->grad_ofmap[i * C + channel];
+                double x = l->ifmap[i * C + channel];
+                double mean = l->running_mean[channel];
+                double dot_res = dy * (x - mean);
+                grad_bias_scratch[compute_id * C + channel] +=
+                    l->grad_ofmap[i * C + channel];
+                grad_weight_scratch[compute_id * C + channel] +=
+                    dot_res * invstd_scratch[channel];
+            }
+        }
+
+        // reduce over [num_threads, C] to [C] by splitting over C
+        // just reduce back into the first buffer.
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            double grad_bias_sum = 0;
+            for (uint32_t core_id = 0; core_id < num_compute_cores; ++core_id) {
+                grad_bias_sum += grad_bias_scratch[core_id * C + channel];
+            }
+            grad_bias_scratch[0 + channel] = grad_bias_sum;
+            double grad_weight_sum = 0;
+            for (uint32_t core_id = 0; core_id < num_compute_cores; ++core_id) {
+                grad_weight_sum += grad_weight_scratch[core_id * C + channel];
+            }
+            grad_weight_scratch[0 + channel] = grad_weight_sum;
         }
     }
-    // snrt_cluster_hw_barrier();
-    // reduce over [num_points, C] to [num_threads, C] by splitting over
-    // num_points
-    // for (uint32_t i = compute_id; i < num_points; i += compute_id) {
-    // }
+    snrt_cluster_hw_barrier();
 
-    // reduce over [num_threads, C] to [C] by splitting over C
-
-    uint32_t num_points = N * H * W;
-    // [1_R,1_G,1_B,2_R,2_G,2_B
-    if (!snrt_is_compute_core()) {
-        return;
-    }
-    for (uint32_t i = 0; i < num_points; i += 1) {
-        // in vector notation
-        for (uint32_t channel = 0; channel < C; ++channel) {
-            double dy = l->grad_ofmap[i * C + channel];
-            double x = l->ifmap[i * C + channel];
-            double mean = l->running_mean[channel];
-            double dot_res = dy * (x - mean);
-            // printf("core %d, pixel %d, channel %d, adding %f to %f\n",
-            //        compute_id, i, channel, dy, l->grad_bias[channel]);
-            l->grad_bias[channel] += dy;
-            l->grad_weight[channel] +=
-                dot_res * invstd_scratch[channel];
-            l->grad_ifmap[i * C + channel] =
-                dy * invstd_scratch[channel] *
-                l->weight[channel];
-            // Y[i * C + channel] = (X[i * C + channel] - input_mean[channel]) /
-            //                          sqrt(input_var[channel] + eps) *
-            //                          weight[channel] +
-            //                      bias[channel];
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, C * sizeof(double));
+        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
+                          C * sizeof(double));
+        snrt_dma_wait_all();
+    } else if (snrt_is_compute_core()) {
+        for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
+            // in vector notation
+            for (uint32_t channel = 0; channel < C; ++channel) {
+                double dy = l->grad_ofmap[i * C + channel];
+                l->grad_ifmap[i * C + channel] =
+                    dy * invstd_scratch[channel] * l->weight[channel];
+                // Y[i * C + channel] = (X[i * C + channel] -
+                // input_mean[channel]) /
+                //                          sqrt(input_var[channel] + eps) *
+                //                          weight[channel] +
+                //                      bias[channel];
+            }
         }
     }
+
     // allocate space for a grad_bias
     // allocate space for a grad_weight (dotp)
     // allocate space for computing the 1/sqrt(running_var[c]+eps)*weight[c]

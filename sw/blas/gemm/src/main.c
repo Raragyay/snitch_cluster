@@ -8,6 +8,7 @@
 #define CEIL(x, y) ((((x) - 1) / (y)) + 1)
 #define MIN(x, y) ((x) < (y)?(x):(y))
 
+DATA_TYPE local[]={1,2,3,4,5,6,7,8,9,10};
 
 int main(int argc, char *argv[]) {
 

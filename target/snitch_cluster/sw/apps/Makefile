@@ -7,7 +7,7 @@
 SUBDIRS  = lto
 SUBDIRS += nop
 # SUBDIRS += transformer
-SUBDIRS += blas/axpy
+#SUBDIRS += blas/axpy
 SUBDIRS += blas/gemm
 #SUBDIRS += dnn/batchnorm
 # SUBDIRS += dnn/conv2d
@@ -18,7 +18,8 @@ SUBDIRS += blas/gemm
 #SUBDIRS += dnn/linear
 #SUBDIRS += dnn/maxpool
 # SUBDIRS += dnn/softmax
-SUBDIRS += montecarlo/pi_estimation
+#SUBDIRS += montecarlo/pi_estimation
+SUBDIRS += training/gradient
 
 .PHONY: all clean $(SUBDIRS)
 

@@ -29,10 +29,15 @@ def main():
                                         snitch_bin=args.snitch_bin,
                                         symbols_bin=args.symbols_bin,
                                         log=args.log,
-                                        output_uids=['W','B'])
+                                        output_uids=['W','B',"ubs","lbs",])
     weight_actual = np.array(bytes_to_float(raw_results['W'], prec='64'))
     bias_actual = np.array(bytes_to_float(raw_results['B'], prec='64'))
     actuals = np.concatenate((weight_actual,bias_actual))
+
+    ubs = np.array(bytes_to_float(raw_results['ubs'], prec='64'))
+    lbs = np.array(bytes_to_float(raw_results['lbs'], prec='64'))
+    print("UBS:",ubs)
+    print("LBS:",lbs)
 
     # Extract input operands from ELF file
     if args.symbols_bin:
@@ -64,7 +69,8 @@ def main():
                                          Path.cwd() / 'gradient_results.csv')
     else:
         print("SUCCESS\n")
-
+        verification.dump_results_to_csv([results, actuals, absolute_err],
+                                         Path.cwd() / 'gradient_results.csv')
     return int(fail)
 
 

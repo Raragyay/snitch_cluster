@@ -8,67 +8,83 @@
 #define DATA_TYPE double
 #endif 
 
-#define I(i,j) I[(i)*k + (j)]
-#define I_t(i,j) I[(i)*m + (j)]
-#define W(i,j) W[(i)*n + (j)]
-#define B(i,j) B[(i)*n + (j)]
-#define E(i,j) E[(i)*n + (j)]
-#define grad_W(i,j) grad_W[(i)*n + (j)]
-#define grad_B(i,j) grad_B[(i)*n + (j)]
+#define CEIL(x, y) ((((x) - 1) / (y)) + 1)
+#define MIN(x, y) ((x) < (y)?(x):(y))
 
-void backpropagation(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
+double ubs[8]__attribute__ ((aligned (4096)));
+double lbs[8]__attribute__ ((aligned (4096)));
+ 
+
+void backpropagation_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
              double e,int m, int n, int k);
-void __update_W_B__(DATA_TYPE *W,DATA_TYPE *B, double e,DATA_TYPE *grad_W,DATA_TYPE *grad_B,int m, int n, int k);
-void __find_grads__( DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E, DATA_TYPE *grad_W,DATA_TYPE *grad_B, int m, int n, int k);
+void backpropagation_baseline_multicore(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
+             double e,int m, int n, int k);
 
 // I[m][k] inputs
 // W[k][n] weights
 // B[m][n] biases
 // E[m][n] error
 // e learning rate
-void backpropagation(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
+void backpropagation_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
              double e,int m, int n, int k){
 
-    DATA_TYPE grad_B[m*n];//I dont like dynamic
-    DATA_TYPE grad_W[n*k];//I dont like dynamic
-    __find_grads__(I, W, B, E,grad_W,grad_B, m, n, k);
-    __update_W_B__(W, B, e, grad_W, grad_B, m, n, k);
-}
-
-
-//W[k][n] = old(W[k][n]) - e*grad[dC/dW]
-//B[m][n] = old(B[m][n])- e*grad[dC/dB]
-void __update_W_B__(DATA_TYPE *W,DATA_TYPE *B, double e,DATA_TYPE *grad_W,DATA_TYPE *grad_B,int m, int n, int k){
-    int i;
-    for(i=0;i<n*k;i++){
-        W[i] = W[i] - e*grad_W[i];  
-
-    }
-    for(i=0;i<n*m;i++){
-        B[i] = B[i]- e*grad_B[i];
-    }
-}
-
-
-//dC/db = E = grad_E
-//dC/dW = I_t * E =grad_W
-void __find_grads__( DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E, DATA_TYPE *grad_W,DATA_TYPE *grad_B, int m, int n, int k){
     int i,j,z;
     DATA_TYPE sum;
 
-    for(i=0;i<m;i++)
-        for(j=0;j<n;j++)
-            grad_B(i,j) = E(i,j);
-    
+    //dC/dB = E 
+    //B[m][n] = old(B[m][n])- e*dC/dB[m][n]
+    for(i=0;i<n*m;i++){
+        B[i] = B[i]- e*E[i];
+    }
 
-    //It does not make sense to use the gemm, because it wastes time compared to what we need (ex. alpha,beta, bias,transA,transB)
+    //dC/dW = I_t * E
+    //W[k][n] = old(W[k][n]) - e*dC/dW[k][n]
     for(i=0;i<k;i++){
         for(j=0;j<n;j++){
-        sum=0;
-        for(z=0;z<m;z++){
-            sum += I_t(z,i)*E(z,j);
-        }
-        grad_W(i,j)=sum;
+            sum=0;
+            for(z=0;z<m;z++){                
+                sum += I[(z)*m+(i)]*E[(z)*n+(j)];
+            }
+            W[(i)*n + (j)] = W[(i)*n + (j)] - e * sum;
         }
     }
+
+}
+
+void backpropagation_baseline_multicore(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE *local_b, DATA_TYPE *local_e,
+             double e,int m, int n, int k){
+
+    uint32_t c, lb, ub,i,j,z;
+    DATA_TYPE sum;
+    const uint32_t compute_num = snrt_cluster_compute_core_num();
+    const uint32_t compute_id = snrt_cluster_core_idx();
+    
+    c = CEIL(n*m, compute_num);
+    lb = c * compute_id;
+    ub = MIN((c * (compute_id + 1)), n*m);
+
+    lbs[compute_id]=lb;
+    ubs[compute_id]=ub;
+    //dC/dB = E 
+    //B[m][n] = old(B[m][n])- e*dC/dB[m][n]
+    for(i=lb;i<ub;i++){
+        local_b[i] = local_b[i]- e*local_e[i];
+    }
+
+    c = CEIL(k, compute_num);
+    lb = c * compute_id;
+    ub = MIN((c * (compute_id + 1)), k);
+
+    //dC/dW = I_t * E
+    //W[k][n] = old(W[k][n]) - e*dC/dW[k][n]
+    for(i=lb;i<ub;i++){
+        for(j=0;j<n;j++){
+            sum=0;
+            for(z=0;z<m;z++){                
+                sum += local_i[(z)*m+(i)]*local_e[(z)*n+(j)];
+            }
+            local_w[(i)*n + (j)] = local_w[(i)*n + (j)] - e * sum;
+        }
+    }
+    
 }

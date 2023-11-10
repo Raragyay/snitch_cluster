@@ -13,6 +13,7 @@ import hjson
 import sys
 import os
 import torch
+import numpy as np
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../util/sim/"))
 import data_utils  # noqa: E402
@@ -33,26 +34,41 @@ BURST_ALIGNMENT = 4096
 PRECISION_T = {"64": "FP64", "32": "FP32", "16": "FP16", "8": "FP8"}
 
 
-def golden_model(ifmap, eps, running_mean, running_var, weight, bias, dtype):
+def golden_model_eval(ifmap, eps, running_mean, running_var, weight, bias, dtype):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps, dtype=dtype)
-    # TODO: have the randomization for weight and bias
-    bn.weight.requires_grad = False
-    bn.bias.requires_grad = False
-    # print(bn.running_mean.dtype, running_mean.dtype)
+    bn.weight = weight
+    bn.bias = bias
     bn.running_mean = running_mean
     bn.running_var = running_var
-    # running_mean = torch.randn_like(bn.running_mean, requires_grad=False)
-    # running_var = torch.rand_like(bn.running_var, requires_grad=False)
-    # gamma = bn.weight / torch.sqrt(running_var + bn.eps)
-    # beta = bn.bias - running_mean * bn.weight / torch.sqrt(running_var + bn.eps)
-    # ofmap = ifmap * gamma.unsqueeze(-1).unsqueeze(-1) + beta.unsqueeze(-1).unsqueeze(-1)
-    
-    # print(bn(ifmap))
     bn.eval()
-    print(ifmap)
-    print(bn(ifmap))
     return bn(ifmap)
+
+def golden_model_training(ifmap, eps, momentum, running_mean, running_var, weight, bias, dtype):
+    n, ci, ih, iw = ifmap.shape
+    bn = torch.nn.BatchNorm2d(ci, eps=eps, momentum=momentum, dtype=dtype)
+    bn.weight = weight
+    bn.bias = bias
+    bn.running_mean = running_mean.clone()
+    bn.running_var = running_var.clone()
+    bn.eval()
+    ofmap = bn(ifmap)
+    return ofmap, bn.running_mean, bn.running_var
+
+
+def golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype) ->(torch.Tensor, torch.Tensor, torch.Tensor):
+    # note: need to change data to be save_mean and save_var if in train mode
+    n, ci, ih, iw = ifmap.shape
+    bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
+    bn.weight = weight
+    bn.bias = bias
+    bn.running_mean = running_mean.clone()
+    bn.running_var = running_var.clone()
+    bn.eval()
+    ofmap = bn(ifmap)
+    ofmap.retain_grad()
+    ofmap.flatten().dot(grad_ofmap.flatten()).backward()
+    return ifmap.grad, bn.weight.grad, bn.bias.grad
 
 
 def emit_header(**kwargs):
@@ -63,8 +79,7 @@ def emit_header(**kwargs):
     eps = kwargs["eps"]
     tile_ci = kwargs["tile_ci"]
     prec = str(kwargs["prec"])
-
-    # art: going to need to write this prec out somewhere so we can read it back in
+    momentum = kwargs["momentum"]
 
     torch_dtype = data_utils.floating_point_torch_type(prec)
     ctype = data_utils.floating_point_ctype(prec)
@@ -74,27 +89,28 @@ def emit_header(**kwargs):
 
     running_mean = torch.randn(
         in_channels,
-        requires_grad=False,
         dtype=torch_dtype,
     )
     running_var = torch.abs(
         torch.randn(
             in_channels,
-            requires_grad=False,
             dtype=torch_dtype,
         )
     )
-    weight = torch.ones(
-        in_channels,
-        requires_grad=False,
-        dtype=torch_dtype,
+    weight = torch.nn.Parameter(
+        torch.randn(
+            in_channels,
+            dtype=torch_dtype,
+        )
     )
-    bias = torch.zeros(
-        in_channels,
-        requires_grad=False,
-        dtype=torch_dtype,
+    bias = torch.nn.Parameter(
+        torch.randn(
+            in_channels,
+            dtype=torch_dtype,
+        )
     )
 
+    # Parameters to simplify calculation for core.
     gamma = weight / torch.sqrt(running_var + eps)
     beta = bias - running_mean * gamma
 
@@ -103,63 +119,126 @@ def emit_header(**kwargs):
         in_channels,
         in_height,
         in_width,
-        requires_grad=False,
         dtype=torch_dtype,
+        requires_grad=True
     )
-    ofmap = golden_model(
-        ifmap, eps, running_mean, running_var, weight, bias, torch_dtype
-    )
+    with torch.no_grad():
+        ofmap = golden_model_eval(
+            ifmap, eps, running_mean, running_var, weight, bias, torch_dtype
+        )
+
+    grad_ofmap = torch.randn_like(ofmap,
+        dtype=torch_dtype,
+        requires_grad=False )
+    grad_ifmap, grad_weight, grad_bias = golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, torch_dtype)
     # consider .detach().numpy()
 
-    # convert from CHW to HWC format
-    ifmap = ifmap.permute(0, 2, 3, 1)
-    ofmap = ofmap.permute(0, 2, 3, 1)
+    with torch.no_grad():
+        # convert from CHW to HWC format
+        ifmap = ifmap.permute(0, 2, 3, 1)
+        ofmap = ofmap.permute(0, 2, 3, 1)
+        grad_ofmap = grad_ofmap.permute(0,2,3,1)
+        grad_ifmap = grad_ifmap.permute(0,2,3,1)
 
-    batch_size, ih, iw, ci = ifmap.shape
+        batch_size, ih, iw, ci = ifmap.shape
 
-    ifmap_uid = "ifmap"
-    ofmap_uid = "ofmap"
-    beta_uid = "beta"
-    gamma_uid = "gamma"
-    running_mean_uid = "running_mean"
-    running_var_uid = "running_var"
+        ifmap_uid = "ifmap"
+        ofmap_uid = "ofmap"
+        beta_uid = "beta"
+        gamma_uid = "gamma"
+        running_mean_uid = "running_mean"
+        running_var_uid = "running_var"
+        weight_uid = "weight"
+        bias_uid = "bias"
 
-    layer_cfg = {
-        "CI": ci,
-        "IH": ih,
-        "IW": iw,
-        "TILE_CI": tile_ci,
-        "ifmap": ifmap_uid,
-        "ofmap": ofmap_uid,
-        "beta": beta_uid,
-        "gamma": gamma_uid,
-        "eps": eps,
-        "dtype": PRECISION_T[prec],
-    }
+        grad_ofmap_uid = "grad_ofmap"
+        grad_ifmap_uid = "grad_ifmap"
+        grad_weight_uid = "grad_weight"
+        grad_bias_uid = "grad_bias"
 
-    data_str = [emit_license()]
-    # Array forward declarations
-    data_str += [format_array_declaration(ctype, ifmap_uid, ifmap.shape)]
-    data_str += [format_array_declaration(ctype, ofmap_uid, ofmap.shape)]
-    data_str += [format_array_declaration(ctype, beta_uid, beta.shape)]
-    data_str += [format_array_declaration(ctype, gamma_uid, gamma.shape)]
-    data_str += [format_array_declaration(ctype, running_mean_uid, running_mean.shape)]
-    data_str += [format_array_declaration(ctype, running_var_uid, running_var.shape)]
-    # TODO: add in weight and bias once they're randomized
-    # Layer struct
-    data_str += [format_struct_definition("batchnorm_layer_t", "layer", layer_cfg)]
-    # Array definitions
-    data_str += [format_array_definition(ctype, ifmap_uid, ifmap)]
-    data_str += [format_array_definition(ctype, beta_uid, beta)]
-    data_str += [format_array_definition(ctype, gamma_uid, gamma)]
-    data_str += [format_array_definition(ctype, running_mean_uid, running_mean)]
-    data_str += [format_array_definition(ctype, running_var_uid, running_var)]
-    # Golden results for BIST
-    result_def = format_array_definition(ctype, "golden", ofmap)
-    data_str += [format_ifdef_wrapper("BIST", result_def)]
-    data_str = "\n\n".join(data_str)
 
-    return data_str
+        layer_cfg = {
+            "CI": ci,
+            "IH": ih,
+            "IW": iw,
+            "TILE_CI": tile_ci,
+            "ifmap": ifmap_uid,
+            "ofmap": ofmap_uid,
+            "beta": beta_uid,
+            "gamma": gamma_uid,
+            "eps": eps,
+            "dtype": PRECISION_T[prec],
+        }
+
+        backward_layer_cfg = {
+            "CI": ci,
+            "IH": ih,
+            "IW": iw,
+            "ifmap": ifmap_uid,
+            "grad_ofmap": grad_ofmap_uid,
+            "running_mean": running_mean_uid,
+            "running_var": running_var_uid,
+            "weight": weight_uid,
+            "grad_ifmap": grad_ifmap_uid,
+            "grad_weight": grad_weight_uid,
+            "grad_bias": grad_bias_uid,
+            "eps": eps,
+            "dtype": PRECISION_T[prec],
+        }
+
+        # training_layer_cfg = {
+        #     "CI": ci,
+        #     "IH": ih,
+        #     "IW": iw,
+        #     "ifmap": ifmap_uid,
+        #     "ofmap": ofmap_uid,
+        #     "running_mean": running_mean_uid,
+        #     "running_var": running_var_uid,
+        #     "weight": weight_uid,
+        #     "bias": bias_uid,
+        #     "eps": eps,
+        #     "momentum": momentum,
+        #     "dtype": PRECISION_T[prec]
+        # }
+
+        data_str = [emit_license()]
+        # Array forward declarations
+        data_str += [format_array_declaration(ctype, ifmap_uid, ifmap.shape)]
+        data_str += [format_array_declaration(ctype, ofmap_uid, ofmap.shape)]
+        data_str += [format_array_declaration(ctype, beta_uid, beta.shape)]
+        data_str += [format_array_declaration(ctype, gamma_uid, gamma.shape)]
+        data_str += [format_array_declaration(ctype, running_mean_uid, running_mean.shape)]
+        data_str += [format_array_declaration(ctype, running_var_uid, running_var.shape)]
+        data_str += [format_array_declaration(ctype, weight_uid, weight.shape)]
+        data_str += [format_array_declaration(ctype, bias_uid, bias.shape)]
+        data_str += [format_array_declaration(ctype, grad_ifmap_uid, grad_ifmap.shape)]
+        data_str += [format_array_declaration(ctype, grad_ofmap_uid, grad_ofmap.shape)]
+        data_str += [format_array_declaration(ctype, grad_weight_uid, grad_weight.shape)]
+        data_str += [format_array_declaration(ctype, grad_bias_uid, grad_bias.shape)]
+        # Layer struct
+        data_str += [format_struct_definition("batchnorm_layer_t", "layer", layer_cfg)]
+        data_str += [
+            format_struct_definition(
+                "batchnorm_backward_layer_t", "backward_layer", backward_layer_cfg
+            )
+        ]
+        # Array definitions
+        data_str += [format_array_definition(ctype, ifmap_uid, ifmap)]
+        data_str += [format_array_definition(ctype, beta_uid, beta)]
+        data_str += [format_array_definition(ctype, gamma_uid, gamma)]
+        data_str += [format_array_definition(ctype, running_mean_uid, running_mean)]
+        data_str += [format_array_definition(ctype, running_var_uid, running_var)]
+        data_str += [format_array_definition(ctype, weight_uid, weight)]
+        data_str += [format_array_definition(ctype, bias_uid, bias)]
+        data_str += [format_array_definition(ctype, grad_ofmap_uid, grad_ofmap)]
+        # Golden results for BIST
+        result_def = format_array_definition(ctype, "golden", ofmap)
+        data_str += [format_ifdef_wrapper("BIST", result_def)]
+        data_str = "\n\n".join(data_str)
+
+        # No bist for training mode
+
+        return data_str
 
 
 def main():

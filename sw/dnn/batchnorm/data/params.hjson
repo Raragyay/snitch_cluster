@@ -4,11 +4,12 @@
 
 {
     input_dim: {
-        channels: 32
-        height: 8,
-        width: 8
+        channels: 2
+        height: 2,
+        width: 2
     }
     eps: 1e-5
-    tile_ci: 32
+    tile_ci: 2
     prec: 64
+    momentum: 0.1 // standard from onnx
 }

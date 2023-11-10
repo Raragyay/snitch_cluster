@@ -11,17 +11,16 @@ from operator import itemgetter
 
 import numpy as np
 import torch
-from data.datagen import golden_model
+from data.datagen import golden_model_eval
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
 import verification  # noqa: E402
 from elf import Elf  # noqa: E402
-from data_utils import (
+from data_utils import (  # noqa: E402
     bytes_to_float,
     bytes_to_struct,
     floating_point_torch_type,
-)  # noqa: E402
-
+)
 
 ERR_THRESHOLD = 0.001
 
@@ -52,6 +51,7 @@ def main():
         output_uids=["ofmap"],
     )
 
+    print("Simulation complete. Verifying result...")
     # Extract input operands from ELF file
     if args.symbols_bin:
         elf = Elf(args.symbols_bin)
@@ -77,9 +77,14 @@ def main():
 
     # TODO: support multiple items in batch
     ifmap = extract_torch_arr("ifmap", prec, NUMPY_T[prec], (1, IH, IW, CI))
-    print(f"verify: ifmap shape is {ifmap.shape}")
-    running_mean = extract_torch_arr("running_mean", prec, NUMPY_T[prec], (CI))
-    running_var = extract_torch_arr("running_var", prec, NUMPY_T[prec], (CI))
+    running_mean = extract_torch_arr("running_mean", prec, NUMPY_T[prec], (CI,))
+    running_var = extract_torch_arr("running_var", prec, NUMPY_T[prec], (CI,))
+    weight = torch.nn.Parameter(
+        extract_torch_arr("weight", prec, NUMPY_T[prec], (CI,))
+    )
+    bias = torch.nn.Parameter(
+        extract_torch_arr("bias", prec, NUMPY_T[prec], (CI,))
+    )
 
     # Verify results
 
@@ -89,20 +94,20 @@ def main():
             bytes_to_float(raw_results["ofmap"], prec), dtype=NUMPY_T[prec]
         ).reshape((1, IH, IW, CI))
     )
-    print(f"verify: ofmap is {ofmap_actual}")
 
-    print(f"verify: ofmap shape is {ofmap_actual.shape}")
     # convert from NHWC to NCHW format
     ifmap = ifmap.permute(0, 3, 1, 2)
     ofmap_actual = ofmap_actual.permute(0, 3, 1, 2).detach().numpy().flatten()
+
+    print("All data extracted from simulation and binary. Comparing to golden model. ")
     ofmap_golden = (
-        golden_model(
+        golden_model_eval(
             ifmap,
             eps,
             running_mean,
             running_var,
-            None,
-            None,
+            weight,
+            bias,
             floating_point_torch_type(prec),
         )
         .detach()
@@ -117,6 +122,8 @@ def main():
             [ofmap_golden, ofmap_actual, absolute_err],
             Path.cwd() / "batchnorm_results.csv",
         )
+    else:
+        print(f"All verifications passed.")
 
     return int(fail)
 

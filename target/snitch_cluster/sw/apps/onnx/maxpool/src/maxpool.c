@@ -29,11 +29,12 @@ int main() {
 
   compute_output_shape(&attr1, attr1.output_shape);
 
+  snrt_mcycle();
   maxpool_fp64_1d_layer(&attr1,
                 ifmap1,
                 output_loc1,
                 NULL);
-
+  snrt_mcycle();
   // if (snrt_global_core_idx() != 1) return 0;
 
   return 0;

@@ -3,6 +3,8 @@
 // #include "math.h"
 #include "printf.h"
 
+#define DMA_USE_CACHED_ATTRIBS 1
+
 /*
 enum padding_type {
   NOTSET,
@@ -151,30 +153,32 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
   int pooled_height = attr->output_shape[2];
   int y_step = pooled_height;
 
-  for (int i = 0; i < total_channels; ++i) {
+  int n_steps = total_channels * pooled_height;
+  for (int step = core_idx; step < n_steps; step += n_cores) {
+
+    int i = step / pooled_height;
+    int ph = step % pooled_height;
 
     int x_d = i * x_step;
     int y_d = i * y_step;
 
-    for (int ph = core_idx; ph < pooled_height; ph += n_cores) {
-      int hstart = ph * attr->strides[0] - attr->pads[0];
-      int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
+    int hstart = ph * attr->strides[0] - attr->pads[0];
+    int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
 
-      double Yh;
-      int Yh_init = 0;
-      int h_index;
+    double Yh;
+    int Yh_init = 0;
+    int h_index;
 
-      for (int h = hstart; h < hend; h += attr->dilations[0]) {
-        if (h < 0 || h >= height) continue;
-        if (!Yh_init || in[x_d + h] > Yh) {
-          Yh = in[x_d + h];
-          Yh_init = 1;
-          h_index = h;
-        }
+    for (int h = hstart; h < hend; h += attr->dilations[0]) {
+      if (h < 0 || h >= height) continue;
+      if (!Yh_init || in[x_d + h] > Yh) {
+        Yh = in[x_d + h];
+        Yh_init = 1;
+        h_index = h;
       }
-      out[y_d + ph] = Yh;
-      if (idx != NULL) idx[y_d + ph] = i * x_step + h_index;
     }
+    out[y_d + ph] = Yh;
+    if (idx != NULL) idx[y_d + ph] = i * x_step + h_index;
 
   }
 
@@ -187,28 +191,25 @@ void maxpool_fp64_1d_layer(maxpool_attributes* attribs_raw, double* in, double* 
   uint32_t compute_num = snrt_cluster_compute_core_num();
   uint32_t compute_id = snrt_global_core_idx();
 
-  // int height = attribs->output_shape[2];
-  // int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * height;
-  // int rem_total_outs = total_outs % compute_num;
-  // The number of maxpool operations this core is responsible for
-  // int num_outputs = compute_id < rem_total_outs ? total_outs / compute_num + 1 : total_outs / compute_num;
-  // The number of channels this core needs to operate on
-  // int num_channels = num_outputs % height == 0 ? num_outputs / height : num_outputs / height + 1;
-  // number of bytes of input that need to be transferred to this core's cache
-
   // It seems that we need 8 byte alignment?
   const size_t ATTRIBS_SIZE = sizeof(maxpool_attributes) + (sizeof(maxpool_attributes) % 8);
 
   char* ptr = (char*) snrt_l1_next();
   
+  #ifdef DMA_USE_CACHED_ATTRIBS
   maxpool_attributes* attribs = (maxpool_attributes*) ptr;
+  #else
+  maxpool_attributes* attribs = attribs_raw;
+  #endif
 
   if (snrt_is_dm_core()) {
     // load the attribs into l1
     snrt_dma_start_1d(ptr, attribs_raw, sizeof(maxpool_attributes));
 
     ptr += ATTRIBS_SIZE;
+    #ifdef DMA_USE_CACHED_ATTRIBS
     snrt_dma_wait_all();
+    #endif
 
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
     // load input data

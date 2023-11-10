@@ -66,10 +66,6 @@ def main():
         log=args.log,
         output_uids=["grad_ifmap", "grad_weight", "grad_bias"],
     )
-    with open(Path.cwd()/f"raw_results_batchnorm_{datetime.today().strftime('%Y_%m_%d-%H_%M_%S')}.pkl", "wb") as f:
-        pickle.dump(raw_results, f)
-    # with open(Path.cwd()/f"raw_results_batchnorm_2023_11_10-19_52_18.pkl", "rb") as f:
-    #     raw_results = pickle.load(f)
 
     print("Simulation complete. Verifying result...")
     # Extract input operands from ELF file

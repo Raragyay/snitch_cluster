@@ -4,9 +4,9 @@
 
 {
     input_dim: {
-        channels: 2
-        height: 2,
-        width: 2
+        channels: 8
+        height: 4,
+        width: 4
     }
     eps: 1e-5
     tile_ci: 2

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # Usage: python3 datagen.py --cfg params.hjson data.h
+# (from target/snitch_cluster) python3 ../../sw/onnx/maxpool/data/datagen.py --cfg ../../sw/onnx/maxpool/data/params.hjson ../../sw/onnx/maxpool/data/data.h
 
 import argparse
 import pathlib
@@ -15,7 +16,7 @@ from data_utils import emit_license, \
                        format_struct_definition, format_array_definition, \
                        format_array_declaration, format_ifdef_wrapper  # noqa: E402
 
-torch.manual_seed(43)
+torch.manual_seed(44)
 
 # AXI splits bursts crossing 4KB address boundaries. To minimize
 # the occurrence of these splits the data should be aligned to 4KB

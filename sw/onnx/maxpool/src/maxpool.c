@@ -139,7 +139,7 @@ typedef struct maxpool_attributes_struct {
 } maxpool_attributes;
 */
 
-void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx) {
+void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx, int core_idx, int n_cores) {
 
   if (attr->n_dim != 1) return; // error
 
@@ -156,7 +156,7 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     int x_d = i * x_step;
     int y_d = i * y_step;
 
-    for (int ph = 0; ph < pooled_height; ++ph) {
+    for (int ph = core_idx; ph < pooled_height; ph += n_cores) {
       int hstart = ph * attr->strides[0] - attr->pads[0];
       int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
 
@@ -166,18 +166,82 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
 
       for (int h = hstart; h < hend; h += attr->dilations[0]) {
         if (h < 0 || h >= height) continue;
-
         if (!Yh_init || in[x_d + h] > Yh) {
           Yh = in[x_d + h];
           Yh_init = 1;
           h_index = h;
         }
       }
-
       out[y_d + ph] = Yh;
-      idx[y_d + ph] = i * x_step + h_index;
+      if (idx != NULL) idx[y_d + ph] = i * x_step + h_index;
     }
 
+  }
+
+}
+
+void maxpool_fp64_1d_layer(maxpool_attributes* attribs_raw, double* in, double* out, int* idx) {
+
+  uint32_t cluster_num = snrt_cluster_num();
+  uint32_t cluster_id = snrt_cluster_idx();
+  uint32_t compute_num = snrt_cluster_compute_core_num();
+  uint32_t compute_id = snrt_global_core_idx();
+
+  // int height = attribs->output_shape[2];
+  // int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * height;
+  // int rem_total_outs = total_outs % compute_num;
+  // The number of maxpool operations this core is responsible for
+  // int num_outputs = compute_id < rem_total_outs ? total_outs / compute_num + 1 : total_outs / compute_num;
+  // The number of channels this core needs to operate on
+  // int num_channels = num_outputs % height == 0 ? num_outputs / height : num_outputs / height + 1;
+  // number of bytes of input that need to be transferred to this core's cache
+
+  // It seems that we need 8 byte alignment?
+  const size_t ATTRIBS_SIZE = sizeof(maxpool_attributes) + (sizeof(maxpool_attributes) % 8);
+
+  char* ptr = (char*) snrt_l1_next();
+  
+  maxpool_attributes* attribs = (maxpool_attributes*) ptr;
+
+  if (snrt_is_dm_core()) {
+    // load the attribs into l1
+    snrt_dma_start_1d(ptr, attribs_raw, sizeof(maxpool_attributes));
+
+    ptr += ATTRIBS_SIZE;
+    snrt_dma_wait_all();
+
+    int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
+    // load input data
+    snrt_dma_start_1d(ptr, in, sizeof(double) * total_ins);
+
+    ptr += sizeof(double) * total_ins;
+    // for 8 byte alignment, theoretically shouldn't be needed for doubles.
+    ptr += ((size_t) ptr) % 8; // cursed
+
+    snrt_dma_wait_all();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
+
+    snrt_dma_start_1d(out, ptr, sizeof(double) * total_outs);
+
+    snrt_dma_wait_all();
+    snrt_cluster_hw_barrier();
+  }
+  
+  if (snrt_is_compute_core()) {
+    snrt_cluster_hw_barrier();
+
+    char* inputs_start = ptr + ATTRIBS_SIZE;
+    int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
+    char* outputs_start = inputs_start + sizeof(double) * total_ins;
+    outputs_start += ((size_t) outputs_start) % 8; // cursed again
+
+    maxpool_fp64_1d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
+
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
   }
 
 }
@@ -365,23 +429,23 @@ typedef struct maxpool_attributes_struct {
 } maxpool_attributes;
 */
 
-void maxpool_fp64(maxpool_attributes* attr, double* in, double* out, int* idx) {
+// void maxpool_fp64(maxpool_attributes* attr, double* in, double* out, int* idx) {
 
-  compute_output_shape(attr, attr->output_shape);
+//   compute_output_shape(attr, attr->output_shape);
 
-  switch (attr->n_dim) {
-  case 1:
-    maxpool_fp64_1d(attr, in, out, idx);
-  case 2:
-    maxpool_fp64_2d(attr, in, out, idx);
-  case 3:
-    maxpool_fp64_3d(attr, in, out, idx);
-  default:
-    // error not implemented
-    break;
-  }
+//   switch (attr->n_dim) {
+//   case 1:
+//     maxpool_fp64_1d(attr, in, out, idx);
+//   case 2:
+//     maxpool_fp64_2d(attr, in, out, idx);
+//   case 3:
+//     maxpool_fp64_3d(attr, in, out, idx);
+//   default:
+//     // error not implemented
+//     break;
+//   }
   
-}
+// }
 
 void populate_defaults(maxpool_attributes* attr, int n_dim) {
   attr->n_dim = n_dim;

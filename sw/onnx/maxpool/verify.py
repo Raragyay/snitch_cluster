@@ -85,9 +85,9 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  ret = verify("ifmap2", "attr2", "output_loc2", elf=elf, raw_results=raw_results)
+  ret = verify("ifmap1", "attr1", "output_loc1", elf=elf, raw_results=raw_results)
   if ret == 0:
-    print("2d good")
+    print("1d good")
 
   return 0
 

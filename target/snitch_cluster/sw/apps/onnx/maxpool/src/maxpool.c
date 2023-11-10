@@ -27,17 +27,14 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 
 int main() {
 
-  uint32_t cluster_num = snrt_cluster_num();
-  uint32_t cluster_id = snrt_cluster_idx();
-  uint32_t compute_num = snrt_cluster_compute_core_num();
-  uint32_t compute_id = snrt_global_core_idx();
+  compute_output_shape(&attr1, attr1.output_shape);
 
-  if (compute_id != 1) return 0;
-
-  maxpool_fp64(&attr2,
-                ifmap2,
-                output_loc2,
+  maxpool_fp64_1d_layer(&attr1,
+                ifmap1,
+                output_loc1,
                 NULL);
+
+  // if (snrt_global_core_idx() != 1) return 0;
 
   return 0;
 

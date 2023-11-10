@@ -19,6 +19,12 @@ typedef struct maxpool_attributes_struct {
   int strides[3]; // [1...1]
 } maxpool_attributes;
 
-void maxpool_fp64(maxpool_attributes* attr, double* in, double* out, int* idx);
+// void maxpool_fp64(maxpool_attributes* attr, double* in, double* out, int* idx);
 
-void populate_defaults(maxpool_attributes* attr, int n_dim);
+void populate_defaults(maxpool_attributes*, int);
+
+void compute_output_shape(maxpool_attributes*, int*);
+
+void maxpool_fp64_1d(maxpool_attributes*, double*, double*, int*, int, int);
+
+void maxpool_fp64_1d_layer(maxpool_attributes*, double*, double*, int*);

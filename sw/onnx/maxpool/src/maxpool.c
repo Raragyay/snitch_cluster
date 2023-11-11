@@ -252,8 +252,10 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
         if (!Yh_init) continue;
 
         out[y_d + pool_index] = Yh;
-        if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index + width + w_index;
-        else idx[y_d + pool_index] = i * x_step + h_index + w_index * height;
+        if (idx != NULL) {
+          if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index + width + w_index;
+          else idx[y_d + pool_index] = i * x_step + h_index + w_index * height;
+        }
 
       }
     }

@@ -58,7 +58,8 @@ def main():
     if (fail):
         verification.dump_results_to_csv([c_golden, c_actual, absolute_err],
                                          Path.cwd() / 'gemm_results.csv')
-
+    else:
+        print("good")
     return int(fail)
 
 

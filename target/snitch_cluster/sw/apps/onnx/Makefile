@@ -1,10 +1,11 @@
 MK_DIR   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 SRC_DIR  := $(realpath $(MK_DIR)/$(APP)/src)
-ONNX_DIR  := $(realpath $(MK_DIR)../../../../../sw/onnx/src)
+ONNX_SRC_DIR  := $(realpath $(MK_DIR)../../../../../sw/onnx/maxpool/src)
+ONNX_DATA_DIR  := $(realpath $(MK_DIR)../../../../../sw/onnx/maxpool/data)
 
 SRCS     = $(realpath $(SRC_DIR)/$(APP).c)
-SRCS    += $(realpath $(ONNX_DIR)/$(APP).c)
-INCDIRS += $(SRC_DIR) $(ONNX_DIR)
+SRCS    += $(realpath $(ONNX_SRC_DIR)/$(APP).c)
+INCDIRS += $(SRC_DIR) $(ONNX_SRC_DIR) $(ONNX_DATA_DIR)
 
 .PHONY: clean-data clean
 

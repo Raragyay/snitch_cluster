@@ -3,6 +3,7 @@
 
 #include "tests.h"
 #include "printf.h"
+#include "data.h"
 
 /*
 typedef struct maxpool_attributes_struct {
@@ -33,29 +34,10 @@ int main() {
 
   if (compute_id != 1) return 0;
 
-  printf("%d %d %d %d\n", cluster_num, cluster_id, compute_num, compute_id);
-  
-
-  // snrt_cluster_hw_barrier();
-
-  printf("asd\n");
-
-  // populate_defaults(&attributes, 2);
-
-  // attributes.kernel_shape[0] = 3;
-  // attributes.kernel_shape[1] = 3;
-
-  // attributes.input_shape[0] = 1;
-  // attributes.input_shape[1] = 1;
-  // attributes.input_shape[2] = 4;
-  // attributes.input_shape[3] = 4;
-
-  maxpool_fp64(&test_1d_default_attributes,
-                test_1d_default_input,
-                test_1d_default_output,
-                test_1d_default_idx);
-
-  for (int i = 0; i < 93; ++i) printf("%lf %d %d\n", test_1d_default_output[i], i, compute_id);
+  maxpool_fp64(&attr2,
+                ifmap2,
+                output_loc2,
+                NULL);
 
   return 0;
 

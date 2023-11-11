@@ -421,16 +421,34 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
         // just reduce back into the first buffer.
         for (uint32_t channel = compute_id; channel < C;
              channel += num_compute_cores) {
-            double grad_bias_sum = 0;
-            for (uint32_t core_id = 0; core_id < num_compute_cores; ++core_id) {
-                grad_bias_sum += grad_bias_scratch[core_id * C + channel];
-            }
-            grad_bias_scratch[0 + channel] = grad_bias_sum;
-            double grad_weight_sum = 0;
-            for (uint32_t core_id = 0; core_id < num_compute_cores; ++core_id) {
-                grad_weight_sum += grad_weight_scratch[core_id * C + channel];
-            }
-            grad_weight_scratch[0 + channel] = grad_weight_sum;
+            register volatile double grad_bias_sum = 0;
+            register volatile double grad_weight_sum = 0;
+            snrt_ssr_loop_1d(SNRT_SSR_DM0, num_compute_cores,
+                             C * sizeof(double));
+            snrt_ssr_loop_1d(SNRT_SSR_DM1, num_compute_cores,
+                             C * sizeof(double));
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &grad_bias_scratch[channel]);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D,
+                          &grad_weight_scratch[channel]);
+
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 2, 0, 0 \n"
+                "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
+                "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
+                : [bias_sum] "+fr"(grad_bias_sum),[weight_sum] "+fr"(grad_weight_sum)
+                : [n_frep] "r"(num_compute_cores -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2");
+            snrt_fpu_fence();
+            snrt_ssr_disable();
+            // for (uint32_t core_id = 0; core_id < num_compute_cores;
+            // ++core_id) {
+            //     grad_bias_sum += grad_bias_scratch[core_id * C + channel];
+            // }
+            grad_bias_scratch[0 * C + channel] = grad_bias_sum;
+            grad_weight_scratch[0 * C + channel] = grad_weight_sum;
         }
     }
     snrt_cluster_hw_barrier();

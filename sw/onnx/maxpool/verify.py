@@ -53,14 +53,6 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None):
   elif n_dim == 3:
     golden_model = golden_model_3d
 
-  # ifmap, kernel, stride, padding, dilation, ceil_mode
-  #      [[[[[1.8408, 2.7499, 0.9037],
-  #          [2.6263, 2.0598, 1.0152],
-  #          [1.8408, 2.7499, 0.9815]],
-
-  #         [[1.2952, 2.7499, 0.7752],
-  #          [1.7985, 2.0598, 1.0152],
-  #          [1.5572, 2.7499, 0.9815]]]]]
   c_golden = golden_model(
     from_numpy(inputs.reshape(attribs["input_shape"][0:n_dim + 2])),
     attribs["kernel_shape"][0:n_dim],
@@ -92,13 +84,13 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  # ret = verify("ifmap1", "attr1", "output_loc1", elf=elf, raw_results=raw_results)
-  # if ret == 0:
-  #   print("1D good")
+  ret = verify("ifmap1", "attr1", "output_loc1", elf=elf, raw_results=raw_results)
+  if ret == 0:
+    print("1D good")
 
-  # ret = verify("ifmap2", "attr2", "output_loc2", elf=elf, raw_results=raw_results)
-  # if ret == 0:
-  #   print("2D good")
+  ret = verify("ifmap2", "attr2", "output_loc2", elf=elf, raw_results=raw_results)
+  if ret == 0:
+    print("2D good")
 
   ret = verify("ifmap3", "attr3", "output_loc3", elf=elf, raw_results=raw_results)
   if ret == 0:

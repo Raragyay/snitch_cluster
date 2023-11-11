@@ -14,3 +14,7 @@ gmon.out
 // Docs
 /site/
 /docs/generated/
+
+target/snitch_cluster/*.csv
+sw/onnx/maxpool/data/data.h
+target/snitch_cluster/logs/

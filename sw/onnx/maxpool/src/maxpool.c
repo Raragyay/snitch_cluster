@@ -99,8 +99,6 @@ void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
 
   }
 
-  // printf("output shape: %d %d %d %d %d\n", output_shape[0], output_shape[1], output_shape[2], output_shape[3], output_shape[4]);
-
 }
 
 void maxpool_fp64_layer(maxpool_attributes* attribs_raw, double* in, double* out, int* idx) {
@@ -187,12 +185,13 @@ void maxpool_fp64_layer(maxpool_attributes* attribs_raw, double* in, double* out
       maxpool_fp64_2d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
       break;
     case 3:
-      if (compute_id == 1) maxpool_fp64_3d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
+      maxpool_fp64_3d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
       break;
     default:
       break; // error not implemented
     }
 
+    snrt_fpu_fence();
     snrt_cluster_hw_barrier();
     snrt_cluster_hw_barrier();
   }
@@ -326,121 +325,65 @@ void maxpool_fp64_3d(maxpool_attributes* attr, double* in, double* out, int* idx
   int pooled_depth = attr->output_shape[4];
   int y_step = pooled_height * pooled_width * pooled_depth;
 
-  // int n_steps = total_channels * y_step;
-  // for (int step = core_idx; step < n_steps; step += n_cores) {
+  int n_steps = total_channels * y_step;
+  for (int step = core_idx; step < n_steps; step += n_cores) {
 
-  //   int i = step / y_step;
-  //   int inst_idx = step % y_step;
+    int i = step / y_step;
+    int inst_idx = step % y_step;
 
-  //   // int pd = inst_idx / (pooled_height * pooled_width);
-  //   // inst_idx -= pd * pooled_height * pooled_width;
-  //   // int pw = inst_idx / pooled_height;
-  //   // int ph = inst_idx % pooled_height;
+    // int pd = inst_idx / (pooled_height * pooled_width);
+    // inst_idx -= pd * pooled_height * pooled_width;
+    // int pw = inst_idx / pooled_height;
+    // int ph = inst_idx % pooled_height;
 
-  //   // x = depth, y = width, z = height
-  //   int ph = inst_idx / (pooled_width * pooled_depth);
-  //   inst_idx -= ph * pooled_width * pooled_depth;
-  //   int pw = inst_idx / pooled_depth;
-  //   int pd = inst_idx % pooled_depth;
-
-  //   int x_d = i * x_step;
-  //   int y_d = i * y_step;
-
-  //   int hstart = ph * attr->strides[0] - attr->pads[0];
-  //   int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
-
-  //   int wstart = pw * attr->strides[1] - attr->pads[1];
-  //   int wend = wstart + attr->kernel_shape[1] * attr->dilations[1];
-
-  //   int dstart = pd * attr->strides[2] - attr->pads[2];
-  //   int dend = dstart + attr->kernel_shape[2] + attr->dilations[2];
-
-  //   int pool_index = ph * pooled_width * pooled_depth + pw * pooled_depth + pd;
-  //   int h_index, w_index, d_index;
-  //   double Yh;
-  //   int Yh_init = 0;
-
-  //   for (int h = hstart; h < hend; h += attr->dilations[0]) {
-  //     if (h < 0 || h >= height) continue;
-
-  //     for (int w = wstart; w < wend; w += attr->dilations[1]) {
-  //       if (w < 0 || w >= width) continue;
-
-  //       for (int d = dstart; d < dend; d += attr->dilations[2]) {
-  //         if (d < 0 || d >= depth) continue;
-
-  //         int input_index = h * width * depth + w * depth + d;
-  //         if (!Yh_init || in[x_d + input_index] > Yh) {
-  //           Yh = in[x_d + input_index];
-  //           Yh_init = 1;
-  //           h_index = h;
-  //           w_index = w;
-  //           d_index = d;
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   out[y_d + pool_index] = Yh;
-  //   if (idx != NULL) {
-  //     if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index * width * depth + w_index * depth + d_index;
-  //     else idx[y_d + pool_index] = i * x_step + h_index + w_index * height + d_index * height * width;
-  //   }
-
-  // }
-
-
-
-
-  for (int i = 0; i < total_channels; ++i) {
+    // x = depth, y = width, z = height
+    int ph = inst_idx / (pooled_width * pooled_depth);
+    inst_idx -= ph * pooled_width * pooled_depth;
+    int pw = inst_idx / pooled_depth;
+    int pd = inst_idx % pooled_depth;
 
     int x_d = i * x_step;
     int y_d = i * y_step;
 
-    for (int ph = 0; ph < pooled_height; ++ph) {
-      int hstart = ph * attr->strides[0] - attr->pads[0];
-      int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
-      for (int pw = 0; pw < pooled_width; ++pw) {
-        int wstart = pw * attr->strides[1] - attr->pads[1];
-        int wend = wstart + attr->kernel_shape[1] * attr->dilations[1];
-        for (int pd = 0; pd < pooled_depth; ++pd) {
-          int dstart = pd * attr->strides[2] - attr->pads[2];
-          int dend = dstart + attr->kernel_shape[2] + attr->dilations[2];
+    int hstart = ph * attr->strides[0] - attr->pads[0];
+    int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
 
-          int pool_index = ph * pooled_width * pooled_depth + pw * pooled_depth + pd;
-          int h_index, w_index, d_index;
-          double Yh;
-          int Yh_init = 0;
+    int wstart = pw * attr->strides[1] - attr->pads[1];
+    int wend = wstart + attr->kernel_shape[1] * attr->dilations[1];
 
-          for (int h = hstart; h < hend; h += attr->dilations[0]) {
-            if (h < 0 || h >= height) continue;
+    int dstart = pd * attr->strides[2] - attr->pads[2];
+    int dend = dstart + attr->kernel_shape[2] * attr->dilations[2];
 
-            for (int w = wstart; w < wend; w += attr->dilations[1]) {
-              if (w < 0 || w >= width) continue;
+    int pool_index = ph * pooled_width * pooled_depth + pw * pooled_depth + pd;
+    int h_index, w_index, d_index;
+    double Yh;
+    int Yh_init = 0;
 
-              for (int d = dstart; d < dend; d += attr->dilations[2]) {
-                if (d < 0 || d >= depth) continue;
+    for (int h = hstart; h < hend; h += attr->dilations[0]) {
+      if (h < 0 || h >= height) continue;
 
-                int input_index = h * width * depth + w * depth + d;
-                if (!Yh_init || in[x_d + input_index] > Yh) {
-                  Yh = in[x_d + input_index];
-                  Yh_init = 1;
-                  h_index = h;
-                  w_index = w;
-                  d_index = d;
-                }
-              }
-            }
+      for (int w = wstart; w < wend; w += attr->dilations[1]) {
+        if (w < 0 || w >= width) continue;
+
+        for (int d = dstart; d < dend; d += attr->dilations[2]) {
+          if (d < 0 || d >= depth) continue;
+
+          int input_index = h * width * depth + w * depth + d;
+          if (!Yh_init || in[x_d + input_index] > Yh) {
+            Yh = in[x_d + input_index];
+            Yh_init = 1;
+            h_index = h;
+            w_index = w;
+            d_index = d;
           }
-
-          out[y_d + pool_index] = Yh;
-          if (idx != NULL) {
-            if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index * width * depth + w_index * depth + d_index;
-            else idx[y_d + pool_index] = i * x_step + h_index + w_index * height + d_index * height * width;
-          }
-          
         }
       }
+    }
+
+    out[y_d + pool_index] = Yh;
+    if (idx != NULL) {
+      if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index * width * depth + w_index * depth + d_index;
+      else idx[y_d + pool_index] = i * x_step + h_index + w_index * height + d_index * height * width;
     }
 
   }

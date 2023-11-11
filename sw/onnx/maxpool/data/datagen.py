@@ -16,7 +16,7 @@ from data_utils import emit_license, \
                        format_struct_definition, format_array_definition, \
                        format_array_declaration, format_ifdef_wrapper  # noqa: E402
 
-torch.manual_seed(44)
+torch.manual_seed(45)
 
 # AXI splits bursts crossing 4KB address boundaries. To minimize
 # the occurrence of these splits the data should be aligned to 4KB
@@ -156,7 +156,6 @@ def emit_header(**kwargs):
     ceil_mode
   )
   ofmap3_uid = "ofmap3"
-  print(ofmap3.shape)
 
   data_str = [emit_license()]
 
@@ -233,11 +232,7 @@ def emit_header(**kwargs):
 
   data_str.append(format_array_declaration(ctype, ifmap3_uid, (num_outs(ifmap3.shape),)))
   #data_str.append(format_array_declaration(ctype, ofmap3_uid, ofmap3.shape))
-  # 3 2 4
-  # 3 4 2
-  # 2 4 3
-  # 3 2 4
-  data_str.append(format_array_definition(ctype, ifmap3_uid, ifmap3.permute(0, 1, 2, 3, 4).reshape((num_outs(ifmap3.shape),))))
+  data_str.append(format_array_definition(ctype, ifmap3_uid, ifmap3.permute(0, 1, 2, 4, 3).reshape((num_outs(ifmap3.shape),))))
 
   data_str.append((
     f"{ctype} output_loc1[{num_outs(ofmap1.shape)}] = {{0}};\n"

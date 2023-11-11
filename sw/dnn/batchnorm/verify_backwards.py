@@ -24,7 +24,7 @@ from data_utils import (  # noqa: E402
 )
 import pickle
 
-ERR_THRESHOLD = 0.001
+ERR_THRESHOLD = 1e-7
 
 PRECISION_T = {8: "64", 4: "32", 2: "16", 1: "8"}
 
@@ -125,6 +125,13 @@ def main():
             bytes_to_float(raw_results["grad_bias"], prec), dtype=NUMPY_T[prec]
         ).reshape((CI,))
     )
+    # temp = torch.from_numpy(
+    #     np.array(
+    #         bytes_to_float(raw_results["temp"], prec), dtype=NUMPY_T[prec]
+    #     ).reshape((8,CI))
+    # )
+    # print(temp)
+
 
     # convert from NHWC to NCHW format
     ifmap = ifmap.permute(0, 3, 1, 2)

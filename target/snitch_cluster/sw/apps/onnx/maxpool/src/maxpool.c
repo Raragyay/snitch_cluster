@@ -27,13 +27,30 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 
 int main() {
 
-  compute_output_shape(&attr1, attr1.output_shape);
+  // compute_output_shape(&attr1, attr1.output_shape);
+  // snrt_mcycle();
+  // maxpool_fp64_layer(&attr1,
+  //               ifmap1,
+  //               output_loc1,
+  //               NULL);
+  // snrt_mcycle();
 
+
+  // compute_output_shape(&attr2, attr2.output_shape);
+  // snrt_mcycle();
+  // maxpool_fp64_layer(&attr2,
+  //               ifmap2,
+  //               output_loc2,
+  //               NULL);
+  // snrt_mcycle();
+
+  compute_output_shape(&attr3, attr3.output_shape);
   snrt_mcycle();
-  maxpool_fp64_1d_layer(&attr1,
-                ifmap1,
-                output_loc1,
+  maxpool_fp64_layer(&attr3,
+                ifmap3,
+                output_loc3,
                 NULL);
+  // maxpool_fp64_3d(&attr3, ifmap3, output_loc3, NULL, 1, 8);
   snrt_mcycle();
   // if (snrt_global_core_idx() != 1) return 0;
 

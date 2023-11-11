@@ -74,8 +74,12 @@ def num_outs(shape):
 
 def emit_header(**kwargs):
 
-  batches = gen(kwargs["batches"])
-  channels = gen(kwargs["channels"])
+  batches1 = gen(kwargs["batches1"])
+  channels1 = gen(kwargs["channels1"])
+  batches2 = gen(kwargs["batches2"])
+  channels2 = gen(kwargs["channels2"])
+  batches3 = gen(kwargs["batches3"])
+  channels3 = gen(kwargs["channels3"])
 
   dim_obj = kwargs["input_dim"]
   input_dim = [
@@ -117,7 +121,7 @@ def emit_header(**kwargs):
   torch_type = data_utils.floating_point_torch_type("64")
   ctype = data_utils.floating_point_ctype("64")
 
-  ifmap1 = torch.randn(batches, channels, input_dim[0], dtype=torch_type)
+  ifmap1 = torch.randn(batches1, channels1, input_dim[0], dtype=torch_type)
   ifmap1_uid = "ifmap1"
   ofmap1 = golden_model_1d(
     ifmap1,
@@ -129,7 +133,7 @@ def emit_header(**kwargs):
   )
   ofmap1_uid = "ofmap1"
 
-  ifmap2 = torch.randn(batches, channels, input_dim[0], input_dim[1], dtype=torch_type)
+  ifmap2 = torch.randn(batches2, channels2, input_dim[0], input_dim[1], dtype=torch_type)
   ifmap2_uid = "ifmap2"
   ofmap2 = golden_model_2d(
     ifmap2,
@@ -141,7 +145,7 @@ def emit_header(**kwargs):
   )
   ofmap2_uid = "ofmap2"
 
-  ifmap3 = torch.randn(batches, channels, *input_dim, dtype=torch_type)
+  ifmap3 = torch.randn(batches3, channels3, *input_dim, dtype=torch_type)
   ifmap3_uid = "ifmap3"
   ofmap3 = golden_model_3d(
     ifmap3,
@@ -152,6 +156,7 @@ def emit_header(**kwargs):
     ceil_mode
   )
   ofmap3_uid = "ofmap3"
+  print(ofmap3.shape)
 
   data_str = [emit_license()]
 
@@ -172,7 +177,7 @@ def emit_header(**kwargs):
   attr1 = (
     f"maxpool_attributes attr1 = {{\n"
     f"  .n_dim = 1,\n"
-    f"  .input_shape = {{{batches}, {channels}, {input_dim[0]}, -1, -1}},\n"
+    f"  .input_shape = {{{batches1}, {channels1}, {input_dim[0]}, -1, -1}},\n"
     f"  .output_shape = {{0}},\n" # this gets set by the call
     f"  .auto_pad = NOTSET,\n"
     f"  .ceil_mode = {1 if ceil_mode else 0},\n"
@@ -187,7 +192,7 @@ def emit_header(**kwargs):
   attr2 = (
     f"maxpool_attributes attr2 = {{\n"
     f"  .n_dim = 2,\n"
-    f"  .input_shape = {{{batches}, {channels}, {input_dim[0]}, {input_dim[1]}, -1}},\n"
+    f"  .input_shape = {{{batches2}, {channels2}, {input_dim[0]}, {input_dim[1]}, -1}},\n"
     f"  .output_shape = {{0}},\n" # this gets set by the call
     f"  .auto_pad = NOTSET,\n"
     f"  .ceil_mode = {1 if ceil_mode else 0},\n"
@@ -202,7 +207,7 @@ def emit_header(**kwargs):
   attr3 = (
     f"maxpool_attributes attr3 = {{\n"
     f"  .n_dim = 3,\n"
-    f"  .input_shape = {{{batches}, {channels}, {input_dim[0]}, {input_dim[1]}, {input_dim[2]}}},\n"
+    f"  .input_shape = {{{batches3}, {channels3}, {input_dim[0]}, {input_dim[1]}, {input_dim[2]}}},\n"
     f"  .output_shape = {{0}},\n" # this gets set by the call
     f"  .auto_pad = NOTSET,\n"
     f"  .ceil_mode = {1 if ceil_mode else 0},\n"
@@ -228,7 +233,11 @@ def emit_header(**kwargs):
 
   data_str.append(format_array_declaration(ctype, ifmap3_uid, (num_outs(ifmap3.shape),)))
   #data_str.append(format_array_declaration(ctype, ofmap3_uid, ofmap3.shape))
-  data_str.append(format_array_definition(ctype, ifmap3_uid, ifmap3.reshape((num_outs(ifmap3.shape),))))
+  # 3 2 4
+  # 3 4 2
+  # 2 4 3
+  # 3 2 4
+  data_str.append(format_array_definition(ctype, ifmap3_uid, ifmap3.permute(0, 1, 2, 3, 4).reshape((num_outs(ifmap3.shape),))))
 
   data_str.append((
     f"{ctype} output_loc1[{num_outs(ofmap1.shape)}] = {{0}};\n"

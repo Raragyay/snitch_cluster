@@ -1,6 +1,10 @@
 {
-    batches: [2, 5]
-    channels: [5, 10]
+    batches1: [2, 5]
+    channels1: [5, 10]
+    batches2: [1, 3]
+    channels2: [1, 5]
+    batches3: [1, 3]
+    channels3: [1, 3]
     input_dim: {
         height: [8, 10]
         width: [8, 10]

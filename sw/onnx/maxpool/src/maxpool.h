@@ -25,6 +25,6 @@ void populate_defaults(maxpool_attributes*, int);
 
 void compute_output_shape(maxpool_attributes*, int*);
 
-void maxpool_fp64_1d(maxpool_attributes*, double*, double*, int*, int, int);
+void maxpool_fp64_layer(maxpool_attributes*, double*, double*, int*);
 
-void maxpool_fp64_1d_layer(maxpool_attributes*, double*, double*, int*);
+void maxpool_fp64_3d(maxpool_attributes*, double*, double*, int*, int, int);

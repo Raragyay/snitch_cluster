@@ -21,7 +21,8 @@ RUN apt-get update && \
         software-properties-common \
         unzip \
         wget \
-        zlib1g-dev
+        zlib1g-dev \
+        autoconf
 
 # Build Rust tools
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -51,6 +52,14 @@ RUN rustup override set 1.63.0
 RUN git clone https://github.com/pulp-platform/banshee.git /tmp/banshee --recurse-submodules
 RUN cargo install --path /tmp/banshee
 
+# Install `spike-dasm`
+RUN git clone https://github.com/pulp-platform/riscv-isa-sim.git
+WORKDIR /tools/riscv-isa-sim
+RUN git checkout snitch
+RUN autoconf
+RUN mkdir build
+RUN cd build && ../configure && make
+
 # 2. Stage
 FROM ubuntu:18.04 AS snitch_cluster
 ARG SNITCH_LLVM_VERSION=latest
@@ -76,6 +85,7 @@ RUN apt-get update && \
         gnupg2 \
         curl \
         wget \
+        vim \
         git && \
     apt-get clean ; \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/*
@@ -119,6 +129,7 @@ RUN apt-get update && apt-get install software-properties-common -y && \
 # Copy artifacts from stage 1.
 COPY --from=builder /root/.cargo/bin/bender bin/
 COPY --from=builder /root/.cargo/bin/banshee bin/
+COPY --from=builder /tools/riscv-isa-sim/build/spike-dasm bin/
 
 # Set locale to UTF-8, required because Python 3.6 defaults on ASCII encoding.
 # See https://click.palletsprojects.com/en/8.1.x/unicode-support/

@@ -58,6 +58,13 @@ typedef struct {
     precision_t dtype;
 } batchnorm_backward_layer_t;
 
+static inline uint32_t get_core_num_work_items(uint32_t num_work_items,
+                                               uint32_t num_compute_cores,
+                                               uint32_t compute_id) {
+    return num_work_items / num_compute_cores +
+           (compute_id < (num_work_items % num_compute_cores));
+}
+
 /**
  * @brief implementation of a FP64 batchnorm as a linear combination
  * y = gamma * x + beta
@@ -360,10 +367,10 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     double eps = l->eps;
     uint32_t num_points = N * H * W;
 
-    uint32_t buffer_len = l->CI;
-    uint32_t invstd_scratch_len = l->CI;
-    uint32_t grad_bias_scratch_len = l->CI * num_compute_cores,
-             grad_weight_scratch_len = l->CI * num_compute_cores;
+    uint32_t buffer_len = C;
+    uint32_t invstd_scratch_len = C;
+    uint32_t grad_bias_scratch_len = C * num_compute_cores,
+             grad_weight_scratch_len = C * num_compute_cores;
     uint32_t grad_ofmap_len = num_points * C, grad_ifmap_len = num_points * C;
 
     double *ptr = (double *)snrt_l1_start_addr();
@@ -383,43 +390,9 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                           grad_ofmap_len * sizeof(double));
         snrt_dma_wait_all();
         snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
     } else if (snrt_is_compute_core()) {
-        // double *gamma = ptr;
-        // ptr += weights_size;
-        // double *beta = ptr;
-        // ptr += weights_size;
-        // double *ofmap = ptr;
-        // ptr += ofmap_size;
-
-        // compute invstd. just single thread for now
         if (compute_id == 0) {
-#if 0
-        // snrt_ssr_loop_1d(SNRT_SSR_DM0, C, sizeof(double));
-        // snrt_ssr_loop_1d(SNRT_SSR_DM1, C, sizeof(double));
-
-        // snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, l->running_var);
-        // snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, invstd_scratch);
-        // snrt_ssr_enable();
-        // double eps = l->eps;
-        
-        // double one = 1;
-
-        // // frep over C dimension
-        // asm volatile(
-        //     "frep.o %[n_frep], 3, 0, 0 \n"
-        //     "fadd.d ft2, ft0, %[eps]\n"
-        //     "fsqrt.d ft2, ft2\n"
-        //     "fdiv.d ft1, %[one], ft2\n"
-        //     :
-        //     : [eps] "f"(eps), [one] "f"(one),
-        //       [n_frep] "r"(C - 1)  // we repeat n_frep+1 times
-        //     : "memory", "ft0", "ft1", "ft2");
-        // snrt_fpu_fence();
-        // // wait for writes to the ofmap to finish?
-        // __builtin_ssr_barrier(SNRT_SSR_DM1);
-        // snrt_ssr_disable();
-#endif
-
             for (uint32_t channel = 0; channel < C; ++channel) {
                 invstd_scratch[channel] =
                     1 / sqrt(l->running_var[channel] + eps);
@@ -442,6 +415,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                     dot_res * invstd_scratch[channel];
             }
         }
+        snrt_cluster_hw_barrier();
 
         // reduce over [num_threads, C] to [C] by splitting over C
         // just reduce back into the first buffer.
@@ -480,16 +454,20 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             }
         }
         snrt_cluster_hw_barrier();
-        // in vector notation
+        uint32_t num_points_work_for_core =
+            get_core_num_work_items(num_points, num_compute_cores, compute_id);
+
         snrt_ssr_loop_2d(
             SNRT_SSR_DM0,
-            num_points / num_compute_cores /*check modulo for non-multiples?*/,
-            C, num_compute_cores * C * sizeof(double), sizeof(double));
+            num_points_work_for_core /*check modulo for non-multiples?*/, C,
+            num_compute_cores * C * sizeof(double), sizeof(double));
         snrt_ssr_loop_2d(
             SNRT_SSR_DM1,
-            num_points / num_compute_cores /*check modulo for non-multiples?*/,
-            C, num_compute_cores * C * sizeof(double), sizeof(double));
-        snrt_ssr_loop_2d(SNRT_SSR_DM2, num_points / num_compute_cores, C, 0,
+            num_points_work_for_core /*check modulo for non-multiples?*/, C,
+            num_compute_cores * C * sizeof(double), sizeof(double));
+        // repeatedly read from invstd_scratch, treating it as a 2d array with
+        // row-stride 0
+        snrt_ssr_loop_2d(SNRT_SSR_DM2, num_points_work_for_core, C, 0,
                          sizeof(double));
 
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D,
@@ -504,20 +482,9 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             "frep.o %[n_frep], 1, 0, 0 \n"
             "fmul.d ft1, ft0, ft2 \n"
             :
-            : [n_frep] "r"(num_points / num_compute_cores * C -
+            : [n_frep] "r"(num_points_work_for_core * C -
                            1)  // we repeat n_frep+1 times
             : "ft0", "ft1", "ft2");
-
-        // for (uint32_t channel = 0; channel < C; ++channel) {
-        //     double dy = l->grad_ofmap[i * C + channel];
-        //     l->grad_ifmap[i * C + channel] =
-        //         dy * invstd_scratch[channel] * l->weight[channel];
-        //     // Y[i * C + channel] = (X[i * C + channel] -
-        //     // input_mean[channel]) /
-        //     //                          sqrt(input_var[channel] + eps) *
-        //     //                          weight[channel] +
-        //     //                      bias[channel];
-        // }
 
         snrt_fpu_fence();
         // wait for writes to the ofmap to finish?

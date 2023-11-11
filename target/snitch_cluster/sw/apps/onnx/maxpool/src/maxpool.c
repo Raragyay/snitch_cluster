@@ -1,7 +1,7 @@
 #include "maxpool.h"
 #include "snrt.h"
 
-#include "data.h"
+#include "tests.h"
 #include "printf.h"
 
 /*
@@ -31,23 +31,31 @@ int main() {
   uint32_t compute_num = snrt_cluster_compute_core_num();
   uint32_t compute_id = snrt_global_core_idx();
 
-  printf("%d %d %d %d\n", cluster_num, cluster_id, compute_num, compute_id);
-
   if (compute_id != 1) return 0;
 
-  populate_defaults(&attributes, 2);
+  printf("%d %d %d %d\n", cluster_num, cluster_id, compute_num, compute_id);
+  
 
-  attributes.kernel_shape[0] = 3;
-  attributes.kernel_shape[1] = 3;
+  // snrt_cluster_hw_barrier();
 
-  attributes.input_shape[0] = 1;
-  attributes.input_shape[1] = 1;
-  attributes.input_shape[2] = 4;
-  attributes.input_shape[3] = 4;
+  printf("asd\n");
 
-  maxpool_fp64(&attributes, input, output, idx);
+  // populate_defaults(&attributes, 2);
 
-  for (int i = 0; i < 4; ++i) printf("%lf %d\n", output[i], i);
+  // attributes.kernel_shape[0] = 3;
+  // attributes.kernel_shape[1] = 3;
+
+  // attributes.input_shape[0] = 1;
+  // attributes.input_shape[1] = 1;
+  // attributes.input_shape[2] = 4;
+  // attributes.input_shape[3] = 4;
+
+  maxpool_fp64(&test_1d_default_attributes,
+                test_1d_default_input,
+                test_1d_default_output,
+                test_1d_default_idx);
+
+  for (int i = 0; i < 93; ++i) printf("%lf %d %d\n", test_1d_default_output[i], i, compute_id);
 
   return 0;
 

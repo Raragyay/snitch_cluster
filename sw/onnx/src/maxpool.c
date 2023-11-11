@@ -1,6 +1,7 @@
 #include "maxpool.h"
 #include "snrt.h"
-#include "math.h"
+// #include "math.h"
+#include "printf.h"
 
 /*
 enum padding_type {
@@ -29,6 +30,21 @@ typedef struct maxpool_attributes_struct {
 
 // TODO: malloc...
 
+// TODO: Replace with better impls? Problems with using math.h...
+double floor(double x) {
+  return (double) ((int) x);
+}
+
+// https://stackoverflow.com/a/8377539
+double ceil(double num)
+{
+  int inum = (int)num;
+  if (num == (double)inum) {
+      return num;
+  }
+  return inum + 1;
+}
+
 // also recomputes padding if auto_pad is set (deprecated)
 void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
   output_shape[0] = attr->input_shape[0];
@@ -43,15 +59,14 @@ void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
     if (attr->auto_pad == SAME_UPPER || attr->auto_pad == SAME_LOWER) {
 
       for (int i = 0; i < attr->n_dim; ++i) {
-
         if (attr->auto_pad == SAME_UPPER) {
           output_spatial_shape[i] = (int) (
-            ceil(input_spatial_shape[i] / attr->strides[i])
+            ceil((double) input_spatial_shape[i] / attr->strides[i])
           );
         }
         else {
           output_spatial_shape[i] = (int) (
-            floor(input_spatial_shape[i] / attr->strides[i])
+            floor((double) input_spatial_shape[i] / attr->strides[i])
           );
         }
 
@@ -70,7 +85,7 @@ void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
       for (int i = 0; i < attr->n_dim; ++i) {
         output_spatial_shape[i] = (int) (
           ceil(
-            (input_spatial_shape[i] - ((attr->kernel_shape[i] - 1) * attr->dilations[i] + 1) + 1) / attr->strides[i]
+            (double) (input_spatial_shape[i] - ((attr->kernel_shape[i] - 1) * attr->dilations[i] + 1) + 1) / attr->strides[i]
           )
         );
       }
@@ -84,7 +99,7 @@ void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
       for (int i = 0; i < attr->n_dim; ++i) {
         output_spatial_shape[i] = (int) (
           ceil(
-            (input_spatial_shape[i] + attr->pads[i] + attr->pads[i + attr->n_dim] - ((attr->kernel_shape[i] - 1) * attr->dilations[i] + 1))
+            (double) (input_spatial_shape[i] + attr->pads[i] + attr->pads[i + attr->n_dim] - ((attr->kernel_shape[i] - 1) * attr->dilations[i] + 1))
             / attr->strides[i] + 1
           )
         );
@@ -96,7 +111,7 @@ void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
       for (int i = 0; i < attr->n_dim; ++i) {
         output_spatial_shape[i] = (int) (
           floor(
-            (input_spatial_shape[i] + attr->pads[i] + attr->pads[i + attr->n_dim] - ((attr->kernel_shape[i] - 1) * attr->dilations[i] + 1))
+            (double) (input_spatial_shape[i] + attr->pads[i] + attr->pads[i + attr->n_dim] - ((attr->kernel_shape[i] - 1) * attr->dilations[i] + 1))
             / attr->strides[i] + 1
           )
         );

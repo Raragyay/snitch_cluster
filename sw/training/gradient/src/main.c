@@ -49,6 +49,7 @@ int main(int argc, char *argv[]) {
 
     if(!snrt_is_dm_core()){
         backpropagation_baseline_multicore((double*)local_I,(double*)local_W,(double*)local_B,(double*)local_E,e,M,N,K);
+        //backpropagation_multicore((double*)local_I,(double*)local_W,(double*)local_B,(double*)local_E,e,M,N,K);
         snrt_fpu_fence();
     }
 

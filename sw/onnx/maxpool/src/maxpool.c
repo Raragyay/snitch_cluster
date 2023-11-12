@@ -4,6 +4,7 @@
 #include "printf.h"
 
 #define DMA_USE_CACHED_ATTRIBS 1
+#define USE_SSR_FREP 1
 
 // TODO: Replace with better impls? Problems with using math.h...
 double floor(double x) {
@@ -179,13 +180,13 @@ void maxpool_fp64_layer(maxpool_attributes* attribs_raw, double* in, double* out
 
     switch (attribs->n_dim) {
     case 1:
-      maxpool_fp64_1d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
+      maxpool_fp64_1d(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
       break;
     case 2:
-      maxpool_fp64_2d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
+      maxpool_fp64_2d(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
       break;
     case 3:
-      maxpool_fp64_3d(attribs, (double*) inputs_start, (double*) outputs_start, NULL, compute_id, compute_num);
+      maxpool_fp64_3d(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
       break;
     default:
       break; // error not implemented
@@ -235,7 +236,7 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
       }
     }
     out[y_d + ph] = Yh;
-    if (idx != NULL) idx[y_d + ph] = i * x_step + h_index;
+    if (idx != NULL) idx[y_d + ph] = h_index;
 
   }
 
@@ -301,8 +302,8 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
 
     out[y_d + pool_index] = Yh;
     if (idx != NULL) {
-      if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index + width + w_index;
-      else idx[y_d + pool_index] = i * x_step + h_index + w_index * height;
+      if (!attr->storage_order) idx[y_d + pool_index] = h_index * width + w_index;
+      else idx[y_d + pool_index] = h_index + w_index * height;
     }
 
   }
@@ -382,8 +383,8 @@ void maxpool_fp64_3d(maxpool_attributes* attr, double* in, double* out, int* idx
 
     out[y_d + pool_index] = Yh;
     if (idx != NULL) {
-      if (!attr->storage_order) idx[y_d + pool_index] = i * x_step + h_index * width * depth + w_index * depth + d_index;
-      else idx[y_d + pool_index] = i * x_step + h_index + w_index * height + d_index * height * width;
+      if (!attr->storage_order) idx[y_d + pool_index] = h_index * width * depth + w_index * depth + d_index;
+      else idx[y_d + pool_index] = h_index + w_index * height + d_index * height * width;
     }
 
   }

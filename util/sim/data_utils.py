@@ -124,7 +124,15 @@ def bytes_to_struct(byte_array, struct_map):
     fmt_specifiers = struct_map.values()
     fmt_string = ''.join(fmt_specifiers)
     field_values = struct.unpack(f'<{fmt_string}', byte_array)
-    return dict(zip(struct_fields, field_values))
+    d = {}
+    cnt = 0
+    for field in struct_fields:
+        l = len(struct_map[field])
+        d[field] = field_values[cnt:cnt + l]
+        if len(d[field]) == 1:
+            d[field] = d[field][0]
+        cnt += l
+    return d
 
 
 # bytearray assumed little-endian
@@ -154,15 +162,15 @@ def bytes_to_float(byte_array, prec='64'):
 # bytearray assumed little-endian
 def bytes_to_int(byte_array, prec='32', signedness='unsigned'):
     assert prec == '32', "Only 32 bit precision supported so far"
-    assert signedness == 'unsigned', "Only unsigned integers supported so far"
+    # assert signedness == 'unsigned', "Only unsigned integers supported so far"
 
-    uint32_size = struct.calcsize('I')  # Size of a uint32 in bytes
+    uint32_size = struct.calcsize("I" if signedness == "unsigned" else "i")
     num_uints = len(byte_array) // uint32_size
 
     # Unpack the byte array into a list of uints
     uints = []
     for i in range(num_uints):
         uint32_bytes = byte_array[i * uint32_size:(i + 1) * uint32_size]
-        uint = struct.unpack('<I', uint32_bytes)[0]
+        uint = struct.unpack("<" + "I" if signedness == "unsigned" else "i", uint32_bytes)[0]
         uints.append(uint)
     return uints

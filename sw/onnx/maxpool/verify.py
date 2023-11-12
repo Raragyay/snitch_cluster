@@ -27,8 +27,9 @@ ERR_THRESHOLD = 0.001
 # .storage_order = 0,
 # .strides = {2, -1, -1}
 
-def verify(input_name, attribs_name, output_name, elf=None, raw_results=None):
-  c_actual = np.array(bytes_to_float(raw_results[output_name], prec="64"))
+def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id=0):
+  c_actual = np.array(bytes_to_float(raw_results[output_name[0]], prec="64"))
+  i_actual = np.array(bytes_to_int(raw_results[output_name[1]], prec="32"))
   attr_map = {
     "n_dim": "i",
     "input_shape": "iiiii",
@@ -53,30 +54,40 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None):
   elif n_dim == 3:
     golden_model = golden_model_3d
 
-  c_golden = golden_model(
+  [c_golden, i_golden] = golden_model(
     from_numpy(inputs.reshape(attribs["input_shape"][0:n_dim + 2])),
     attribs["kernel_shape"][0:n_dim],
     attribs["strides"][0:n_dim],
     attribs["pads"][0:n_dim],
     attribs["dilations"][0:n_dim],
-    bool(attribs["ceil_mode"])).flatten().detach().cpu().numpy()
-  
+    bool(attribs["ceil_mode"]))
+  c_golden = c_golden.flatten().detach().cpu().numpy()
+  i_golden = i_golden.flatten().detach().cpu().numpy()
+
   absolute_err = np.absolute(c_golden - c_actual)
   fail = np.any(absolute_err > ERR_THRESHOLD)
-  if (fail):
-    verification.dump_results_to_csv([c_golden, c_actual, absolute_err],
-                                        Path.cwd() / 'maxpool_results.csv')
+  code = 0
+  if fail:
+    verification.dump_results_to_csv([c_golden, c_actual, absolute_err], Path.cwd() / f"maxpool_values_{id}.csv")
+    code = fail
+
+  fail = np.any(i_actual != i_golden)
+  if fail:
+    verification.dump_results_to_csv([i_golden, i_actual, np.absolute(i_golden - i_actual)], Path.cwd() / f"maxpool_index_{id}.csv")
+    code = fail
+
   return int(fail)
 
 def main():
   # Run simulation and get outputs
   args = verification.parse_args()
-  raw_results = verification.simulate(sim_bin=args.sim_bin,
-                                      snitch_bin=args.snitch_bin,
-                                      symbols_bin=args.symbols_bin,
-                                      log=args.log,
-                                      output_uids=["output_loc1", "output_loc2", "output_loc3"])
-  c_actual = np.array(bytes_to_float(raw_results["output_loc1"], prec="64"))
+  raw_results = verification.simulate(
+    sim_bin=args.sim_bin,
+    snitch_bin=args.snitch_bin,
+    symbols_bin=args.symbols_bin,
+    log=args.log,
+    output_uids=["output_loc1", "output_loc2", "output_loc3", "idx_loc1", "idx_loc2", "idx_loc3"]
+  )
 
   # Extract input operands from ELF file
   if args.symbols_bin:
@@ -84,15 +95,15 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  ret = verify("ifmap1", "attr1", "output_loc1", elf=elf, raw_results=raw_results)
+  ret = verify("ifmap1", "attr1", ["output_loc1", "idx_loc1"], elf=elf, raw_results=raw_results, id=1)
   if ret == 0:
     print("1D good")
 
-  ret = verify("ifmap2", "attr2", "output_loc2", elf=elf, raw_results=raw_results)
+  ret = verify("ifmap2", "attr2", ["output_loc2", "idx_loc2"], elf=elf, raw_results=raw_results, id=2)
   if ret == 0:
     print("2D good")
 
-  ret = verify("ifmap3", "attr3", "output_loc3", elf=elf, raw_results=raw_results)
+  ret = verify("ifmap3", "attr3", ["output_loc3", "idx_loc3"], elf=elf, raw_results=raw_results, id=3)
   if ret == 0:
     print("3D good")
 

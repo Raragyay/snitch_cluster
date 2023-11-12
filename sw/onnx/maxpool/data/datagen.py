@@ -16,7 +16,7 @@ from data_utils import emit_license, \
                        format_struct_definition, format_array_definition, \
                        format_array_declaration, format_ifdef_wrapper  # noqa: E402
 
-torch.manual_seed(45)
+torch.manual_seed(42)
 
 # AXI splits bursts crossing 4KB address boundaries. To minimize
 # the occurrence of these splits the data should be aligned to 4KB
@@ -39,7 +39,7 @@ def golden_model_1d(ifmap, kernel, stride, padding, dilation, ceil_mode):
     return_indices=True,
     ceil_mode=ceil_mode
   )
-  return max_pool(ifmap)[0]
+  return max_pool(ifmap)
 
 def golden_model_2d(ifmap, kernel, stride, padding, dilation, ceil_mode):
   max_pool = torch.nn.MaxPool2d(
@@ -50,7 +50,7 @@ def golden_model_2d(ifmap, kernel, stride, padding, dilation, ceil_mode):
     return_indices=True,
     ceil_mode=ceil_mode
   )
-  return max_pool(ifmap)[0]
+  return max_pool(ifmap)
 
 def golden_model_3d(ifmap, kernel, stride, padding, dilation, ceil_mode):
   max_pool = torch.nn.MaxPool3d(
@@ -61,7 +61,7 @@ def golden_model_3d(ifmap, kernel, stride, padding, dilation, ceil_mode):
     return_indices=True,
     ceil_mode=ceil_mode
   )
-  return max_pool(ifmap)[0]
+  return max_pool(ifmap)
 
 def gen(bounds):
   return torch.randint(bounds[0], bounds[1] + 1, (1,))[0]
@@ -123,7 +123,7 @@ def emit_header(**kwargs):
 
   ifmap1 = torch.randn(batches1, channels1, input_dim[0], dtype=torch_type)
   ifmap1_uid = "ifmap1"
-  ofmap1 = golden_model_1d(
+  [ofmap1, idxmap1] = golden_model_1d(
     ifmap1,
     [kernel_size[0]],
     [strides[0]],
@@ -132,10 +132,11 @@ def emit_header(**kwargs):
     ceil_mode
   )
   ofmap1_uid = "ofmap1"
+  idxmap1_uid = "idxmap1"
 
   ifmap2 = torch.randn(batches2, channels2, input_dim[0], input_dim[1], dtype=torch_type)
   ifmap2_uid = "ifmap2"
-  ofmap2 = golden_model_2d(
+  [ofmap2, idxmap2] = golden_model_2d(
     ifmap2,
     [kernel_size[0], kernel_size[1]],
     [strides[0], strides[1]],
@@ -144,10 +145,11 @@ def emit_header(**kwargs):
     ceil_mode
   )
   ofmap2_uid = "ofmap2"
+  idxmap2_uid = "idxmap2"
 
   ifmap3 = torch.randn(batches3, channels3, *input_dim, dtype=torch_type)
   ifmap3_uid = "ifmap3"
-  ofmap3 = golden_model_3d(
+  [ofmap3, idxmap3] = golden_model_3d(
     ifmap3,
     kernel_size,
     strides,
@@ -156,6 +158,7 @@ def emit_header(**kwargs):
     ceil_mode
   )
   ofmap3_uid = "ofmap3"
+  idxmap3_uid = "idxmap3"
 
   data_str = [emit_license()]
 
@@ -222,22 +225,28 @@ def emit_header(**kwargs):
   data_str.append(attr2)
   data_str.append(attr3)
 
-  data_str.append(format_array_declaration(ctype, ifmap1_uid, (num_outs(ifmap1.shape),)))
+  flat_shape1 = (num_outs(ifmap1.shape),)
+  data_str.append(format_array_declaration(ctype, ifmap1_uid, flat_shape1))
   #data_str.append(format_array_declaration(ctype, ofmap1_uid, ofmap1.shape))
-  data_str.append(format_array_definition(ctype, ifmap1_uid, ifmap1.reshape((num_outs(ifmap1.shape),))))
+  data_str.append(format_array_definition(ctype, ifmap1_uid, ifmap1.reshape(flat_shape1)))
 
-  data_str.append(format_array_declaration(ctype, ifmap2_uid, (num_outs(ifmap2.shape),)))
+  flat_shape2 = (num_outs(ifmap2.shape),)
+  data_str.append(format_array_declaration(ctype, ifmap2_uid, flat_shape2))
   #data_str.append(format_array_declaration(ctype, ofmap2_uid, ofmap2.shape))
-  data_str.append(format_array_definition(ctype, ifmap2_uid, ifmap2.reshape((num_outs(ifmap2.shape),))))
+  data_str.append(format_array_definition(ctype, ifmap2_uid, ifmap2.reshape(flat_shape2)))
 
-  data_str.append(format_array_declaration(ctype, ifmap3_uid, (num_outs(ifmap3.shape),)))
+  flat_shape3 = (num_outs(ifmap3.shape),)
+  data_str.append(format_array_declaration(ctype, ifmap3_uid, flat_shape3))
   #data_str.append(format_array_declaration(ctype, ofmap3_uid, ofmap3.shape))
-  data_str.append(format_array_definition(ctype, ifmap3_uid, ifmap3.permute(0, 1, 2, 4, 3).reshape((num_outs(ifmap3.shape),))))
+  data_str.append(format_array_definition(ctype, ifmap3_uid, ifmap3.reshape(flat_shape3)))
 
   data_str.append((
     f"{ctype} output_loc1[{num_outs(ofmap1.shape)}] = {{0}};\n"
     f"{ctype} output_loc2[{num_outs(ofmap2.shape)}] = {{0}};\n"
     f"{ctype} output_loc3[{num_outs(ofmap3.shape)}] = {{0}};\n"
+    f"int idx_loc1[{num_outs(idxmap1.shape)}] = {{0}};\n"
+    f"int idx_loc2[{num_outs(idxmap2.shape)}] = {{0}};\n"
+    f"int idx_loc3[{num_outs(idxmap3.shape)}] = {{0}};\n"
   ))
 
   # data_str.append(format_ifdef_wrapper("BIST", format_array_definition(ctype, "golden1", ofmap1)))

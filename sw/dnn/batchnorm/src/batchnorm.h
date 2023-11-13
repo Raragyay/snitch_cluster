@@ -504,10 +504,6 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
-            snrt_fpu_fence();                     // thought: do we need this?
-            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
-            snrt_ssr_disable();
-
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &running_mean_scratch[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
@@ -515,7 +511,6 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D,
                           &invstd_scratch[compute_id]);
 
-            snrt_ssr_enable();
             asm volatile(
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fmul.d ft1, ft0, ft2 \n"  // running_mean =

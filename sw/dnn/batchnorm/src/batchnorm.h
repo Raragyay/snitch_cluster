@@ -368,13 +368,15 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     double eps = l->eps;
     uint32_t num_points = N * H * W;
 
-    uint32_t buffer_len = C;
+    uint32_t weight_len = C;
     uint32_t invstd_scratch_len = C;
     uint32_t grad_bias_scratch_len = C * num_compute_cores,
              grad_weight_scratch_len = C * num_compute_cores;
     uint32_t grad_ofmap_len = num_points * C, grad_ifmap_len = num_points * C;
 
     double *ptr = (double *)snrt_l1_start_addr();
+    double *weight_scratch = ptr;
+    ptr += weight_len;
     double *invstd_scratch = ptr;
     ptr += invstd_scratch_len;
     double *grad_bias_scratch = ptr;
@@ -388,11 +390,15 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
 
     if (snrt_is_dm_core()) {
         // might need to tile this later
-        snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                          grad_ofmap_len * sizeof(double));
-        snrt_dma_wait_all();
+        snrt_dma_txid_t grad_ofmap_load = snrt_dma_start_1d(
+            grad_ofmap_scratch, l->grad_ofmap, grad_ofmap_len * sizeof(double));
+
+        snrt_dma_txid_t weight_load =
+            snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
+        snrt_dma_wait(grad_ofmap_load);
         snrt_cluster_hw_barrier();
         snrt_cluster_hw_barrier();
+        snrt_dma_wait(weight_load);
     } else if (snrt_is_compute_core()) {
         uint32_t start_invstd_comp = snrt_mcycle();
         for (uint32_t channel = compute_id; channel < C;
@@ -404,9 +410,12 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
         snrt_fpu_fence();
         snrt_cluster_hw_barrier();
         // reduce from [num_points, C] to [num_threads, C] by splitting over
-        // num_points 
+        // num_points
         // Read from ofmap.
         uint32_t start_grad_bias_weight_reduction_1 = snrt_mcycle();
+        // can we compute mean*dy, then do a fmsub?
+        // we could do it by channel, though not really convinced of the memory
+        // access pattern
         for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
             for (uint32_t channel = 0; channel < C; ++channel) {
                 double dy = grad_ofmap_scratch[i * C + channel];
@@ -430,9 +439,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
              channel += num_compute_cores) {
             register volatile double grad_bias_sum = 0;
             register volatile double grad_weight_sum = 0;
-            snrt_ssr_loop_1d(SNRT_SSR_DM0, num_compute_cores,
-                             C * sizeof(double));
-            snrt_ssr_loop_1d(SNRT_SSR_DM1, num_compute_cores,
+            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores,
                              C * sizeof(double));
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &grad_bias_scratch[channel]);
@@ -471,15 +478,31 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                           grad_ifmap_len * sizeof(double));
         snrt_dma_wait_all();
     } else if (snrt_is_compute_core()) {
+        // invstd * weight
         uint32_t start_invstd_scratch_inplace_augmentation = snrt_mcycle();
-        for (uint32_t channel = compute_id; channel < C;
-             channel += num_compute_cores) {
-            invstd_scratch[channel] *=
-                l->weight[channel];  // can dma weight, can also frep
-        }
+        // TODO: thought: at what point is this even worth it?
+        // TODO: refactor these constants
+        uint32_t num_channels_work_for_core =
+            get_core_num_work_items(C, num_compute_cores, compute_id);
+        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
+                         num_compute_cores * sizeof(double));
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd_scratch[compute_id]);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &weight_scratch[compute_id]);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, &weight_scratch[compute_id]);
+        snrt_ssr_enable();
+        asm volatile(
+            "frep.o %[n_frep], 1, 0, 0 \n"
+            "fmul.d ft1, ft0, ft2 \n"
+            :
+            : [n_frep] "r"(num_channels_work_for_core -
+                           1)  // we repeat n_frep+1 times
+            : "ft0", "ft1", "ft2");
+
+        snrt_fpu_fence();
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+        snrt_ssr_disable();
         uint32_t end_invstd_scratch_inplace_augmentation = snrt_mcycle();
         snrt_cluster_hw_barrier();
-        snrt_fpu_fence();
         uint32_t start_ifmap_grad_computation = snrt_mcycle();
         uint32_t num_points_work_for_core =
             get_core_num_work_items(num_points, num_compute_cores, compute_id);
@@ -499,7 +522,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                       &grad_ofmap_scratch[compute_id * C]);
         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
                        &grad_ifmap_scratch[compute_id * C]);
-        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, invstd_scratch);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, weight_scratch);
         snrt_ssr_enable();
         asm volatile(
             "frep.o %[n_frep], 1, 0, 0 \n"

@@ -374,6 +374,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
              grad_weight_scratch_len = C * num_compute_cores;
     uint32_t grad_ofmap_len = num_points * C, grad_ifmap_len = num_points * C;
 
+    // dataflow:
     double *ptr = (double *)snrt_l1_start_addr();
     double *invstd_scratch = ptr;
     ptr += invstd_scratch_len;
@@ -412,7 +413,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                 double dy = grad_ofmap_scratch[i * C + channel];
                 double x = l->ifmap[i * C + channel];
                 double mean = l->running_mean[channel];
-                double dot_res = dy * (x - mean);
+                double var = l->running_var[channel];
+                double dot_res = dy * (x - mean) / sqrt(var + eps);
                 // currently accessing channel 1, 2, 3, 4, 1, 2, 3, 4
                 grad_bias_scratch[compute_id * C + channel] +=
                     grad_ofmap_scratch[i * C + channel];
@@ -530,4 +532,219 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     // dy[i][c]*1/sqrt(running_var[c]+eps)*weight[c]
 
     snrt_cluster_hw_barrier();
+}
+
+static inline void batchnorm_backwards_training(batchnorm_backward_layer_t *l) {
+    const uint32_t num_clusters = snrt_cluster_num();
+    const uint32_t cluster_id = snrt_cluster_idx();
+    const uint32_t num_compute_cores = snrt_cluster_compute_core_num();
+    const uint32_t compute_id = snrt_cluster_core_idx(); 
+
+    // Calculate output dimensions
+    uint32_t N = 1;
+    uint32_t H = l->IH;
+    uint32_t W = l->IW;
+    uint32_t C = l->CI;
+    double eps = l->eps;
+    uint32_t num_points = N * H * W;
+
+    uint32_t buffer_len = C;
+    uint32_t invstd_scratch_len = C;
+    uint32_t grad_xi_hat_scratch_len = C;
+    uint32_t grad_var_scratch_len = C;
+    uint32_t grad_mean_scratch_len = C;
+    uint32_t grad_bias_scratch_len = C * num_compute_cores,
+             grad_weight_scratch_len = C * num_compute_cores;
+    uint32_t grad_ofmap_len = num_points * C, 
+             grad_ifmap_len = num_points * C;
+
+    // dataflow:
+    double *ptr = (double *)snrt_l1_start_addr();
+    double *invstd_scratch = ptr;
+    ptr += invstd_scratch_len;
+    double *grad_xi_hat_scratch = ptr;
+    ptr += grad_xi_hat_scratch_len;
+    double *grad_var_scratch = ptr;
+    ptr += grad_var_scratch_len;
+    double *grad_mean_scratch = ptr;
+    ptr += grad_mean_scratch_len;
+    double *grad_bias_scratch = ptr;
+    ptr += grad_bias_scratch_len;
+    double *grad_weight_scratch = ptr;
+    ptr += grad_weight_scratch_len;
+    double *grad_ofmap_scratch = ptr;
+    ptr += grad_ofmap_len;
+    double *grad_ifmap_scratch = ptr;
+    ptr += grad_ifmap_len;
+
+    // Compute grad_bias_scratch and grad_weight_scratch
+    
+    // grad_bias_scratch = sum of grad_yi
+    // grad_weight_scratch = sum of grad_yi * xi_hat 
+    //                       where (xi_hat = (xi - mean) / sqrt(var + eps))
+    if (snrt_is_dm_core()) {
+        // might need to tile this later
+        snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                          grad_ofmap_len * sizeof(double));
+        snrt_dma_wait_all();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+    } else if (snrt_is_compute_core()) {
+        uint32_t start_invstd_comp = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            invstd_scratch[channel] = 1 / sqrt(l->running_var[channel] + eps);
+        }
+        uint32_t end_invstd_comp = snrt_mcycle();
+        // wait for grad_ofmap to be loaded in
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+        // reduce from [num_points, C] to [num_threads, C] by splitting over
+        // num_points 
+        // Read from ofmap.
+        uint32_t start_grad_bias_weight_reduction_1 = snrt_mcycle();
+        for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
+            for (uint32_t channel = 0; channel < C; ++channel) {
+                double dy = grad_ofmap_scratch[i * C + channel];
+                double x = l->ifmap[i * C + channel];
+                double mean = l->running_mean[channel];
+                double var = l->running_var[channel];
+                double dot_res = dy * (x - mean) / sqrt(var + eps);
+                // currently accessing channel 1, 2, 3, 4, 1, 2, 3, 4
+                grad_bias_scratch[compute_id * C + channel] +=
+                    grad_ofmap_scratch[i * C + channel];
+                grad_weight_scratch[compute_id * C + channel] +=
+                    dot_res * invstd_scratch[channel];
+            }
+        }
+        uint32_t end_grad_bias_weight_reduction_1 = snrt_mcycle();
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+        // reduce from [num_threads, C] to [C] by splitting over C
+        // just reduce back into the first buffer.
+        uint32_t start_grad_bias_weight_reduction_2 = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            register volatile double grad_bias_sum = 0;
+            register volatile double grad_weight_sum = 0;
+            snrt_ssr_loop_1d(SNRT_SSR_DM0, num_compute_cores,
+                             C * sizeof(double));
+            snrt_ssr_loop_1d(SNRT_SSR_DM1, num_compute_cores,
+                             C * sizeof(double));
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &grad_bias_scratch[channel]);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D,
+                          &grad_weight_scratch[channel]);
+
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 2, 0, 0 \n"
+                "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
+                "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
+                : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
+                                                       grad_weight_sum)
+                : [n_frep] "r"(num_compute_cores -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2");
+            snrt_fpu_fence();
+            snrt_ssr_disable();
+            grad_bias_scratch[0 * C + channel] = grad_bias_sum;
+            grad_weight_scratch[0 * C + channel] = grad_weight_sum;
+        }
+
+        uint32_t end_grad_bias_weight_reduction_2 = snrt_mcycle();
+    }
+    snrt_cluster_hw_barrier();
+
+    // Compute grad_ifmap_scratch
+
+    // invstd = 1 / sqrt(var + eps)
+    // grad_xi_hat_scratch = grad_yi * weight
+    // grad_var_scratch = sum of grad_xi_hat_scratch * (xi - mean) 
+    //                    * -1/2 * (var + eps)^(-3/2)
+    // grad_mean_scratch = sum of grad_xi_hat_scratch * - invstd
+    // grad_ifmap_scratch = grad_xi_hat_scratch * 1 / sqrt(var + eps) 
+    //                   + grad_var_scratch * 2 * (xi - mean) / N 
+    //                   + grad_mean_scratch / N
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, C * sizeof(double));
+        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
+                          C * sizeof(double));
+        // wait for compute of grad_ifmap
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+
+        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
+                          grad_ifmap_len * sizeof(double));
+        snrt_dma_wait_all();
+    } else if (snrt_is_compute_core()) {
+        uint32_t start_invstd_scratch_inplace_augmentation = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            invstd_scratch[channel] *=
+                l->weight[channel];  // can dma weight, can also frep
+        }
+        uint32_t end_invstd_scratch_inplace_augmentation = snrt_mcycle();
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+
+        uint32_t start_grad_xi_hat_computation = snrt_mcycle();
+        for (uint32_t channel = 0; channel < C; ++channel) {
+            grad_xi_hat_scratch[i * C + channel] =
+                grad_ofmap_scratch[i * C + channel] *
+                weight[channel];
+        }
+        uint32_t end_grad_xi_hat_computation = snrt_mcycle();
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+
+        uint32_t grad_var_scratch_computation = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            double sum = 0;
+            for (uint32_t i = 0; i < num_points; ++i) {
+                sum += grad_xi_hat_scratch[i * C + channel] *
+                       (l->ifmap[i * C + channel] - l->running_mean[channel]);
+            }
+            grad_var_scratch[channel] = sum * -1 / 2 * pow(l->running_var[channel] + eps, -3 / 2);
+        }
+        uint32_t end_grad_var_scratch_computation = snrt_mcycle();
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+
+        uint32_t grad_mean_scratch_computation = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            double sum = 0;
+            for (uint32_t i = 0; i < num_points; ++i) {
+                sum += grad_xi_hat_scratch[i * C + channel] *
+                       - invstd_scratch[channel];
+            }
+            grad_mean_scratch[channel] = sum;
+        }
+        uint32_t end_grad_mean_scratch_computation = snrt_mcycle();
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+
+        uint32_t grad_ifmap_scratch_computation = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C;
+             channel += num_compute_cores) {
+            for (uint32_t i = 0; i < num_points; ++i) {
+                double x = l->ifmap[i * C + channel];
+                double mean = l->running_mean[channel];
+                grad_ifmap_scratch[i * C + channel] =
+                    grad_xi_hat_scratch[i * C + channel] *
+                        invstd_scratch[channel] +
+                    grad_var_scratch[channel] *
+                        2 * (x - mean) / N +
+                    grad_mean_scratch[channel] / N;
+            }
+        }
+        uint32_t end_grad_ifmap_scratch_computation = snrt_mcycle();
+        snrt_fpu_fence();
+        snrt_cluster_hw_barrier();
+    }
 }

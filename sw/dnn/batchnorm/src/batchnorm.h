@@ -296,53 +296,6 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
     }
 }
 
-static inline void my_batchnorm(const batchnorm_layer_t *layer) {
-    uint32_t N = 1, H = layer->IH, W = layer->IW, C = layer->CI;
-    double *X = layer->ifmap;
-    double *Y = layer->ofmap;
-    double *gamma = layer->gamma;
-    double *beta = layer->beta;
-    if (!snrt_is_compute_core()) {
-        return;
-    }
-    const uint32_t num_compute_cores =
-        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
-    const uint32_t compute_id =
-        snrt_cluster_core_idx();  // which core are we in this cluster
-    // if (training == 1) {
-    //     printf("training mode not supported\n");
-    //     return;
-    // }
-
-    uint32_t num_points = N * H * W;
-    // [1_R,1_G,1_B,2_R,2_G,2_B]
-    for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
-        // in vector notation
-        // Y[i * H * W * C + h * W * C + w * C] =
-        //     (X[i * H * W * C + h * W * C + w * C] - input_mean) /
-        //         sqrt(input_var + eps) * weight + bias
-        for (uint32_t channel = 0; channel < C; ++channel) {
-            Y[i * C + channel] =
-                X[i * C + channel] * gamma[channel] + beta[channel];
-            // Y[i * C + channel] = (X[i * C + channel] - input_mean[channel]) /
-            //                          sqrt(input_var[channel] + eps) *
-            //                          weight[channel] +
-            //                      bias[channel];
-        }
-    }
-    // conv layer in NHWC format
-    // but conv_layer only has 1 batch
-
-    // compute mean and variance
-
-    // batch_norm_cpu_collect_stats_channels_last_impl
-    // batch_norm_cpu_collect_linear_and_constant_terms
-
-    // without beta or gamma passed in
-
-    // if training is 0 (then we don't need to calculate the mean and variance
-    // of X)
-}
 static inline void batchnorm_training(batchnorm_training_layer_t *layer) {
     // collect stats
     // update running mean and running var
@@ -470,7 +423,6 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
         }
-        snrt_fpu_fence();
         uint32_t end_invstd_calc = snrt_mcycle();
     }
     snrt_cluster_hw_barrier();
@@ -611,6 +563,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                 "frep.o %[n_frep], 2, 0, 0 \n"
                 "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
                 "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
+                // NOTE: floating point addition is 3 cycles, causing stalls here
                 : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
                                                        grad_weight_sum)
                 : [n_frep] "r"(num_compute_cores -

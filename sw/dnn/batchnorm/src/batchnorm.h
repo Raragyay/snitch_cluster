@@ -366,7 +366,6 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     uint32_t H = l->IH;
     uint32_t W = l->IW;
     uint32_t C = l->CI;
-    double eps = l->eps;
     uint32_t num_points = N * H * W;
 
     uint32_t num_channels_work_for_core =
@@ -409,13 +408,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     double *ifmap_scratch = ptr;
     ptr += ifmap_len;
 
-    // computing invstd scratch and using it for weight: can we do it in 1 frep?
-    // load running var: 1 ssr
-    // write running var: 1 ssr
-    // load weight: 1 ssr
-    // write weight: 1 ssr
-    // answer: not really. Still worth precomputing I think
-    // load running_var, initiate the rest
+    // PRECONFIGURE: operations on arrays of size C, split by core.
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load;
     if (snrt_is_dm_core()) {
@@ -436,29 +429,64 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
         snrt_dma_wait(running_var_load);
         uint32_t end_running_var_load = snrt_mcycle();
     } else {
+
+    snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
+                     num_compute_cores * sizeof(double));
     }
     snrt_cluster_hw_barrier();
+
     // compute invstd, load weight and running_mean in
     if (snrt_is_dm_core()) {
         snrt_dma_wait(weight_load);
         snrt_dma_wait(running_mean_load);
     } else {
         uint32_t start_invstd_calc = snrt_mcycle();
-        // TODO: use frep / fsqrt.d instead.
-        for (uint32_t channel = compute_id; channel < C;
-             channel += num_compute_cores) {
-            invstd_scratch[channel] = 1 / sqrt(invstd_scratch[channel] + eps);
+        if (num_channels_work_for_core > 0) {
+            register double eps = l->eps;  // any value in dma'ing this? idk
+            const register double ONE = 1;
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &invstd_scratch[compute_id]);
+            snrt_ssr_enable();
+            // might be worth unrolling to avoid dependencies? not sure
+            asm volatile(
+                "frep.o %[n_frep], 3, 0, 0 \n"
+                "fadd.d ft3, ft0, %[eps]\n"
+                "fsqrt.d ft3, ft3\n"
+                "fdiv.d ft1, %[ONE], ft3\n"
+                :
+                : [eps] "fr"(eps), [ONE] "fr"(ONE),
+                  [n_frep] "r"(num_channels_work_for_core -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2", "ft3");
+
+            snrt_fpu_fence();                     // thought: do we need this?
+            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
+            snrt_ssr_disable();
         }
+        // TODO: use frep / fsqrt.d instead.
+        // for (uint32_t channel = compute_id; channel < C;
+        //      channel += num_compute_cores) {
+        //     invstd_scratch[channel] = 1 / sqrt(invstd_scratch[channel] + eps);
+        // }
         uint32_t end_invstd_calc = snrt_mcycle();
         snrt_fpu_fence();
     }
     snrt_cluster_hw_barrier();
+
     // compute weight*invstd and running_mean*invstd
+
+    // computing invstd scratch and using it for weight: can we do it in 1 frep?
+    // load running var: 1 ssr
+    // write running var: 1 ssr
+    // load weight: 1 ssr
+    // write weight: 1 ssr
+    // answer: not really. Still worth precomputing I think
+    // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
         snrt_dma_wait_all();
     } else {
-        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
-                         num_compute_cores * sizeof(double));
         if (num_channels_work_for_core > 0) {
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &weight_scratch[compute_id]);
@@ -476,8 +504,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
-            snrt_fpu_fence();  // thought: do we need this?
-            __builtin_ssr_barrier(SNRT_SSR_DM1); // thought: do we need this?
+            snrt_fpu_fence();                     // thought: do we need this?
+            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
 
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
@@ -497,8 +525,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
-            snrt_fpu_fence();  // thought: do we need this?
-            __builtin_ssr_barrier(SNRT_SSR_DM1); // thought: do we need this?
+            snrt_fpu_fence();                     // thought: do we need this?
+            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
         }
     }
@@ -561,7 +589,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
 
     // reduce from [num_threads, C] to [C] by splitting over C
     // just reduce back into the first buffer.
-    // meanwhile, write out ifmap. In the tiled case this would be happening before.
+    // meanwhile, write out ifmap. In the tiled case this would be happening
+    // before.
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
                           grad_ifmap_len * sizeof(double));

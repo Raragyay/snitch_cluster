@@ -401,6 +401,9 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     double *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
     // here, we have the more unbounded ones.
+    // How much? empirical examination of stack pointer shows that it doesn't really go above 1ff98, so I think we are fine to use up to 0x1f000. 
+    // might change if this is called from external, of course. But currently no way to inspect the stack
+
     double *grad_ofmap_scratch = ptr;
     ptr += grad_ofmap_len;
     double *grad_ifmap_scratch = ptr;
@@ -411,6 +414,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     // PRECONFIGURE: operations on arrays of size C, split by core.
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load;
+
+    // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
         // Initiate loads for everything but only wait for the running var load.
         // Q: is it better to wait then initiate the rest? we'll see
@@ -465,13 +470,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
         }
-        // TODO: use frep / fsqrt.d instead.
-        // for (uint32_t channel = compute_id; channel < C;
-        //      channel += num_compute_cores) {
-        //     invstd_scratch[channel] = 1 / sqrt(invstd_scratch[channel] + eps);
-        // }
-        uint32_t end_invstd_calc = snrt_mcycle();
         snrt_fpu_fence();
+        uint32_t end_invstd_calc = snrt_mcycle();
     }
     snrt_cluster_hw_barrier();
 
@@ -483,10 +483,10 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     // load weight: 1 ssr
     // write weight: 1 ssr
     // answer: not really. Still worth precomputing I think
-    // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
         snrt_dma_wait_all();
     } else {
+        uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
         if (num_channels_work_for_core > 0) {
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &weight_scratch[compute_id]);
@@ -529,6 +529,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
         }
+
+        uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
     }
     snrt_cluster_hw_barrier();
     // compute grad_weight first step, grad_bias first step, grad_ifmap
@@ -564,6 +566,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                 "frep.o %[n_frep], 5, 0, 0 \n"
                 "fadd.d ft3, ft0, %[zero] \n"
                 "fmsub.d ft4, ft2, %[invstd], %[running_mean_times_invstd]\n"
+                // Note: currently stalling for 4 cycles every time. This is because fmsub takes 3 cycles
+                // Can consider manual unrolling
                 "fmadd.d %[grad_weight], ft4, ft3, %[grad_weight]\n"
                 "fadd.d %[grad_bias], ft3, %[grad_bias]\n"
                 "fmul.d ft1, ft3, %[weight_times_invstd]\n"

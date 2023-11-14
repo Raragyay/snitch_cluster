@@ -35,21 +35,21 @@ int main() {
                 idx_loc1);
   snrt_mcycle();
 
-  compute_output_shape(&attr2, attr2.output_shape);
-  snrt_mcycle();
-  maxpool_fp64_layer(&attr2,
-                ifmap2,
-                output_loc2,
-                idx_loc2);
-  snrt_mcycle();
+  // compute_output_shape(&attr2, attr2.output_shape);
+  // snrt_mcycle();
+  // maxpool_fp64_layer(&attr2,
+  //               ifmap2,
+  //               output_loc2,
+  //               idx_loc2);
+  // snrt_mcycle();
 
-  compute_output_shape(&attr3, attr3.output_shape);
-  snrt_mcycle();
-  maxpool_fp64_layer(&attr3,
-                ifmap3,
-                output_loc3,
-                idx_loc3);
-  snrt_mcycle();
+  // compute_output_shape(&attr3, attr3.output_shape);
+  // snrt_mcycle();
+  // maxpool_fp64_layer(&attr3,
+  //               ifmap3,
+  //               output_loc3,
+  //               idx_loc3);
+  // snrt_mcycle();
 
   return 0;
 

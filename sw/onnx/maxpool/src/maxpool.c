@@ -3,8 +3,9 @@
 // #include "math.h"
 #include "printf.h"
 
-#define DMA_USE_CACHED_ATTRIBS 1
-#define USE_SSR_FREP 1
+#define DMA_ATTRIBS 1
+#define DMA_INDICES 1
+#define USE_SSR_FREP 0
 
 // TODO: Replace with better impls? Problems with using math.h...
 double floor(double x) {
@@ -19,6 +20,10 @@ double ceil(double num)
       return num;
   }
   return inum + 1;
+}
+
+int min(int a, int b) {
+  return a > b ? a : b;
 }
 
 void maxpool_fp64_1d(maxpool_attributes*, double*, double*, int*, int, int);
@@ -114,7 +119,7 @@ void maxpool_fp64_layer(maxpool_attributes* attribs_raw, double* in, double* out
 
   char* ptr = (char*) snrt_l1_next();
   
-  #ifdef DMA_USE_CACHED_ATTRIBS
+  #ifdef DMA_ATTRIBS
   maxpool_attributes* attribs = (maxpool_attributes*) ptr;
   #else
   maxpool_attributes* attribs = attribs_raw;
@@ -125,7 +130,7 @@ void maxpool_fp64_layer(maxpool_attributes* attribs_raw, double* in, double* out
     snrt_dma_start_1d(ptr, attribs_raw, sizeof(maxpool_attributes));
 
     ptr += ATTRIBS_SIZE;
-    #ifdef DMA_USE_CACHED_ATTRIBS
+    #ifdef DMA_ATTRIBS
     snrt_dma_wait_all();
     #endif
 
@@ -191,6 +196,7 @@ void maxpool_fp64_layer(maxpool_attributes* attribs_raw, double* in, double* out
     default:
       break; // error not implemented
     }
+    printf("%d\n", compute_num);
 
     snrt_fpu_fence();
     snrt_cluster_hw_barrier();
@@ -224,11 +230,37 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
 
     double Yh;
-    int Yh_init = 0;
     int h_index;
+    // hstart = 
+    #ifdef USE_SSR_FREP
 
+    int n_iter = min(
+      (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0],
+      1//(height - hstart)
+    );
+    snrt_ssr_loop_1d(SNRT_SSR_DM0, n_iter, sizeof(double) * attr->dilations[0]);
+    snrt_ssr_loop_1d(SNRT_SSR_DM2, 1, 0);
+
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, in + x_d);
+    snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, &Yh);
+
+    snrt_ssr_enable();
+
+    asm volatile(
+      "fmadd.d ft1, %[zero], %[zero], ft0\n" // load the initial value
+      :
+      : [zero] "f"(0.0)
+      : "ft0", "ft1", "ft2", "memory"
+    );
+
+    snrt_fpu_fence();
+    snrt_ssr_disable();
+
+    #else
+    int Yh_init = 0;
     for (int h = hstart; h < hend; h += attr->dilations[0]) {
       if (h < 0 || h >= height) continue;
+      // if (h >= height) break;
       if (!Yh_init || in[x_d + h] > Yh) {
         Yh = in[x_d + h];
         Yh_init = 1;
@@ -236,6 +268,8 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
       }
     }
     out[y_d + ph] = Yh;
+    #endif
+    
     if (idx != NULL) idx[y_d + ph] = h_index;
 
   }

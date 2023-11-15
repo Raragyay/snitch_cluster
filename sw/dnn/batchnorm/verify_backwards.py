@@ -64,7 +64,7 @@ def main():
         snitch_bin=args.snitch_bin,
         symbols_bin=args.symbols_bin,
         log=args.log,
-        output_uids=["grad_ifmap", "grad_weight", "grad_bias"],
+        output_uids=["grad_ifmap", "grad_weight", "grad_bias", "temp"],
     )
 
     print("Simulation complete. Verifying result...")
@@ -125,12 +125,13 @@ def main():
             bytes_to_float(raw_results["grad_bias"], prec), dtype=NUMPY_T[prec]
         ).reshape((CI,))
     )
-    # temp = torch.from_numpy(
-    #     np.array(
-    #         bytes_to_float(raw_results["temp"], prec), dtype=NUMPY_T[prec]
-    #     ).reshape((8,CI))
-    # )
-    # print(temp)
+    temp = torch.from_numpy(
+        np.array(
+            bytes_to_float(raw_results["temp"], prec), dtype=NUMPY_T[prec]
+        ).reshape((8,CI))
+    )
+    print("running_var", running_var)
+    print("invstd", temp)
 
 
     # convert from NHWC to NCHW format

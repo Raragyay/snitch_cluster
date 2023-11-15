@@ -296,53 +296,6 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
     }
 }
 
-static inline void my_batchnorm(const batchnorm_layer_t *layer) {
-    uint32_t N = 1, H = layer->IH, W = layer->IW, C = layer->CI;
-    double *X = layer->ifmap;
-    double *Y = layer->ofmap;
-    double *gamma = layer->gamma;
-    double *beta = layer->beta;
-    if (!snrt_is_compute_core()) {
-        return;
-    }
-    const uint32_t num_compute_cores =
-        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
-    const uint32_t compute_id =
-        snrt_cluster_core_idx();  // which core are we in this cluster
-    // if (training == 1) {
-    //     printf("training mode not supported\n");
-    //     return;
-    // }
-
-    uint32_t num_points = N * H * W;
-    // [1_R,1_G,1_B,2_R,2_G,2_B]
-    for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
-        // in vector notation
-        // Y[i * H * W * C + h * W * C + w * C] =
-        //     (X[i * H * W * C + h * W * C + w * C] - input_mean) /
-        //         sqrt(input_var + eps) * weight + bias
-        for (uint32_t channel = 0; channel < C; ++channel) {
-            Y[i * C + channel] =
-                X[i * C + channel] * gamma[channel] + beta[channel];
-            // Y[i * C + channel] = (X[i * C + channel] - input_mean[channel]) /
-            //                          sqrt(input_var[channel] + eps) *
-            //                          weight[channel] +
-            //                      bias[channel];
-        }
-    }
-    // conv layer in NHWC format
-    // but conv_layer only has 1 batch
-
-    // compute mean and variance
-
-    // batch_norm_cpu_collect_stats_channels_last_impl
-    // batch_norm_cpu_collect_linear_and_constant_terms
-
-    // without beta or gamma passed in
-
-    // if training is 0 (then we don't need to calculate the mean and variance
-    // of X)
-}
 static inline void batchnorm_training(batchnorm_training_layer_t *layer) {
     // collect stats
     // update running mean and running var
@@ -361,80 +314,245 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     const uint32_t compute_id =
         snrt_cluster_core_idx();  // which core are we in this cluster
     // Calculate output dimensions
+
     uint32_t N = 1;
     uint32_t H = l->IH;
     uint32_t W = l->IW;
     uint32_t C = l->CI;
-    double eps = l->eps;
     uint32_t num_points = N * H * W;
 
-    uint32_t buffer_len = C;
-    uint32_t invstd_scratch_len = C;
+    uint32_t num_channels_work_for_core =
+        get_core_num_work_items(C, num_compute_cores, compute_id);
+    uint32_t num_points_work_per_channel_for_core =
+        get_core_num_work_items(num_points, num_compute_cores, compute_id);
+
+    // thought: how could I minimize the # of reads to grad_ofmap?
+    // dy is used for: grad_bias (addition)
+    //                 grad_weight (dy * (x[i,C]-running_mean[C]) * invstd[C])
+    //                             (can it become a fused somehow? not really..
+    //                             can precompute invstd * running_mean though)
+    //                             then you get an fmsub(x[i,C], invstd[C],
+    //                             invstd[C]*-running_mean[C])
+    //                 grad_ifmap (dy * invstd[C] * weight[C])
+    // from this I think that the best result is to tile dy and x.
+    // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
+
     uint32_t grad_bias_scratch_len = C * num_compute_cores,
              grad_weight_scratch_len = C * num_compute_cores;
-    uint32_t grad_ofmap_len = num_points * C, grad_ifmap_len = num_points * C;
+    uint32_t grad_ofmap_len = num_points * C, grad_ifmap_len = grad_ofmap_len,
+             ifmap_len = grad_ifmap_len;
 
     // dataflow:
     double *ptr = (double *)snrt_l1_start_addr();
+    double *weight_scratch = ptr;
+    ptr += C;
     double *invstd_scratch = ptr;
-    ptr += invstd_scratch_len;
+    ptr += C;
+    double *running_mean_scratch = ptr;
+    ptr += C;
     double *grad_bias_scratch = ptr;
     ptr += grad_bias_scratch_len;
     double *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
+    // here, we have the more unbounded ones.
+    // How much? empirical examination of stack pointer shows that it doesn't really go above 1ff98, so I think we are fine to use up to 0x1f000. 
+    // might change if this is called from external, of course. But currently no way to inspect the stack
+
     double *grad_ofmap_scratch = ptr;
     ptr += grad_ofmap_len;
     double *grad_ifmap_scratch = ptr;
     ptr += grad_ifmap_len;
+    double *ifmap_scratch = ptr;
+    ptr += ifmap_len;
 
+    // PRECONFIGURE: operations on arrays of size C, split by core.
+    snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
+        grad_ofmap_load, ifmap_load;
+
+    // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
-        // might need to tile this later
-        snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                          grad_ofmap_len * sizeof(double));
+        // Initiate loads for everything but only wait for the running var load.
+        // Q: is it better to wait then initiate the rest? we'll see
+        uint32_t start_running_var_load = snrt_mcycle();
+        running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
+                                             C * sizeof(double));
+        weight_load =
+            snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
+        running_mean_load = snrt_dma_start_1d(
+            running_mean_scratch, l->running_mean, C * sizeof(double));
+        // later: tile these
+        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                                            grad_ofmap_len * sizeof(double));
+        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
+                                       ifmap_len * sizeof(double));
+        snrt_dma_wait(running_var_load);
+        uint32_t end_running_var_load = snrt_mcycle();
+    } else {
+
+    snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
+                     num_compute_cores * sizeof(double));
+    }
+    snrt_cluster_hw_barrier();
+
+    // compute invstd, load weight and running_mean in
+    if (snrt_is_dm_core()) {
+        snrt_dma_wait(weight_load);
+        snrt_dma_wait(running_mean_load);
+    } else {
+        uint32_t start_invstd_calc = snrt_mcycle();
+        if (num_channels_work_for_core > 0) {
+            register double eps = l->eps;  // any value in dma'ing this? idk
+            const register double ONE = 1;
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &invstd_scratch[compute_id]);
+            snrt_ssr_enable();
+            // might be worth unrolling to avoid dependencies? not sure
+            asm volatile(
+                "frep.o %[n_frep], 3, 0, 0 \n"
+                "fadd.d ft3, ft0, %[eps]\n"
+                "fsqrt.d ft3, ft3\n"
+                "fdiv.d ft1, %[ONE], ft3\n"
+                :
+                : [eps] "fr"(eps), [ONE] "fr"(ONE),
+                  [n_frep] "r"(num_channels_work_for_core -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2", "ft3");
+
+            snrt_fpu_fence();                     // thought: do we need this?
+            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
+            snrt_ssr_disable();
+        }
+        uint32_t end_invstd_calc = snrt_mcycle();
+    }
+    snrt_cluster_hw_barrier();
+
+    // compute weight*invstd and running_mean*invstd
+
+    // computing invstd scratch and using it for weight: can we do it in 1 frep?
+    // load running var: 1 ssr
+    // write running var: 1 ssr
+    // load weight: 1 ssr
+    // write weight: 1 ssr
+    // answer: not really. Still worth precomputing I think
+    if (snrt_is_dm_core()) {
         snrt_dma_wait_all();
-        snrt_cluster_hw_barrier();
-        snrt_cluster_hw_barrier();
-    } else if (snrt_is_compute_core()) {
-        uint32_t start_invstd_comp = snrt_mcycle();
-        for (uint32_t channel = compute_id; channel < C;
-             channel += num_compute_cores) {
-            invstd_scratch[channel] = 1 / sqrt(l->running_var[channel] + eps);
+    } else {
+        uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
+        if (num_channels_work_for_core > 0) {
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &weight_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &weight_scratch[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 1, 0, 0 \n"
+                "fmul.d ft1, ft0, ft2 \n"
+                :
+                : [n_frep] "r"(num_channels_work_for_core -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2");
+
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &running_mean_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &running_mean_scratch[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+
+            asm volatile(
+                "frep.o %[n_frep], 1, 0, 0 \n"
+                "fmul.d ft1, ft0, ft2 \n"  // running_mean =
+                                           // running_mean * invstd
+                :
+                : [n_frep] "r"(num_channels_work_for_core -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2");
+
+            snrt_fpu_fence();                     // thought: do we need this?
+            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
+            snrt_ssr_disable();
         }
-        uint32_t end_invstd_comp = snrt_mcycle();
-        // wait for grad_ofmap to be loaded in
-        snrt_fpu_fence();
-        snrt_cluster_hw_barrier();
-        // reduce from [num_points, C] to [num_threads, C] by splitting over
-        // num_points 
-        // Read from ofmap.
-        uint32_t start_grad_bias_weight_reduction_1 = snrt_mcycle();
-        for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
-            for (uint32_t channel = 0; channel < C; ++channel) {
-                double dy = grad_ofmap_scratch[i * C + channel];
-                double x = l->ifmap[i * C + channel];
-                double mean = l->running_mean[channel];
-                double var = l->running_var[channel];
-                double dot_res = dy * (x - mean) / sqrt(var + eps);
-                // currently accessing channel 1, 2, 3, 4, 1, 2, 3, 4
-                grad_bias_scratch[compute_id * C + channel] +=
-                    grad_ofmap_scratch[i * C + channel];
-                grad_weight_scratch[compute_id * C + channel] +=
-                    dot_res * invstd_scratch[channel];
-            }
+
+        uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
+    }
+    snrt_cluster_hw_barrier();
+    // compute grad_weight first step, grad_bias first step, grad_ifmap
+    // this is where the tiling would come in place
+    if (snrt_is_dm_core()) {
+    } else {
+        uint32_t start_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
+        // access pattern: iterate over the different channels, then over the
+        // different points split over points?
+        // outside loop: channels
+        // inside loop: points
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core,
+                         C, num_compute_cores * C * sizeof(double),
+                         sizeof(double));
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D,
+                      &grad_ofmap_scratch[compute_id * C + 0]);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
+                       &grad_ifmap_scratch[compute_id * C + 0]);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D,
+                      &ifmap_scratch[compute_id * C + 0]);
+        for (uint32_t channel = 0; channel < C; ++channel) {
+            register double running_mean_times_invstd =
+                running_mean_scratch[channel];
+            register double weight_times_invstd = weight_scratch[channel];
+            register double invstd = invstd_scratch[channel];
+            register double grad_weight = 0;
+            register double grad_bias = 0;
+            const register double ZERO = 0;
+            snrt_ssr_enable();
+
+            // frep over OW dimension
+            asm volatile(
+                "frep.o %[n_frep], 5, 0, 0 \n"
+                "fadd.d ft3, ft0, %[zero] \n"
+                "fmsub.d ft4, ft2, %[invstd], %[running_mean_times_invstd]\n"
+                // Note: currently stalling for 4 cycles every time. This is because fmsub takes 3 cycles
+                // Can consider manual unrolling
+                "fmadd.d %[grad_weight], ft4, ft3, %[grad_weight]\n"
+                "fadd.d %[grad_bias], ft3, %[grad_bias]\n"
+                "fmul.d ft1, ft3, %[weight_times_invstd]\n"
+                : [grad_weight] "+fr"(grad_weight), [grad_bias] "+fr"(grad_bias)
+                : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
+                  [weight_times_invstd] "fr"(weight_times_invstd),
+                  [invstd] "fr"(invstd), [zero] "fr"(ZERO),
+                  [n_frep] "r"(num_points_work_per_channel_for_core -
+                               1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2", "ft3", "ft4");
+
+            snrt_fpu_fence();
+            // wait for writes to the ofmap to finish?
+            snrt_ssr_disable();
+
+            grad_bias_scratch[compute_id * C + channel] = grad_bias;
+            grad_weight_scratch[compute_id * C + channel] = grad_weight;
         }
-        uint32_t end_grad_bias_weight_reduction_1 = snrt_mcycle();
-        snrt_fpu_fence();
-        snrt_cluster_hw_barrier();
-        // reduce from [num_threads, C] to [C] by splitting over C
-        // just reduce back into the first buffer.
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+        uint32_t end_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
+    }
+    snrt_cluster_hw_barrier();
+
+    // reduce from [num_threads, C] to [C] by splitting over C
+    // just reduce back into the first buffer.
+    // meanwhile, write out ifmap. In the tiled case this would be happening
+    // before.
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
+                          grad_ifmap_len * sizeof(double));
+    } else {
         uint32_t start_grad_bias_weight_reduction_2 = snrt_mcycle();
         for (uint32_t channel = compute_id; channel < C;
              channel += num_compute_cores) {
             register volatile double grad_bias_sum = 0;
             register volatile double grad_weight_sum = 0;
-            snrt_ssr_loop_1d(SNRT_SSR_DM0, num_compute_cores,
-                             C * sizeof(double));
-            snrt_ssr_loop_1d(SNRT_SSR_DM1, num_compute_cores,
+            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores,
                              C * sizeof(double));
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &grad_bias_scratch[channel]);
@@ -446,6 +564,7 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                 "frep.o %[n_frep], 2, 0, 0 \n"
                 "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
                 "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
+                // NOTE: floating point addition is 3 cycles, causing stalls here
                 : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
                                                        grad_weight_sum)
                 : [n_frep] "r"(num_compute_cores -
@@ -460,77 +579,15 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
         uint32_t end_grad_bias_weight_reduction_2 = snrt_mcycle();
     }
     snrt_cluster_hw_barrier();
-
+    // write back grad_bias and grad_weight. then wait for all transactions to
+    // complete
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, C * sizeof(double));
         snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
                           C * sizeof(double));
-        snrt_cluster_hw_barrier();
-        // wait for compute of grad_ifmap
-        snrt_cluster_hw_barrier();
-
-        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
-                          grad_ifmap_len * sizeof(double));
         snrt_dma_wait_all();
-    } else if (snrt_is_compute_core()) {
-        uint32_t start_invstd_scratch_inplace_augmentation = snrt_mcycle();
-        for (uint32_t channel = compute_id; channel < C;
-             channel += num_compute_cores) {
-            invstd_scratch[channel] *=
-                l->weight[channel];  // can dma weight, can also frep
-        }
-        uint32_t end_invstd_scratch_inplace_augmentation = snrt_mcycle();
-        snrt_cluster_hw_barrier();
-        snrt_fpu_fence();
-        uint32_t start_ifmap_grad_computation = snrt_mcycle();
-        uint32_t num_points_work_for_core =
-            get_core_num_work_items(num_points, num_compute_cores, compute_id);
-
-        snrt_ssr_loop_2d(SNRT_SSR_DM0, num_points_work_for_core, C,
-                         num_compute_cores * C * sizeof(double),
-                         sizeof(double));
-        snrt_ssr_loop_2d(SNRT_SSR_DM1, num_points_work_for_core, C,
-                         num_compute_cores * C * sizeof(double),
-                         sizeof(double));
-        // repeatedly read from invstd_scratch, treating it as a 2d array with
-        // row-stride 0
-        snrt_ssr_loop_2d(SNRT_SSR_DM2, num_points_work_for_core, C, 0,
-                         sizeof(double));
-
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D,
-                      &grad_ofmap_scratch[compute_id * C]);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
-                       &grad_ifmap_scratch[compute_id * C]);
-        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, invstd_scratch);
-        snrt_ssr_enable();
-        asm volatile(
-            "frep.o %[n_frep], 1, 0, 0 \n"
-            "fmul.d ft1, ft0, ft2 \n"
-            :
-            : [n_frep] "r"(num_points_work_for_core * C -
-                           1)  // we repeat n_frep+1 times
-            : "ft0", "ft1", "ft2");
-
-        snrt_fpu_fence();
-        __builtin_ssr_barrier(SNRT_SSR_DM1);
-        snrt_ssr_disable();
-
-        uint32_t end_ifmap_grad_computation = snrt_mcycle();
-        snrt_cluster_hw_barrier();
+    } else {
     }
-
-    // allocate space for a grad_bias
-    // allocate space for a grad_weight (dotp)
-    // allocate space for computing the 1/sqrt(running_var[c]+eps)*weight[c]
-
-    // grad_bias[c] = sum(dy[i][c] for all pixels i)
-    // grad_weight[c] = sum(dy[i][c]*(ifmap[i][c]-running_mean[c]) for all
-    // pixels i)
-
-    // in training mode: big equation
-    // in eval mode: grad_ifmap[i][c] =
-    // dy[i][c]*1/sqrt(running_var[c]+eps)*weight[c]
-
     snrt_cluster_hw_barrier();
 }
 

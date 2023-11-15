@@ -215,7 +215,7 @@ def emit_header(**kwargs):
         data_str += [format_array_declaration(ctype, grad_ofmap_uid, grad_ofmap.shape)]
         data_str += [format_array_declaration(ctype, grad_weight_uid, grad_weight.shape)]
         data_str += [format_array_declaration(ctype, grad_bias_uid, grad_bias.shape)]
-        # data_str += [format_array_declaration(ctype, "temp", (8,ci))]
+        data_str += [format_array_declaration(ctype, "temp", (8,ci))]
         # Layer struct
         data_str += [format_struct_definition("batchnorm_layer_t", "layer", layer_cfg)]
         data_str += [

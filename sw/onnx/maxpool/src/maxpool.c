@@ -28,6 +28,7 @@ int min(int a, int b) {
 
 void maxpool_fp64_1d(maxpool_attributes*, double*, double*, int*, int, int);
 void maxpool_fp64_2d(maxpool_attributes*, double*, double*, int*, int, int);
+void maxpool_fp64_3d(maxpool_attributes*, double*, double*, int*, int, int);
 
 // also recomputes padding if auto_pad is set (deprecated)
 void compute_output_shape(maxpool_attributes* attr, int* output_shape) {
@@ -228,42 +229,68 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     int hstart = ph * attr->strides[0] - attr->pads[0];
     int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
-    double Yh;
-    int h_index;
     if (hstart < 0) hstart = (hstart % attr->dilations[0]) + attr->dilations[0];
 
+    int h_index;
     #if USE_SSR_FREP
 
     int n_iter = (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0];
     // if (core_idx == 1) printf("iter: %d\n", n_iter);
+    //if (core_idx == 1) printf("val: %lf\n", (in + x_d + hstart)[0]);
     snrt_ssr_loop_1d(SNRT_SSR_DM0, n_iter, sizeof(double) * attr->dilations[0]);
-    snrt_ssr_loop_1d(SNRT_SSR_DM2, 1, 0);
+    snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
+    // if (idx != NULL) snrt_ssr_loop_1d(SNRT_SSR_DM2, 1, 0); // index output
 
-    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, in + x_d);
-    snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, out + y_d + ph);
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, in + x_d + hstart);
+    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + y_d + ph);
+    // if (idx != NULL) snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, idx + y_d + ph);
 
     snrt_ssr_enable();
 
-    // use ft1 to store the current max, store to ft2 as output at the end
-    asm volatile(
-      "fadd.d ft1, %[zero], ft0\n" // load the initial value
-      "frep.o %[n_frep], 1, 0, 0\n"
-      "fmax.d ft1, ft1, ft0\n"
-      "fadd.d ft2, %[zero], ft1\n" // store the final value
-      :
-      : [zero] "f"(0.0), [n_frep] "r"(n_iter - 2) // loading initial val takes 1 read
-      : "ft0", "ft1", "ft2", "memory"
-    );
+    if (idx != NULL) {
+      asm volatile(
+        // use t0 as counter
+        "li t0, 0\n"
+        "li t1, 0\n" // t1 stores current max idx
+        // load the initial value
+        "fadd.d ft3, %[zero], ft0\n" // ft3 stores current max val
+        // begin loop
+        "addi t0, t0, 1\n" // increment t0
+        "fmax.d ft4, ft3, ft0\n"
+        "feq.d t3, ft4, ft3\n" // t2 = 1 if the cur max didnt change
+        // the pc is at the start of the bne instr, so add 4 to the # of bytes to skip
+        "bne t3, zero, 12\n" // skip if cur max didnt change (aka t2 = 1)
+        "fadd.d ft3, %[zero], ft4\n" // set cur max val
+        "add t1, zero, t0\n" // set cur max idx
+        "bne t0, %[n_iter], -24\n"
+        "fadd.d ft1, %[zero], ft3\n"
+        "addi %[idx_out], t1, 0\n"
+        : [idx_out] "=r"(h_index)
+        : [zero] "f"(0.0), [n_iter] "r"(n_iter - 1) // one read accounted for in the initial
+        : "t0", "t1", "t3", "f0", "ft1", "ft2", "ft3", "ft4", "memory", "cc", "zero"
+      );
 
-    // if (core_idx == 1) printf("here1\n");
-
-    snrt_fpu_fence();
+      idx[y_d + ph] = hstart + h_index * attr->dilations[0];
+    }
+    else {
+      // use ft3 to store the current max, store to ft2 as output at the end
+      asm volatile(
+        "fadd.d ft3, %[zero], ft0\n" // load the initial value
+        "frep.o %[n_frep], 1, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fadd.d ft1, %[zero], ft3\n" // store the final value
+        :
+        : [zero] "f"(0.0), [n_frep] "r"(n_iter - 2) // loading initial val takes 1 read
+        : "ft0", "ft1", "ft2", "ft3", "memory"
+      );
+    }
+    
+    // snrt_fpu_fence();
     snrt_ssr_disable();
-
-    // if (core_idx == 1) printf("here2 %lf\n", out[y_d + ph]);
 
     #else
 
+    double Yh;
     int Yh_init = 0;
     for (int h = hstart; h < hend; h += attr->dilations[0]) {
       // if (h < 0) continue;
@@ -276,10 +303,9 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     }
 
     out[y_d + ph] = Yh;
+    if (idx != NULL) idx[y_d + ph] = h_index;
 
     #endif
-    
-    if (idx != NULL) idx[y_d + ph] = h_index;
 
   }
 

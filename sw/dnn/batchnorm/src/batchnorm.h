@@ -3,8 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+
+#include <stdbool.h>
 #include "printf.h"
 #include "snrt.h"
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))
 typedef struct {
     uint32_t CI;
     uint32_t IH;
@@ -177,8 +182,8 @@ static inline void batchnorm_layer(const batchnorm_layer_t *l) {
     // iterate over the rows of the output, skipping by num_clusters each time
     // clusters are responsible for a set of rows
     for (uint32_t row_idx = cluster_id; row_idx < OH; row_idx += num_clusters) {
-        // perform transformation for each pixel, but only for channels [ci,
-        // ci+l->tile_ci)
+        // perform transformation for each pixel, but only for channels
+        // [ci,ci+l->tile_ci)
         for (uint32_t ci = 0; ci < l->CI; ci += l->TILE_CI) {
             if (snrt_is_dm_core()) {
                 // Load weights once in the beginning
@@ -302,8 +307,78 @@ static inline void batchnorm_training(batchnorm_training_layer_t *layer) {
     // pass << batch mean and batch var >> as parameters to compute beta/gamma
     // call batchnorm_layer
 }
+static inline void batchnorm_backward_tile(
+    const double *grad_ofmap_scratch, double *grad_ifmap_scratch,
+    const double *ifmap_scratch,
+    const double *running_mean_times_invstd_scratch,
+    const double *weight_times_invstd_scratch, const double *invstd_scratch,
+    double *grad_bias_scratch, double *grad_weight_scratch, uint32_t C,
+    uint32_t num_compute_cores, uint32_t num_points_work_in_tile,
+    bool is_first_iteration, bool is_last_iteration) {
+    // access pattern: iterate over the different channels, then over
+    // the different points split over points? outside loop: channels
+    // inside loop: points
+    if (is_first_iteration || is_last_iteration) {
+        snrt_ssr_loop_2d(
+            SNRT_SSR_DM_ALL,
+            num_points_work_in_tile,                 // dimension of inner loop
+            C,                                       // dimension of outer loop
+            num_compute_cores * C * sizeof(double),  // stride per inner loop
+                                                     // iteration
+            sizeof(double));  // stride per outer loop iteration
+    }
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
+    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
+    snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
+    for (uint32_t channel = 0; channel < C; ++channel) {
+        register double running_mean_times_invstd =
+            running_mean_times_invstd_scratch[channel];
+        register double weight_times_invstd =
+            weight_times_invstd_scratch[channel];
+        register double invstd = invstd_scratch[channel];
+        register double grad_weight = 0;
+        register double grad_bias = 0;
+        const register double ZERO = 0;  // can consider fcvt instead
+        snrt_ssr_enable();
 
-static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
+        // frep over OW dimension
+        asm volatile(
+            "frep.o %[n_frep], 5, 0, 0 \n"
+            "fadd.d ft3, ft0, %[zero] \n"
+            "fmsub.d ft4, ft2, %[invstd], "
+            "%[running_mean_times_invstd]\n"
+            // Note: currently stalling for 4 cycles every time. This is
+            // because fmsub takes 3 cycles Can consider manual
+            // unrolling
+            "fmadd.d %[grad_weight], ft4, ft3, %[grad_weight]\n"
+            "fadd.d %[grad_bias], ft3, %[grad_bias]\n"
+            "fmul.d ft1, ft3, %[weight_times_invstd]\n"
+            : [grad_weight] "+fr"(grad_weight), [grad_bias] "+fr"(grad_bias)
+            : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
+              [weight_times_invstd] "fr"(weight_times_invstd),
+              [invstd] "fr"(invstd), [zero] "fr"(ZERO),
+              [n_frep] "r"(num_points_work_in_tile -
+                           1)  // we repeat n_frep+1 times
+            : "ft0", "ft1", "ft2", "ft3", "ft4");
+
+        snrt_fpu_fence();
+        // wait for writes to the ofmap to finish?
+        snrt_ssr_disable();
+
+        if (is_first_iteration) {
+            grad_bias_scratch[channel] = grad_bias;
+            grad_weight_scratch[channel] = grad_weight;
+
+        } else {
+            grad_bias_scratch[channel] += grad_bias;
+            grad_weight_scratch[channel] += grad_weight;
+        }
+    }
+    __builtin_ssr_barrier(SNRT_SSR_DM1);
+}
+
+static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
+    uint32_t start = snrt_mcycle();
     // data is in HWC format
     const uint32_t num_clusters =
         snrt_cluster_num();  // how many clusters are there in total? currently
@@ -337,10 +412,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     // from this I think that the best result is to tile dy and x.
     // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
 
-    uint32_t grad_bias_scratch_len = C * num_compute_cores,
-             grad_weight_scratch_len = C * num_compute_cores;
-    uint32_t grad_ofmap_len = num_points * C, grad_ifmap_len = grad_ofmap_len,
-             ifmap_len = grad_ifmap_len;
+    ptrdiff_t grad_bias_scratch_len = C * num_compute_cores,
+              grad_weight_scratch_len = C * num_compute_cores;
 
     double *ptr = (double *)snrt_l1_start_addr();
     double *weight_scratch = ptr;
@@ -353,9 +426,29 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     ptr += grad_bias_scratch_len;
     double *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
+
     // here, we have the more unbounded ones.
-    // How much? empirical examination of stack pointer shows that it doesn't really go above 1ff98, so I think we are fine to use up to 0x1f000. 
-    // might change if this is called from external, of course. But currently no way to inspect the stack
+    // How much? util/trace/stack.py stack pointer shows that currently core
+    // 8 uses up to 0x1001df58. So probably fine to use up to 0x18000 or
+    // 64KB. can tune might change if this is called from external, of
+    // course. But currently no way to inspect the stack Ideally the len is
+    // a multiple of C so ALIGN_DOWN, C but also with this, we need to
+    // consider what happens with the final modulo as well (if not
+    // multiple).. hmm probably have to recompute the point_work
+    double *used_tcdm_end_addr =
+        (double *)(snrt_l1_end_addr() -
+                   (snrt_l1_end_addr() - snrt_l1_start_addr()) /
+                       4);  // use 3/4 for now
+    ptrdiff_t space_left = used_tcdm_end_addr - ptr;
+    // C doubles per point (assume fp64)
+    // We want two halves to work with
+    // We need three buffers, one for grad_ofmap, one for grad_ifmap, one for
+    // ifmap
+    ptrdiff_t tile_size_in_points = min((space_left / C) / 2 / 3, num_points);
+    ;
+
+    ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2,
+              grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;
 
     double *grad_ofmap_scratch = ptr;
     ptr += grad_ofmap_len;
@@ -364,9 +457,10 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     double *ifmap_scratch = ptr;
     ptr += ifmap_len;
 
-    // PRECONFIGURE: operations on arrays of size C, split by core.
+    bool buf_flag = 0;
+
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
-        grad_ofmap_load, ifmap_load;
+        grad_ofmap_load, ifmap_load, grad_ifmap_write;
 
     // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
@@ -379,33 +473,35 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
         running_mean_load = snrt_dma_start_1d(
             running_mean_scratch, l->running_mean, C * sizeof(double));
-        // later: tile these
-        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                                            grad_ofmap_len * sizeof(double));
-        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
-                                       ifmap_len * sizeof(double));
+        // load first tile in
+        grad_ofmap_load =
+            snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                              tile_size_in_points * C * sizeof(double));
+        ifmap_load = snrt_dma_start_1d(
+            ifmap_scratch, l->ifmap, tile_size_in_points * C * sizeof(double));
+        buf_flag = !buf_flag;
         snrt_dma_wait(running_var_load);
         uint32_t end_running_var_load = snrt_mcycle();
     } else {
-
-    snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
-                     num_compute_cores * sizeof(double));
+        // PRECONFIGURE: operations on arrays of size C, split by core.
+        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
+                         num_compute_cores * sizeof(double));
     }
     snrt_cluster_hw_barrier();
 
     // compute invstd, load weight and running_mean in
+    uint32_t start_invstd_calc = snrt_mcycle();
     if (snrt_is_dm_core()) {
         snrt_dma_wait(weight_load);
         snrt_dma_wait(running_mean_load);
     } else {
-        uint32_t start_invstd_calc = snrt_mcycle();
         if (num_channels_work_for_core > 0) {
-            register double eps = l->eps;  // any value in dma'ing this? idk
-            const register double ONE = 1;
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &invstd_scratch[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
                            &invstd_scratch[compute_id]);
+            register double eps = l->eps;  // any value in dma'ing this? idk
+            const register double ONE = 1;
             snrt_ssr_enable();
             // might be worth unrolling to avoid dependencies? not sure
             asm volatile(
@@ -423,8 +519,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
         }
-        uint32_t end_invstd_calc = snrt_mcycle();
     }
+    uint32_t end_invstd_calc = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
     // compute weight*invstd and running_mean*invstd
@@ -435,10 +531,10 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     // load weight: 1 ssr
     // write weight: 1 ssr
     // answer: not really. Still worth precomputing I think
+    uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
     if (snrt_is_dm_core()) {
         snrt_dma_wait_all();
     } else {
-        uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
         if (num_channels_work_for_core > 0) {
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
                           &weight_scratch[compute_id]);
@@ -476,75 +572,102 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
             __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
         }
-
-        uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
     }
     snrt_cluster_hw_barrier();
+    uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
+
     // compute grad_weight first step, grad_bias first step, grad_ifmap
     // this is where the tiling would come in place
-    if (snrt_is_dm_core()) {
-    } else {
-        uint32_t start_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
-        // access pattern: iterate over the different channels, then over the
-        // different points split over points?
-        // outside loop: channels
-        // inside loop: points
-        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core,
-                         C, num_compute_cores * C * sizeof(double),
-                         sizeof(double));
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D,
-                      &grad_ofmap_scratch[compute_id * C + 0]);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
-                       &grad_ifmap_scratch[compute_id * C + 0]);
-        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D,
-                      &ifmap_scratch[compute_id * C + 0]);
-        for (uint32_t channel = 0; channel < C; ++channel) {
-            register double running_mean_times_invstd =
-                running_mean_scratch[channel];
-            register double weight_times_invstd = weight_scratch[channel];
-            register double invstd = invstd_scratch[channel];
-            register double grad_weight = 0;
-            register double grad_bias = 0;
-            const register double ZERO = 0;
-            snrt_ssr_enable();
 
-            // frep over OW dimension
-            asm volatile(
-                "frep.o %[n_frep], 5, 0, 0 \n"
-                "fadd.d ft3, ft0, %[zero] \n"
-                "fmsub.d ft4, ft2, %[invstd], %[running_mean_times_invstd]\n"
-                // Note: currently stalling for 4 cycles every time. This is because fmsub takes 3 cycles
-                // Can consider manual unrolling
-                "fmadd.d %[grad_weight], ft4, ft3, %[grad_weight]\n"
-                "fadd.d %[grad_bias], ft3, %[grad_bias]\n"
-                "fmul.d ft1, ft3, %[weight_times_invstd]\n"
-                : [grad_weight] "+fr"(grad_weight), [grad_bias] "+fr"(grad_bias)
-                : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
-                  [weight_times_invstd] "fr"(weight_times_invstd),
-                  [invstd] "fr"(invstd), [zero] "fr"(ZERO),
-                  [n_frep] "r"(num_points_work_per_channel_for_core -
-                               1)  // we repeat n_frep+1 times
-                : "ft0", "ft1", "ft2", "ft3", "ft4");
+    uint32_t start_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
+    uint32_t num_points_work_in_tile, num_points_work_for_core_for_tile;
+    bool is_last_iteration = false;
+    for (uint32_t point_start = 0; point_start < num_points;
+         point_start += tile_size_in_points) {
+        if (point_start + tile_size_in_points >= num_points) {
+            // on last iteration
+            is_last_iteration = true;
+            num_points_work_in_tile = num_points - point_start;
+            num_points_work_for_core_for_tile = get_core_num_work_items(
+                num_points_work_in_tile, num_compute_cores,
+                compute_id);  // for the last tile, might be different
+        } else if (point_start == 0) {
+            // on first iteration
+            num_points_work_in_tile = tile_size_in_points;
 
-            snrt_fpu_fence();
-            // wait for writes to the ofmap to finish?
-            snrt_ssr_disable();
-
-            grad_bias_scratch[compute_id * C + channel] = grad_bias;
-            grad_weight_scratch[compute_id * C + channel] = grad_weight;
+            num_points_work_for_core_for_tile = get_core_num_work_items(
+                num_points_work_in_tile, num_compute_cores, compute_id);
         }
-        __builtin_ssr_barrier(SNRT_SSR_DM1);
-        uint32_t end_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
+
+        if (snrt_is_dm_core()) {
+            // technically we could optimize by loading in both sides ahead of
+            // time. For now not going to do that
+
+            // if there is a next tile, start loading it in
+            uint32_t next_tile_point_start = point_start + tile_size_in_points;
+
+            if (!is_last_iteration) {
+                uint32_t num_points_work_in_next_tile = min(
+                    num_points - next_tile_point_start,
+                    tile_size_in_points);  // can try predict true afterwards
+                grad_ofmap_load = snrt_dma_start_1d(
+                    &grad_ofmap_scratch[tile_size_in_points * C * buf_flag],
+                    &l->grad_ofmap[next_tile_point_start * C],
+                    num_points_work_in_next_tile * C * sizeof(double));
+                ifmap_load = snrt_dma_start_1d(
+                    &ifmap_scratch[tile_size_in_points * C * buf_flag],
+                    &l->ifmap[next_tile_point_start * C],
+                    num_points_work_in_next_tile * C * sizeof(double));
+            }
+
+            // wait for compute cores to finish computing current tile
+            snrt_cluster_hw_barrier();
+
+            // in theory the last write can happen afterwards.. thoughts
+            grad_ifmap_write = snrt_dma_start_1d(
+                &l->grad_ifmap[point_start * C],
+                &grad_ifmap_scratch
+                    [tile_size_in_points * C *
+                     (!buf_flag)],  // take !buf_flag since buf_flag points to
+                                    // the next buffer to write to, !buf_flag
+                                    // points to the current buffer being worked
+                                    // on
+                num_points_work_in_tile * C * sizeof(double));
+            // only need to wait for the loads/writes if we are going to involve
+            // the ofmap/ifmap on next iteration
+            if (!is_last_iteration) {
+                snrt_dma_wait_all();
+            }
+            buf_flag = !buf_flag;
+
+        } else {
+            // since we didn't flip buf_flag with the dma load, buf_flag starts
+            // at 0. Signifies the current tile being worked on.
+            batchnorm_backward_tile(
+                &grad_ofmap_scratch
+                    [(buf_flag * tile_size_in_points + compute_id) * C],
+                &grad_ifmap_scratch
+                    [(buf_flag * tile_size_in_points + compute_id) * C],
+                &ifmap_scratch[(buf_flag * tile_size_in_points + compute_id) *
+                               C],
+                running_mean_scratch, weight_scratch, invstd_scratch,
+                &grad_bias_scratch[compute_id * C],
+                &grad_weight_scratch[compute_id * C], C, num_compute_cores,
+                num_points_work_for_core_for_tile, point_start == 0,
+                is_last_iteration);
+            // signal to dma core that we are done computing current layer
+            snrt_cluster_hw_barrier();
+            buf_flag = !buf_flag;
+        }
+        snrt_cluster_hw_barrier();
     }
+
+    uint32_t end_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
     // reduce from [num_threads, C] to [C] by splitting over C
     // just reduce back into the first buffer.
-    // meanwhile, write out ifmap. In the tiled case this would be happening
-    // before.
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
-                          grad_ifmap_len * sizeof(double));
     } else {
         uint32_t start_grad_bias_weight_reduction_2 = snrt_mcycle();
         for (uint32_t channel = compute_id; channel < C;
@@ -563,7 +686,8 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
                 "frep.o %[n_frep], 2, 0, 0 \n"
                 "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
                 "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
-                // NOTE: floating point addition is 3 cycles, causing stalls here
+                // NOTE: floating point addition is 3 cycles, causing stalls
+                // here
                 : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
                                                        grad_weight_sum)
                 : [n_frep] "r"(num_compute_cores -
@@ -589,3 +713,11 @@ static inline void batchnorm_backwards(batchnorm_backward_layer_t *l) {
     }
     snrt_cluster_hw_barrier();
 }
+// batchnorm backprop for training
+// changes:
+// calculate invstd from data (or assume given, probably easier)
+// grad_ifmap:
+// dotp = dy * (x[i,C]-running_mean[C]) (this is the component of grad_weight
+// not incl) k = dotp * invstd * invstd / num_points = grad_weight * invstd /
+// num_points dx = (x - mean) * k dx = (dy - grad_bias / N - dx) * invstd *
+// weight does this mean that I will h

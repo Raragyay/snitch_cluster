@@ -327,6 +327,7 @@ static inline void batchnorm_backward_tile(
                                                      // iteration
             sizeof(double));  // stride per outer loop iteration
     }
+    uint32_t small_loop = snrt_mcycle();
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
@@ -336,45 +337,108 @@ static inline void batchnorm_backward_tile(
         register double weight_times_invstd =
             weight_times_invstd_scratch[channel];
         register double invstd = invstd_scratch[channel];
-        register double grad_weight = 0;
-        register double grad_bias = 0;
-        const register double ZERO = 0;  // can consider fcvt instead
+        register double grad_weight_0 = 0;
+        register double grad_weight_1 = 0;
+        register double grad_weight_2 = 0;
+        register double grad_bias_0 = 0;
+        register double grad_bias_1 = 0;
+        register double grad_bias_2 = 0;
+        register double ZERO = 0;  // can consider fcvt instead
         snrt_ssr_enable();
-
-        // frep over OW dimension
+        // Can only manual unroll 3 times since the max for frep is 16
         asm volatile(
-            "frep.o %[n_frep], 5, 0, 0 \n"
+            // manual unroll for
+            "frep.o %[n_frep], 15, 0, 0 \n"
             "fadd.d ft3, ft0, %[zero] \n"
-            "fmsub.d ft4, ft2, %[invstd], "
-            "%[running_mean_times_invstd]\n"
-            // Note: currently stalling for 4 cycles every time. This is
-            // because fmsub takes 3 cycles Can consider manual
-            // unrolling
-            "fmadd.d %[grad_weight], ft4, ft3, %[grad_weight]\n"
-            "fadd.d %[grad_bias], ft3, %[grad_bias]\n"
+            "fadd.d ft5, ft0, %[zero] \n"
+            "fadd.d ft7, ft0, %[zero] \n"
+            "fmsub.d ft4, ft2, %[invstd], %[running_mean_times_invstd]\n"
+            "fmsub.d ft6, ft2, %[invstd], %[running_mean_times_invstd]\n"
+            "fmsub.d ft8, ft2, %[invstd], %[running_mean_times_invstd]\n"
+            "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
+            "fadd.d %[grad_bias_1], ft5, %[grad_bias_1]\n"
+            "fadd.d %[grad_bias_2], ft7, %[grad_bias_2]\n"
+            "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
+            "fmadd.d %[grad_weight_1], ft6, ft5, %[grad_weight_1]\n"
+            "fmadd.d %[grad_weight_2], ft8, ft7, %[grad_weight_2]\n"
             "fmul.d ft1, ft3, %[weight_times_invstd]\n"
-            : [grad_weight] "+fr"(grad_weight), [grad_bias] "+fr"(grad_bias)
+            "fmul.d ft1, ft5, %[weight_times_invstd]\n"
+            "fmul.d ft1, ft7, %[weight_times_invstd]\n"
+            : [grad_weight_0] "+fr"(grad_weight_0),
+              [grad_weight_1] "+fr"(grad_weight_1),
+              [grad_weight_2] "+fr"(grad_weight_2),
+              [grad_bias_0] "+fr"(grad_bias_0),
+              [grad_bias_1] "+fr"(grad_bias_1), [grad_bias_2] "+fr"(grad_bias_2)
             : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
               [weight_times_invstd] "fr"(weight_times_invstd),
               [invstd] "fr"(invstd), [zero] "fr"(ZERO),
-              [n_frep] "r"(num_points_work_in_tile -
+              [n_frep] "r"(num_points_work_in_tile / 3  -
                            1)  // we repeat n_frep+1 times
-            : "ft0", "ft1", "ft2", "ft3", "ft4");
+            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8");
+        switch (num_points_work_in_tile % 3) {
+            case 2:
+                asm volatile(
+                    "fadd.d ft3, ft0, %[zero] \n"
+                    "fmsub.d ft4, ft2, %[invstd], "
+                    "%[running_mean_times_invstd]\n"
+                    "fadd.d ft5, ft0, %[zero] \n"
+                    "fmsub.d ft6, ft2, %[invstd], "
+                    "%[running_mean_times_invstd]\n"
+                    "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
+                    "fadd.d %[grad_bias_1], ft5, %[grad_bias_1]\n"
+                    "fmul.d ft1, ft3, %[weight_times_invstd]\n"
+                    "fmul.d ft1, ft5, %[weight_times_invstd]\n"
+                    "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
+                    "fmadd.d %[grad_weight_1], ft6, ft5, %[grad_weight_1]\n"
+                    : [grad_weight_0] "+fr"(grad_weight_0),
+                      [grad_weight_1] "+fr"(grad_weight_1),
+                      [grad_bias_0] "+fr"(grad_bias_0),
+                      [grad_bias_1] "+fr"(grad_bias_1)
+                    : [running_mean_times_invstd] "fr"(
+                          running_mean_times_invstd),
+                      [weight_times_invstd] "fr"(weight_times_invstd),
+                      [invstd] "fr"(invstd), [zero] "fr"(ZERO)
+                    : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
+                break;
+
+            case 1:
+                asm volatile(
+                    "fadd.d ft3, ft0, %[zero] \n"
+                    "fmsub.d ft4, ft2, %[invstd], "
+                    "%[running_mean_times_invstd]\n"
+                    "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
+                    "fmul.d ft1, ft3, %[weight_times_invstd]\n"
+                    "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
+                    : [grad_weight_0] "+fr"(grad_weight_0), [grad_bias_0] "+fr"(
+                                                                grad_bias_0)
+                    : [running_mean_times_invstd] "fr"(
+                          running_mean_times_invstd),
+                      [weight_times_invstd] "fr"(weight_times_invstd),
+                      [invstd] "fr"(invstd), [zero] "fr"(ZERO)
+                    : "ft0", "ft1", "ft2", "ft3", "ft4");
+                break;
+        }
 
         snrt_fpu_fence();
         // wait for writes to the ofmap to finish?
         snrt_ssr_disable();
 
         if (is_first_iteration) {
-            grad_bias_scratch[channel] = grad_bias;
-            grad_weight_scratch[channel] = grad_weight;
+            grad_bias_scratch[channel] =
+                grad_bias_0 + grad_bias_1 + grad_bias_2;
+            grad_weight_scratch[channel] =
+                grad_weight_0 + grad_weight_1 + grad_weight_2;
 
         } else {
-            grad_bias_scratch[channel] += grad_bias;
-            grad_weight_scratch[channel] += grad_weight;
+            grad_bias_scratch[channel] +=
+                grad_bias_0 + grad_bias_1 + grad_bias_2;
+            grad_weight_scratch[channel] +=
+                grad_weight_0 + grad_weight_1 + grad_weight_2;
         }
     }
     __builtin_ssr_barrier(SNRT_SSR_DM1);
+
+    uint32_t small_loop_end = snrt_mcycle();
 }
 
 static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
@@ -445,7 +509,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // We need three buffers, one for grad_ofmap, one for grad_ifmap, one for
     // ifmap
     ptrdiff_t tile_size_in_points = min((space_left / C) / 2 / 3, num_points);
-    ;
+    DUMP(tile_size_in_points);
 
     ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2,
               grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;

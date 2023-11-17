@@ -6,9 +6,29 @@
 #define DMA_ATTRIBS 1
 #define DMA_INDICES 1
 #define USE_SSR_FREP_1D 1
-#define USE_SSR_FREP_2D 0
+#define USE_SSR_FREP_2D 1
 #define USE_SSR_FREP_3D 0
 #define USE_SSR_FREP_ALL 0
+
+#define ssr_asm_with_index(out_idx, total_iter) \
+asm volatile( \
+  "li t0, 0\n" /* counter, start at one because initial val has idx 0 */ \
+  "li t1, 0\n" /* cur max idx */ \
+  "fadd.d ft3, %[zero], ft0\n" /* ft3 = cur max val */ \
+  /* begin loop */ \
+  "addi t0, t0, 1\n" \
+  "fmax.d ft4, ft3, ft0\n" \
+  "feq.d t3, ft4, ft3\n" \
+  "bne t3, zero, 12\n" /* branch if no update needed */ \
+  "fadd.d ft3, %[zero], ft4\n" /* update cur max val */ \
+  "add t1, zero, t0\n" /* update cur max idx */ \
+  "bne t0, %[n_iter], -24\n" \
+  "fadd.d ft1, %[zero], ft3\n" \
+  "addi %[idx_out], t1, 0\n" /* write out max idx to memory */ \
+  : [idx_out] "=r"(out_idx) \
+  : [zero] "f"(0.0), [n_iter] "r"(total_iter) \
+  : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero" \
+)
 
 // TODO: Replace with better impls? Problems with using math.h...
 double floor(double x) {
@@ -241,6 +261,12 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     #if USE_SSR_FREP_1D || USE_SSR_FREP_ALL
 
     int n_iter = (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0];
+    if (n_iter == 1) {
+      out[y_d + ph] = in[x_d + hstart];
+      if (idx != NULL) idx[y_d + ph] = hstart;
+      continue;
+    }
+    //printf("iter: %d %d %d\n", n_iter, hstart, hend);
     snrt_ssr_loop_1d(SNRT_SSR_DM0, n_iter, sizeof(double) * attr->dilations[0]);
     snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
 
@@ -250,28 +276,30 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     snrt_ssr_enable();
 
     if (idx != NULL) {
-      asm volatile(
-        // use t0 as counter
-        "li t0, 0\n"
-        "li t1, 0\n" // t1 stores current max idx
-        // load the initial value
-        "fadd.d ft3, %[zero], ft0\n" // ft3 stores current max val
-        // begin loop
-        "addi t0, t0, 1\n" // increment t0
-        "fmax.d ft4, ft3, ft0\n"
-        "feq.d t3, ft4, ft3\n" // t2 = 1 if the cur max didnt change
-        // the pc is at the start of the bne instr, so add 4 to the # of bytes to skip
-        "bne t3, zero, 12\n" // skip if cur max didnt change (aka t2 = 1)
-        "fadd.d ft3, %[zero], ft4\n" // set cur max val
-        "add t1, zero, t0\n" // set cur max idx
-        "bne t0, %[n_iter], -24\n"
+      ssr_asm_with_index(h_index, n_iter - 1);
+      // asm volatile(
+      //   // use t0 as counter
+      //   "li t0, 0\n"
+      //   "li t1, 0\n" // t1 stores current max idx
+      //   // load the initial value
+      //   "fadd.d ft3, %[zero], ft0\n" // ft3 stores current max val
+      //   // begin loop
+      //   "addi t0, t0, 1\n" // increment t0
+      //   "fmax.d ft4, ft3, ft0\n"
+      //   "feq.d t3, ft4, ft3\n" // t2 = 1 if the cur max didnt change
+      //   // the pc is at the start of the bne instr, so add 4 to the # of bytes to skip
+      //   "bne t3, zero, 12\n" // skip if cur max didnt change (aka t2 = 1)
+      //   "fadd.d ft3, %[zero], ft4\n" // set cur max val
+      //   "add t1, zero, t0\n" // set cur max idx
+      //   "bne t0, %[n_iter], -24\n"
         
-        "fadd.d ft1, %[zero], ft3\n"
-        "addi %[idx_out], t1, 0\n"
-        : [idx_out] "=r"(h_index)
-        : [zero] "f"(0.0), [n_iter] "r"(n_iter - 1) // one read accounted for in the initial
-        : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero", "cc"
-      );
+      //   "fadd.d ft1, %[zero], ft3\n"
+      //   "addi %[idx_out], t1, 0\n"
+      //   : [idx_out] "=r"(h_index)
+      //   : [zero] "f"(0.0), [n_iter] "r"(n_iter - 1) // one read accounted for in the initial
+      //   : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+      // );
+      snrt_ssr_disable();
 
       idx[y_d + ph] = hstart + h_index * attr->dilations[0];
     }
@@ -286,10 +314,8 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
         : [zero] "f"(0.0), [n_frep] "r"(n_iter - 2) // loading initial val takes 1 read
         : "ft0", "ft1", "ft2", "ft3", "memory"
       );
+      snrt_ssr_disable();
     }
-    
-    // snrt_fpu_fence();
-    snrt_ssr_disable();
 
     #else
 
@@ -365,6 +391,14 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
 
     int n_iter_h = (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0];
     int n_iter_w = (wend - wstart + attr->dilations[1] - 1) / attr->dilations[1];
+    if (n_iter_h * n_iter_w == 1) {
+      out[y_d + pool_index] = in[x_d + hstart * width + wstart];
+      if (idx != NULL) {
+        if (attr->storage_order) idx[y_d + pool_index] = hstart + wstart * height;
+        idx[y_d + pool_index] = hstart * width + wstart;
+      }
+      continue;
+    }
 
     snrt_ssr_loop_2d(SNRT_SSR_DM0, n_iter_w, n_iter_h, sizeof(double) * attr->dilations[1], sizeof(double) * attr->dilations[0] * width);
     snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
@@ -375,29 +409,29 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
     snrt_ssr_enable();
 
     if (idx != NULL) {
-      asm volatile(
-        "li t0, 0\n" // counter, start at one because initial val has idx 0
-        "li t1, 0\n" // cur max idx
-        "fadd.d ft3, %[zero], ft0\n" // ft3 = cur max val
-        // begin loop
-        "addi t0, t0, 1\n"
-        "fmax.d ft4, ft3, ft0\n"
-        "feq.d t3, ft4, ft3\n"
-        "bne t3, zero, 12\n" // branch if no update needed
-        "fadd.d ft3, %[zero], ft4\n" // update cur max val
-        "add t1, zero, t0\n" // update cur max idx
-        "bne t0, %[n_iter], -24\n"
-        "fadd.d ft1, %[zero], ft3\n"
-        "addi %[idx_out], t1, 0\n" // write out max idx to memory
-        : [idx_out] "=r"(max_index)
-        : [zero] "f"(0.0), [n_iter] "r"(n_iter_h * n_iter_w - 1)
-        : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
-      );
+      ssr_asm_with_index(max_index, n_iter_h * n_iter_w - 1);
+      // asm volatile(
+      //   "li t0, 0\n" // counter, start at one because initial val has idx 0
+      //   "li t1, 0\n" // cur max idx
+      //   "fadd.d ft3, %[zero], ft0\n" // ft3 = cur max val
+      //   // begin loop
+      //   "addi t0, t0, 1\n"
+      //   "fmax.d ft4, ft3, ft0\n"
+      //   "feq.d t3, ft4, ft3\n"
+      //   "bne t3, zero, 12\n" // branch if no update needed
+      //   "fadd.d ft3, %[zero], ft4\n" // update cur max val
+      //   "add t1, zero, t0\n" // update cur max idx
+      //   "bne t0, %[n_iter], -24\n"
+      //   "fadd.d ft1, %[zero], ft3\n"
+      //   "addi %[idx_out], t1, 0\n" // write out max idx to memory
+      //   : [idx_out] "=r"(max_index)
+      //   : [zero] "f"(0.0), [n_iter] "r"(n_iter_h * n_iter_w - 1)
+      //   : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+      // );
+      snrt_ssr_disable();
 
-      int h_index = max_index / n_iter_h * attr->dilations[0] + hstart;
-      int w_index = (max_index % n_iter_h) * attr->dilations[1] + wstart;
-      // int h_index = max_index / attr->dilations[0] * attr->dilations[0] + hstart;
-      // int w_index = (max_index % attr->dilations[0]) * attr->dilations[1] + wstart;
+      int h_index = max_index / n_iter_w * attr->dilations[0] + hstart;
+      int w_index = (max_index % n_iter_w) * attr->dilations[1] + wstart;
 
       if (attr->storage_order) idx[y_d + pool_index] = h_index + w_index * height;
       else idx[y_d + pool_index] = h_index * width + w_index;
@@ -413,14 +447,12 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
         : [zero] "f"(0.0), [n_frep] "r"(n_iter_h * n_iter_w - 2)
         : "ft0", "ft1", "ft2", "ft3", "memory"
       );
+      snrt_ssr_disable();
     }
-
-    snrt_ssr_disable();
 
     #else
 
     int h_index, w_index;
-
     double Yh;
     int Yh_init = 0;
     for (int h = hstart; h < hend; h += attr->dilations[0]) {

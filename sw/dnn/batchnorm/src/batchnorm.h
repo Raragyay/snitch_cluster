@@ -510,8 +510,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // We want two halves to work with
     // We need three buffers, one for grad_ofmap, one for grad_ifmap, one for
     // ifmap
-    ptrdiff_t tile_size_in_points =
-        min((space_left / C) / 2 / 3, num_points);
+    ptrdiff_t tile_size_in_points = min((space_left / C) / 2 / 3, num_points);
     DUMP(tile_size_in_points);
 
     ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2,
@@ -536,17 +535,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
         // Q: is it better to wait then initiate the rest? we'll see
         running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
                                              C * sizeof(double));
-        weight_load =
-            snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
-        running_mean_load = snrt_dma_start_1d(
-            running_mean_scratch, l->running_mean, C * sizeof(double));
-        // load first tile in
-        grad_ofmap_load =
-            snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                              tile_size_in_points * C * sizeof(double));
-        ifmap_load = snrt_dma_start_1d(
-            ifmap_scratch, l->ifmap, tile_size_in_points * C * sizeof(double));
-        buf_flag = !buf_flag;
         snrt_dma_wait(running_var_load);
     } else {
         // PRECONFIGURE: operations on arrays of size C, split by core.
@@ -559,6 +547,18 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // compute invstd, load weight and running_mean in
     uint32_t start_invstd_calc = snrt_mcycle();
     if (snrt_is_dm_core()) {
+        weight_load =
+            snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
+        running_mean_load = snrt_dma_start_1d(
+            running_mean_scratch, l->running_mean, C * sizeof(double));
+        // load first tile in. We can do this here because sqrt/div are really
+        // slow.
+        grad_ofmap_load =
+            snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                              tile_size_in_points * C * sizeof(double));
+        ifmap_load = snrt_dma_start_1d(
+            ifmap_scratch, l->ifmap, tile_size_in_points * C * sizeof(double));
+        buf_flag = !buf_flag;
         snrt_dma_wait(weight_load);
         snrt_dma_wait(running_mean_load);
     } else {
@@ -600,7 +600,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // answer: not really. Still worth precomputing I think
     uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
     if (snrt_is_dm_core()) {
-        snrt_dma_wait_all();
     } else {
         if (num_channels_work_for_core > 0) {
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
@@ -648,6 +647,8 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
     uint32_t start_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
     uint32_t num_points_work_in_tile, num_points_work_for_core_for_tile;
+    // for dma core
+    uint32_t prev_point_start, num_points_work_in_prev_tile;
     bool is_last_iteration = false;
     for (uint32_t point_start = 0; point_start < num_points;
          point_start += tile_size_in_points) {
@@ -669,47 +670,43 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
         if (snrt_is_dm_core()) {
             // technically we could optimize by loading in both sides ahead of
             // time. For now not going to do that
-
-            // if there is a next tile, start loading it in
-            uint32_t next_tile_point_start = point_start + tile_size_in_points;
-
-            if (!is_last_iteration) {
-                uint32_t num_points_work_in_next_tile = min(
-                    num_points - next_tile_point_start,
-                    tile_size_in_points);  // can try predict true afterwards
+            if (point_start != 0) {
+                // first buffer was already loaded in before
                 grad_ofmap_load = snrt_dma_start_1d(
-                    &grad_ofmap_scratch[tile_size_in_points * C * buf_flag],
-                    &l->grad_ofmap[next_tile_point_start * C],
-                    num_points_work_in_next_tile * C * sizeof(double));
+                    &grad_ofmap_scratch[num_points_work_in_tile * C * buf_flag],
+                    &l->grad_ofmap[point_start * C],
+                    num_points_work_in_tile * C * sizeof(double));
                 ifmap_load = snrt_dma_start_1d(
-                    &ifmap_scratch[tile_size_in_points * C * buf_flag],
-                    &l->ifmap[next_tile_point_start * C],
-                    num_points_work_in_next_tile * C * sizeof(double));
+                    &ifmap_scratch[num_points_work_in_tile * C * buf_flag],
+                    &l->ifmap[point_start * C],
+                    num_points_work_in_tile * C * sizeof(double));
             }
-
-            // wait for compute cores to finish computing current tile
+            snrt_dma_wait_all();
+            // wait for compute cores to finish computing current tile,
+            // signal to them grad_ofmap[buf_flag], ifmap[buf_flag],
+            // grad_ifmap[!buf_flag] done?
             snrt_cluster_hw_barrier();
-
-            // in theory the last write can happen afterwards.. thoughts
-            grad_ifmap_write = snrt_dma_start_1d(
-                &l->grad_ifmap[point_start * C],
-                &grad_ifmap_scratch
-                    [tile_size_in_points * C *
-                     (!buf_flag)],  // take !buf_flag since buf_flag points to
-                                    // the next buffer to write to, !buf_flag
-                                    // points to the current buffer being worked
-                                    // on
-                num_points_work_in_tile * C * sizeof(double));
-            // only need to wait for the loads/writes if we are going to involve
-            // the ofmap/ifmap on next iteration
-            if (!is_last_iteration) {
-                snrt_dma_wait_all();
+            // write out the buffer that was just computed
+            if (point_start != 0) {
+                grad_ifmap_write = snrt_dma_start_1d(
+                    &l->grad_ifmap[prev_point_start * C],
+                    &grad_ifmap_scratch[tile_size_in_points * C *
+                                        (!buf_flag)],  // take !buf_flag dma
+                                                       // core is one iteration
+                                                       // ahead of compute core
+                    num_points_work_in_prev_tile * C * sizeof(double));
+                buf_flag = !buf_flag;
             }
-            buf_flag = !buf_flag;
+
+            prev_point_start = point_start;
+            num_points_work_in_prev_tile = num_points_work_in_tile;
 
         } else {
             // since we didn't flip buf_flag with the dma load, buf_flag starts
             // at 0. Signifies the current tile being worked on.
+
+            // dma core will signal to us when we can start next computation
+            snrt_cluster_hw_barrier();
             batchnorm_backward_tile(
                 &grad_ofmap_scratch
                     [(buf_flag * tile_size_in_points + compute_id) * C],
@@ -722,20 +719,27 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 &grad_weight_scratch[compute_id * C], C, num_compute_cores,
                 num_points_work_for_core_for_tile, point_start == 0,
                 is_last_iteration);
-            // signal to dma core that we are done computing current layer
-            snrt_cluster_hw_barrier();
             buf_flag = !buf_flag;
         }
-        snrt_cluster_hw_barrier();
     }
 
     uint32_t end_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
+    // no barrier here so that compute core can immediately start the second
+    // reduction
     snrt_cluster_hw_barrier();
 
     // reduce from [num_threads, C] to [C] by splitting over C
     // just reduce back into the first buffer.
     uint32_t start_grad_bias_weight_reduction_2 = snrt_mcycle();
     if (snrt_is_dm_core()) {
+        // write out the last tile
+        grad_ifmap_write = snrt_dma_start_1d(
+            &l->grad_ifmap[prev_point_start * C],
+            &grad_ifmap_scratch[tile_size_in_points * C *
+                                (!buf_flag)],  // take !buf_flag dma
+                                               // core is one iteration
+                                               // ahead of compute core
+            num_points_work_in_prev_tile * C * sizeof(double));
     } else {
         for (uint32_t channel = compute_id; channel < C;
              channel += num_compute_cores) {

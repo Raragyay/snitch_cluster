@@ -49,7 +49,7 @@ def check_correctness(test, golden,actual):
         print(f"FAIL: {test} verification failed.")
         verification.dump_results_to_csv(
             [golden, actual, absolute_err],
-            Path(__file__).parent / "batchnorm_backward_test_results"/f"{test}.csv",
+            Path(__file__).parent / "batchnorm_backward_test_errors"/f"{test}.csv",
         )
     else:
         print(f"{test} verification passed.")

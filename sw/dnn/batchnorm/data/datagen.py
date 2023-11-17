@@ -33,7 +33,6 @@ PRECISION_T = {
     '8': 'FP8'
 }
 
-
 def golden_model(ifmap):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci)

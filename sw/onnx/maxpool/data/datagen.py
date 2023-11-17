@@ -16,7 +16,7 @@ from data_utils import emit_license, \
                        format_struct_definition, format_array_definition, \
                        format_array_declaration, format_ifdef_wrapper  # noqa: E402
 
-torch.manual_seed(42)
+torch.manual_seed(420)
 
 # AXI splits bursts crossing 4KB address boundaries. To minimize
 # the occurrence of these splits the data should be aligned to 4KB

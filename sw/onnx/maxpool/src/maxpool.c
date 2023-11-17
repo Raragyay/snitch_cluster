@@ -5,7 +5,10 @@
 
 #define DMA_ATTRIBS 1
 #define DMA_INDICES 1
-#define USE_SSR_FREP 1
+#define USE_SSR_FREP_1D 1
+#define USE_SSR_FREP_2D 0
+#define USE_SSR_FREP_3D 0
+#define USE_SSR_FREP_ALL 0
 
 // TODO: Replace with better impls? Problems with using math.h...
 double floor(double x) {
@@ -229,21 +232,20 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
     int hstart = ph * attr->strides[0] - attr->pads[0];
     int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
-    if (hstart < 0) hstart = (hstart % attr->dilations[0]) + attr->dilations[0];
+    if (hstart < 0) {
+      hstart = (hstart % attr->dilations[0]);
+      if (hstart < 0) hstart += attr->dilations[0];
+    }
 
     int h_index;
-    #if USE_SSR_FREP
+    #if USE_SSR_FREP_1D || USE_SSR_FREP_ALL
 
     int n_iter = (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0];
-    // if (core_idx == 1) printf("iter: %d\n", n_iter);
-    //if (core_idx == 1) printf("val: %lf\n", (in + x_d + hstart)[0]);
     snrt_ssr_loop_1d(SNRT_SSR_DM0, n_iter, sizeof(double) * attr->dilations[0]);
     snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
-    // if (idx != NULL) snrt_ssr_loop_1d(SNRT_SSR_DM2, 1, 0); // index output
 
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, in + x_d + hstart);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + y_d + ph);
-    // if (idx != NULL) snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, idx + y_d + ph);
 
     snrt_ssr_enable();
 
@@ -263,11 +265,12 @@ void maxpool_fp64_1d(maxpool_attributes* attr, double* in, double* out, int* idx
         "fadd.d ft3, %[zero], ft4\n" // set cur max val
         "add t1, zero, t0\n" // set cur max idx
         "bne t0, %[n_iter], -24\n"
+        
         "fadd.d ft1, %[zero], ft3\n"
         "addi %[idx_out], t1, 0\n"
         : [idx_out] "=r"(h_index)
         : [zero] "f"(0.0), [n_iter] "r"(n_iter - 1) // one read accounted for in the initial
-        : "t0", "t1", "t3", "f0", "ft1", "ft2", "ft3", "ft4", "memory", "cc", "zero"
+        : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero", "cc"
       );
 
       idx[y_d + ph] = hstart + h_index * attr->dilations[0];
@@ -339,24 +342,95 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
     int y_d = i * y_step;
 
     int hstart = ph * attr->strides[0] - attr->pads[0];
-    int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
+    int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
-    int wstart = pw * attr->strides[1] - attr->pads[1];
-    int wend = wstart + attr->kernel_shape[1] * attr->dilations[1];
+    if (hstart < 0) {
+      hstart = (hstart % attr->dilations[0]);
+      if (hstart < 0) hstart += attr->dilations[0];
+    }
+
+    int wstart = pw * attr->strides[1] - attr->pads[1];;
+    int wend = min(wstart + attr->kernel_shape[1] * attr->dilations[1], width);
+
+    if (wstart < 0) {
+      wstart = (wstart % attr->dilations[1]);
+      if (wstart < 0) wstart += attr->dilations[1];
+    }
+
     int pool_index = ph * pooled_width + pw;
 
+    #if USE_SSR_FREP_2D || USE_SSR_FREP_ALL
+
+    int max_index;
+
+    int n_iter_h = (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0];
+    int n_iter_w = (wend - wstart + attr->dilations[1] - 1) / attr->dilations[1];
+
+    snrt_ssr_loop_2d(SNRT_SSR_DM0, n_iter_w, n_iter_h, sizeof(double) * attr->dilations[1], sizeof(double) * attr->dilations[0] * width);
+    snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
+
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in + x_d + hstart * width + wstart);
+    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + y_d + pool_index);
+
+    snrt_ssr_enable();
+
+    if (idx != NULL) {
+      asm volatile(
+        "li t0, 0\n" // counter, start at one because initial val has idx 0
+        "li t1, 0\n" // cur max idx
+        "fadd.d ft3, %[zero], ft0\n" // ft3 = cur max val
+        // begin loop
+        "addi t0, t0, 1\n"
+        "fmax.d ft4, ft3, ft0\n"
+        "feq.d t3, ft4, ft3\n"
+        "bne t3, zero, 12\n" // branch if no update needed
+        "fadd.d ft3, %[zero], ft4\n" // update cur max val
+        "add t1, zero, t0\n" // update cur max idx
+        "bne t0, %[n_iter], -24\n"
+        "fadd.d ft1, %[zero], ft3\n"
+        "addi %[idx_out], t1, 0\n" // write out max idx to memory
+        : [idx_out] "=r"(max_index)
+        : [zero] "f"(0.0), [n_iter] "r"(n_iter_h * n_iter_w - 1)
+        : "t0", "t1", "t3", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+      );
+
+      int h_index = max_index / n_iter_h * attr->dilations[0] + hstart;
+      int w_index = (max_index % n_iter_h) * attr->dilations[1] + wstart;
+      // int h_index = max_index / attr->dilations[0] * attr->dilations[0] + hstart;
+      // int w_index = (max_index % attr->dilations[0]) * attr->dilations[1] + wstart;
+
+      if (attr->storage_order) idx[y_d + pool_index] = h_index + w_index * height;
+      else idx[y_d + pool_index] = h_index * width + w_index;
+
+    }
+    else {
+      asm volatile(
+        "fadd.d ft3, %[zero], ft0\n"
+        "frep.o %[n_frep], 1, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fadd.d ft1, %[zero], ft3\n"
+        :
+        : [zero] "f"(0.0), [n_frep] "r"(n_iter_h * n_iter_w - 2)
+        : "ft0", "ft1", "ft2", "ft3", "memory"
+      );
+    }
+
+    snrt_ssr_disable();
+
+    #else
+
     int h_index, w_index;
+
     double Yh;
     int Yh_init = 0;
-
     for (int h = hstart; h < hend; h += attr->dilations[0]) {
-      if (h < 0 || h >= height) continue;
+      // if (h < 0 || h >= height) continue;
 
       for (int w = wstart; w < wend; w += attr->dilations[1]) {
-        if (w < 0 || w >= width) continue;
+        // if (w < 0 || w >= width) continue;
 
         int input_index = h * width + w;
-        if (input_index < 0 || input_index > total_els) continue;
+        // if (input_index < 0 || input_index > total_els) continue;
 
         if (!Yh_init || in[x_d + input_index] > Yh) {
           Yh = in[x_d + input_index];
@@ -371,9 +445,11 @@ void maxpool_fp64_2d(maxpool_attributes* attr, double* in, double* out, int* idx
 
     out[y_d + pool_index] = Yh;
     if (idx != NULL) {
-      if (!attr->storage_order) idx[y_d + pool_index] = h_index * width + w_index;
-      else idx[y_d + pool_index] = h_index + w_index * height;
+      if (attr->storage_order) idx[y_d + pool_index] = h_index + w_index * height;
+      else idx[y_d + pool_index] = h_index * width + w_index;
     }
+
+    #endif
 
   }
   

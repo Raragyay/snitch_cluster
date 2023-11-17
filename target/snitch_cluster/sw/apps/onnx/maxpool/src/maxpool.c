@@ -32,7 +32,7 @@ int main() {
   maxpool_fp64_layer(&attr1,
                 ifmap1,
                 output_loc1,
-                idx_loc1);
+                NULL);
   snrt_mcycle();
 
   // compute_output_shape(&attr2, attr2.output_shape);

@@ -1,0 +1,2 @@
+,pre_kernel,tile_size_calc,dma_load,invstd_calc,inplace_mul_invstd,tiled_loop,second_reduction,write_out
+"range(0,9)",0,1,2,4,6,8,10,12

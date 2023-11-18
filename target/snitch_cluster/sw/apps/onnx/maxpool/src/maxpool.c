@@ -29,7 +29,7 @@ int main() {
 
   compute_output_shape(&attr1, attr1.output_shape);
   snrt_mcycle();
-  maxpool_fp64_layer(&attr1,
+  maxpool_f64_1d_with_index(&attr1,
                 ifmap1,
                 output_loc1,
                 idx_loc1);
@@ -37,7 +37,7 @@ int main() {
 
   compute_output_shape(&attr2, attr2.output_shape);
   snrt_mcycle();
-  maxpool_fp64_layer(&attr2,
+  maxpool_f64_2d_with_index_row_major(&attr2,
                 ifmap2,
                 output_loc2,
                 idx_loc2);

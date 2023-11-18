@@ -11,9 +11,6 @@
 #define CEIL(x, y) ((((x) - 1) / (y)) + 1)
 #define MIN(x, y) ((x) < (y)?(x):(y))
 
-double ubs[8]__attribute__ ((aligned (4096)));
-double lbs[8]__attribute__ ((aligned (4096))); 
-
 void backpropagation_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
              double e,int m, int n, int k);
 void backpropagation_baseline_multicore(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
@@ -62,8 +59,6 @@ void backpropagation_baseline_multicore(DATA_TYPE *local_i, DATA_TYPE *local_w, 
     lb = c * compute_id;
     ub = MIN((c * (compute_id + 1)), n*m);
 
-    lbs[compute_id]=lb;
-    ubs[compute_id]=ub;
 
     //dC/dB = E 
     //B[m][n] = old(B[m][n])- e*dC/dB[m][n]
@@ -89,27 +84,23 @@ void backpropagation_baseline_multicore(DATA_TYPE *local_i, DATA_TYPE *local_w, 
     
 }
 
-//TODO: doesnt work with small sizes. the first loop of the biases. I added /2 for tiling
 void backpropagation_multicore(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE *local_b, DATA_TYPE *local_e,
-             double e,int m, int n, int k, int k_tiling, int n_tiling){
+             double e,int m, int n, int k, uint32_t do_bias){
 
-    uint32_t c, lb, ub,i,j,z, dim;
+    uint32_t c, lb, ub,i,j,z;
+    int32_t dim; 
     DATA_TYPE sum;
+
     const uint32_t compute_num = snrt_cluster_compute_core_num();
     const uint32_t compute_id = snrt_cluster_core_idx();
  
 
-    //next instructions useless but bugs dont let me take them out on odd iterations
-    c = CEIL(n*m, compute_num);
-    lb = c * compute_id;
-    ub = MIN((c * (compute_id + 1)), n*m);
+    if(do_bias){      
+        c = CEIL(n*m, compute_num);
+        lb = c * compute_id;
+        ub = MIN((c * (compute_id + 1)), n*m);
 
-    lbs[compute_id]=lb;
-    ubs[compute_id]=ub;
-
-    dim = ub-lb;  
-
-    if(k_tiling==n_tiling){      
+        dim = ub-lb;  
         //dC/dB = E 
         //B[m][n] = old(B[m][n])- e*dC/dB[m][n]
         if(dim>0){
@@ -134,7 +125,6 @@ void backpropagation_multicore(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE
             snrt_ssr_disable();
         }
     }
-    snrt_cluster_hw_barrier();
 
     c = CEIL(k, compute_num);
     lb = c * compute_id;
@@ -184,3 +174,5 @@ void backpropagation_multicore(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE
         // snrt_fpu_fence();
         // snrt_ssr_disable();
 }
+
+

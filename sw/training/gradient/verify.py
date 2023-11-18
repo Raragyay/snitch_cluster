@@ -29,15 +29,19 @@ def main():
                                         snitch_bin=args.snitch_bin,
                                         symbols_bin=args.symbols_bin,
                                         log=args.log,
-                                        output_uids=['W','B',"ubs","lbs"])
+                                        output_uids=['W','B',"n_iter", "fix_size_n", "fix_size_k"])
     weight_actual = np.array(bytes_to_float(raw_results['W'], prec='64'))
     bias_actual = np.array(bytes_to_float(raw_results['B'], prec='64'))
     actuals = np.concatenate((weight_actual,bias_actual))
 
-    ubs = np.array(bytes_to_float(raw_results['ubs'], prec='64'))
-    lbs = np.array(bytes_to_float(raw_results['lbs'], prec='64'))
-    print("UBS:",ubs)
-    print("LBS:",lbs)
+    n_iter = np.array(bytes_to_int(raw_results['n_iter'], prec='32', signedness='unsigned'))
+    fix_size_n = bytes_to_int(raw_results['fix_size_n'], prec='32', signedness='unsigned')[0]
+    fix_size_k = bytes_to_int(raw_results['fix_size_k'], prec='32', signedness='unsigned')[0]
+
+    print("UB_I:",n_iter[0])
+    print("UB_J:",n_iter[1])
+    print("Fix size over n: ",fix_size_n)
+    print("Fix size over k: ", fix_size_k)
 
     # Extract input operands from ELF file
     if args.symbols_bin:

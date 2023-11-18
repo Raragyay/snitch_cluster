@@ -6,3 +6,8 @@
 	path = sw/deps/printf
 	url = https://github.com/mpaland/printf.git
 	ignore = dirty
+[submodule "sw/deps/riscv-isa-sim"]
+	path = sw/deps/riscv-isa-sim
+	url = https://github.com/pulp-platform/riscv-isa-sim.git
+[submodule "sw/deps/riscv-isa-sim/"]
+	branch = snitch

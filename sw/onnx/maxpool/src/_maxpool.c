@@ -161,7 +161,9 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     #if MAXPOOL_DIM == 1
     MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
     #elif MAXPOOL_DIM == 2
+    snrt_mcycle();
     MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
+    snrt_mcycle();
     #elif MAXPOOL_DIM == 3
     MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
     #endif

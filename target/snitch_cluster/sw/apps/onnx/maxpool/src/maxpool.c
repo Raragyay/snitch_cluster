@@ -28,20 +28,20 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 int main() {
 
   compute_output_shape(&attr1, attr1.output_shape);
-  snrt_mcycle();
+  //snrt_mcycle();
   maxpool_f64_1d_with_index(&attr1,
                 ifmap1,
                 output_loc1,
                 idx_loc1);
-  snrt_mcycle();
+  //snrt_mcycle();
 
   compute_output_shape(&attr2, attr2.output_shape);
-  snrt_mcycle();
+  //snrt_mcycle();
   maxpool_f64_2d_with_index_row_major(&attr2,
                 ifmap2,
                 output_loc2,
                 idx_loc2);
-  snrt_mcycle();
+  //snrt_mcycle();
 
   // compute_output_shape(&attr3, attr3.output_shape);
   // snrt_mcycle();

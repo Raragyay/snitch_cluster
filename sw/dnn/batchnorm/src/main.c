@@ -7,7 +7,7 @@
 #include "data.h"
 
 int main() {
-    batchnorm_backward(&backward_layer);
+    batchnorm_backward_training(&backward_training_layer);
 
     snrt_global_barrier();
 

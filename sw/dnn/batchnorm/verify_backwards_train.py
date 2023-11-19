@@ -59,15 +59,15 @@ def main():
     global elf
     # Run simulation and get outputs
     args = verification.parse_args()
-    # raw_results = verification.simulate(
-    #     sim_bin=args.sim_bin,
-    #     snitch_bin=args.snitch_bin,
-    #     symbols_bin=args.symbols_bin,
-    #     log=args.log,
-    #     output_uids=["grad_ifmap_training", "grad_weight_training", "grad_bias_training", "temp"],
-    # )
-    # with open(Path(__file__).parent/"batchnorm_backward_training_test_results"/"raw_results.pkl", "wb") as f:
-    #     pickle.dump(raw_results, f)
+    raw_results = verification.simulate(
+        sim_bin=args.sim_bin,
+        snitch_bin=args.snitch_bin,
+        symbols_bin=args.symbols_bin,
+        log=args.log,
+        output_uids=["grad_ifmap_training", "grad_weight_training", "grad_bias_training", "temp"],
+    )
+    with open(Path(__file__).parent/"batchnorm_backward_training_test_results"/"raw_results.pkl", "wb") as f:
+        pickle.dump(raw_results, f)
 
     print("Simulation complete. Verifying result...")
     # Extract input operands from ELF file
@@ -104,8 +104,6 @@ def main():
     weight = torch.nn.Parameter(
         extract_torch_arr("weight", prec, NUMPY_T[prec], (CI,))
     )
-    print(extract_torch_arr("weight", prec, NUMPY_T[prec], (CI,)))
-    print(weight)
     bias = torch.nn.Parameter(
         extract_torch_arr("bias", prec, NUMPY_T[prec], (CI,))
     )
@@ -113,26 +111,26 @@ def main():
     # Verify results
 
     # extract computed results from simulation
-    # grad_ifmap_actual = torch.from_numpy(
-    #     np.array(
-    #         bytes_to_float(raw_results["grad_ifmap_training"], prec), dtype=NUMPY_T[prec]
-    #     ).reshape((1, IH, IW, CI))
-    # )
-    # grad_weight_actual = torch.from_numpy(
-    #     np.array(
-    #         bytes_to_float(raw_results["grad_weight_training"], prec), dtype=NUMPY_T[prec]
-    #     ).reshape((CI,))
-    # )
-    # grad_bias_actual = torch.from_numpy(
-    #     np.array(
-    #         bytes_to_float(raw_results["grad_bias_training"], prec), dtype=NUMPY_T[prec]
-    #     ).reshape((CI,))
-    # )
-    # temp = torch.from_numpy(
-    #     np.array(
-    #         bytes_to_float(raw_results["temp"], prec), dtype=NUMPY_T[prec]
-    #     ).reshape((8,CI))
-    # )
+    grad_ifmap_actual = torch.from_numpy(
+        np.array(
+            bytes_to_float(raw_results["grad_ifmap_training"], prec), dtype=NUMPY_T[prec]
+        ).reshape((1, IH, IW, CI))
+    )
+    grad_weight_actual = torch.from_numpy(
+        np.array(
+            bytes_to_float(raw_results["grad_weight_training"], prec), dtype=NUMPY_T[prec]
+        ).reshape((CI,))
+    )
+    grad_bias_actual = torch.from_numpy(
+        np.array(
+            bytes_to_float(raw_results["grad_bias_training"], prec), dtype=NUMPY_T[prec]
+        ).reshape((CI,))
+    )
+    temp = torch.from_numpy(
+        np.array(
+            bytes_to_float(raw_results["temp"], prec), dtype=NUMPY_T[prec]
+        ).reshape((8,CI))
+    )
     
     # convert from NHWC to NCHW format
     ifmap = ifmap.permute(0, 3, 1, 2)
@@ -141,16 +139,6 @@ def main():
 
     # print("All data extracted from simulation and binary. Comparing to golden model. ")
     grad_ifmap_golden, grad_weight_golden, grad_bias_golden = (
-        golden_model_backward_training(
-            ifmap,
-            grad_ofmap,
-            weight,
-            bias,
-            eps,
-            floating_point_torch_type(prec),
-        )
-    )
-    my_grad_ifmap_golden, my_grad_weight_golden, my_grad_bias_golden = (
         my_golden_model_backward_training(
             ifmap,
             grad_ofmap,
@@ -162,15 +150,11 @@ def main():
             floating_point_torch_type(prec),
         )
     )
-    
 
-    # bias_fail = check_correctness("grad_bias", my_grad_bias_golden, grad_bias_actual)
-    # weight_fail = check_correctness("grad_weight", my_grad_weight_golden, grad_weight_actual)
-    # # write out in NHWC format
-    # ifmap_fail = check_correctness("grad_ifmap", my_grad_ifmap_golden.permute(0,2,3,1), grad_ifmap_actual)
-    bias_fail = check_correctness("grad_bias", grad_bias_golden, my_grad_bias_golden)
-    weight_fail = check_correctness("grad_weight", grad_weight_golden, my_grad_weight_golden)
-    ifmap_fail = check_correctness("grad_ifmap", grad_ifmap_golden, my_grad_ifmap_golden)
+    bias_fail = check_correctness("grad_bias", grad_bias_golden, grad_bias_actual)
+    weight_fail = check_correctness("grad_weight", grad_weight_golden, grad_weight_actual)
+    # write out in NHWC format
+    ifmap_fail = check_correctness("grad_ifmap", grad_ifmap_golden.permute(0,2,3,1), grad_ifmap_actual)
 
     return int(bias_fail or weight_fail or ifmap_fail)
 

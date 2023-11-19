@@ -79,23 +79,14 @@ def golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, dtype) 
     ofmap.flatten().dot(grad_ofmap.flatten()).backward()
     return ifmap.grad, bn.weight.grad, bn.bias.grad
 
-# # sum += dy;
-# # dotp += (x - mean) * dy;
-# # k = dotp * invstd * invstd / N;
-# # grad_mean = sum / N;
-# # dx = (x - mean) * k;
-# # (dy - grad_mean - dx) * invstd * w;
 def my_golden_model_backward_training(ifmap, grad_ofmap, weight, bias, current_mean, current_var, eps, dtype) ->(torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     num_points = n*ih*iw
-
     invstd = torch.rsqrt(current_var + eps)
     sum = grad_ofmap.sum(dim=(0, 2, 3))
-    # dotp = sum(dy*(x-mu))
     dotp = torch.zeros(ci)
     for c in range(ci):
         dotp[c] = torch.sum(grad_ofmap[:, c, :, :] * ((ifmap[:, c, :, :] - current_mean[c])))
-    # k = sum(dy*(x-mu))*inv_var/ num_points
     k = dotp * invstd * invstd / num_points
     grad_mean = sum / num_points
     dx = torch.zeros(ifmap.shape)
@@ -106,39 +97,7 @@ def my_golden_model_backward_training(ifmap, grad_ofmap, weight, bias, current_m
         grad_ifmap[:, c, :, :] = (grad_ofmap[:, c, :, :] - grad_mean[c] - dx[:, c, :, :]) * invstd[c] * weight[c]
     grad_weight = dotp * invstd
     grad_bias = sum
-    
     return grad_ifmap, grad_weight, grad_bias
-
-    
-    # grad_weight = torch.zeros(ci)
-    # grad_x_hat = torch.zeros(ifmap.shape)
-    # grad_var = torch.zeros(ci)
-    # grad_mean = torch.zeros(ci)
-    # grad_ifmap = torch.zeros(ifmap.shape)
-    
-    # for c in range(ci):
-    #     grad_weight[c] += torch.sum(grad_ofmap[:, c, :, :] * ((ifmap[:, c, :, :] - current_mean[c]) * invstd[c]))
-    
-    # for c in range(ci):
-    #     grad_x_hat[:, c, :, :] = grad_ofmap[:, c, :, :] * weight[c]
-    
-    # for c in range(ci):
-    #     grad_var[c] = torch.sum(grad_x_hat[:, c, :, :] * (ifmap[:, c, :, :] - current_mean[c]) * (-0.5) * invstd[c]**1.5)
-    #     grad_mean[c] = torch.sum(grad_x_hat[:, c, :, :] * -1 * invstd[c])
-    
-    #     grad_ifmap[:, c, :, :] = grad_x_hat[:, c, :, :] * invstd[c] \
-    #                             + grad_var[c] * 2 * (ifmap[:, c, :, :] - current_mean[c]) / n \
-    #                             + grad_mean[c] / n
-    
-    # # dy * w * invstd - (sum of dy * w) * invstd/ N - (sum of dy * (x - mean)) * invstd * invstd * invstd * w / N
-    # # dy * invstd * w - sum / N * invstd * w - (x - mean) * dotp * invstd * invstd / N * invstd * w;
-    # # (dy - sum / N - (x - mean) * dotp * invstd * invstd / N) * invstd * w;
-    # # (dy - sum / N - (x - mean) * k) * invstd * w;
-    # # (dy - sum / N - dx) * invstd * w;
-    
-    # for c in range(ci):
-    #     grad_ifmap[:, c, :, :] = grad_ofmap[:, c, :, :] -  * weight[c] * invstd[c]
-        
 
 
 def emit_header(**kwargs):

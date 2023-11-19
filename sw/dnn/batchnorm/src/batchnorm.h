@@ -5,11 +5,13 @@
 #include <math.h>
 
 #include <stdbool.h>
+#include "batchnorm_utils.h"
 #include "printf.h"
 #include "snrt.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
+
 typedef struct {
     uint32_t CI;
     uint32_t IH;
@@ -83,13 +85,6 @@ typedef struct {
     float eps;
     precision_t dtype;
 } batchnorm_backward_training_layer_t;
-
-static inline uint32_t get_core_num_work_items(uint32_t num_work_items,
-                                               uint32_t num_compute_cores,
-                                               uint32_t compute_id) {
-    return num_work_items / num_compute_cores +
-           (compute_id < (num_work_items % num_compute_cores));
-}
 
 /**
  * @brief implementation of a FP64 batchnorm as a linear combination
@@ -340,14 +335,12 @@ static inline void batchnorm_backward_tile(
     // outside loop: channels
     // inside loop: points
     if (is_first_iteration || is_last_iteration) {
-        snrt_ssr_loop_2d(
-            SNRT_SSR_DM_ALL,
-            num_points_work_in_tile,                 // dimension of inner loop
-            C,                                       // dimension of outer loop
-            num_compute_cores * C * sizeof(double),  // stride per inner loop
-                                                     // iteration
-            sizeof(double));  // stride per outer loop iteration
-    }
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL,
+                         num_points_work_in_tile,  // dimension of inner loop
+                         C,                        // dimension of outer loop
+                         C * sizeof(double),  // stride per inner loop iteration
+                         sizeof(double));     // stride per outer loop iteration
+    } 
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
@@ -663,13 +656,17 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_TCDM_ACCESSED);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
     // compute grad_weight first step, grad_bias first step, grad_ifmap
     // this is where the tiling would come in place
 
     uint32_t start_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
     uint32_t num_points_work_in_tile, num_points_work_for_core_for_tile;
     // for dma core
-    uint32_t prev_point_start, num_points_work_in_prev_tile;
+    uint32_t prev_point_start, num_points_work_in_prev_tile, blocked_offset;
     bool is_last_iteration = false;
     for (uint32_t point_start = 0; point_start < num_points;
          point_start += tile_size_in_points) {
@@ -680,11 +677,15 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             num_points_work_for_core_for_tile = get_core_num_work_items(
                 num_points_work_in_tile, num_compute_cores,
                 compute_id);  // for the last tile, might be different
+            blocked_offset = get_offset_for_core_work_blocked(
+                num_points_work_in_tile, num_compute_cores, compute_id);
         } else if (point_start == 0) {
             // on first iteration
             num_points_work_in_tile = tile_size_in_points;
 
             num_points_work_for_core_for_tile = get_core_num_work_items(
+                num_points_work_in_tile, num_compute_cores, compute_id);
+            blocked_offset = get_offset_for_core_work_blocked(
                 num_points_work_in_tile, num_compute_cores, compute_id);
         }
 
@@ -730,11 +731,11 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             snrt_cluster_hw_barrier();
             batchnorm_backward_tile(
                 &grad_ofmap_scratch
-                    [(buf_flag * tile_size_in_points + compute_id) * C],
+                    [(buf_flag * tile_size_in_points + blocked_offset) * C],
                 &grad_ifmap_scratch
-                    [(buf_flag * tile_size_in_points + compute_id) * C],
-                &ifmap_scratch[(buf_flag * tile_size_in_points + compute_id) *
-                               C],
+                    [(buf_flag * tile_size_in_points + blocked_offset) * C],
+                &ifmap_scratch
+                    [(buf_flag * tile_size_in_points + blocked_offset) * C],
                 running_mean_scratch, weight_scratch, invstd_scratch,
                 &grad_bias_scratch[compute_id * C],
                 &grad_weight_scratch[compute_id * C], C, num_compute_cores,
@@ -748,6 +749,8 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // no barrier here so that compute core can immediately start the second
     // reduction
     snrt_cluster_hw_barrier();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
     // reduce from [num_threads, C] to [C] by splitting over C
     // just reduce back into the first buffer.

@@ -1128,7 +1128,7 @@
 #;     snrt_dma_start_1d (dma.h:59)
 #;       snrt_dma_start_1d_wideptr (dma.h:13)
 #;         if (size > 0) {
-           1065000    0x80002240 beqz    a4, pc + 36            #; a4  = 32, not taken
+           1065000    0x80002240 beqz    a4, pc + 48            #; a4  = 32, not taken
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:877)
 #;     curr_var_load = snrt_dma_start_1d(invstd, l->current_var,
@@ -1160,104 +1160,104 @@
 #;     snrt_dma_start_1d (dma.h:59)
 #;       snrt_dma_start_1d_wideptr (dma.h:-1)
 #; 
-           1087000    0x80002260 j       pc + 0x8               #; goto 0x80002268
+           1087000    0x80002260 j       pc + 0x14              #; goto 0x80002274
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:879)
 #;     snrt_dma_wait (dma.h:145)
 #;       asm volatile(
-           1088000    0x80002268 dmstati t0, 0                  #; 
+           1088000    0x80002274 dmstati t0, 0                  #; 
            1089000                                              #; (acc) a0  <-- 11
            1091000                                              #; (acc) t0  <-- 11
-           1092000    0x8000226c sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
-           1093000    0x80002270 bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002268
-           1094000    0x80002268 dmstati t0, 0                  #; 
+           1092000    0x80002278 sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
+           1093000    0x8000227c bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002274
+           1094000    0x80002274 dmstati t0, 0                  #; 
            1097000                                              #; (acc) t0  <-- 11
-           1098000    0x8000226c sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
-           1099000    0x80002270 bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002268
-           1100000    0x80002268 dmstati t0, 0                  #; 
+           1098000    0x80002278 sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
+           1099000    0x8000227c bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002274
+           1100000    0x80002274 dmstati t0, 0                  #; 
            1103000                                              #; (acc) t0  <-- 11
-           1104000    0x8000226c sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
-           1105000    0x80002270 bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002268
-           1106000    0x80002268 dmstati t0, 0                  #; 
+           1104000    0x80002278 sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
+           1105000    0x8000227c bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002274
+           1106000    0x80002274 dmstati t0, 0                  #; 
            1109000                                              #; (acc) t0  <-- 11
-           1110000    0x8000226c sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
-           1111000    0x80002270 bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002268
-           1112000    0x80002268 dmstati t0, 0                  #; 
+           1110000    0x80002278 sub     t0, t0, a0             #; t0  = 11, a0  = 11, (wrb) t0  <-- 0
+           1111000    0x8000227c bge     zero, t0, pc - 8       #; t0  = 0, taken, goto 0x80002274
+           1112000    0x80002274 dmstati t0, 0                  #; 
            1115000                                              #; (acc) t0  <-- 12
-           1116000    0x8000226c sub     t0, t0, a0             #; t0  = 12, a0  = 11, (wrb) t0  <-- 1
-           1117000    0x80002270 bge     zero, t0, pc - 8       #; t0  = 1, not taken
+           1116000    0x80002278 sub     t0, t0, a0             #; t0  = 12, a0  = 11, (wrb) t0  <-- 1
+           1117000    0x8000227c bge     zero, t0, pc - 8       #; t0  = 1, not taken
 #; main (dma.h:-1)
 #; 
-           1118000    0x80002274 auipc   a0, 0x5                #; (wrb) a0  <-- 0x80007274
-           1119000    0x80002278 addi    a0, a0, -616           #; a0  = 0x80007274, (wrb) a0  <-- 0x8000700c
+           1129000    0x80002280 auipc   a0, 0x5                #; (wrb) a0  <-- 0x80007280
+           1130000    0x80002284 addi    a0, a0, -628           #; a0  = 0x80007280, (wrb) a0  <-- 0x8000700c
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:67)
 #;     uint32_t prev_barrier_iteration = _snrt_barrier.iteration;
-           1120000    0x8000227c lw      a1, 4(a0)              #; a0  = 0x8000700c, a1  <~~ Word[0x80007010]
+           1131000    0x80002288 lw      a1, 4(a0)              #; a0  = 0x8000700c, a1  <~~ Word[0x80007010]
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:-1)
 #; 
-           1130000    0x80002280 li      a2, 1                  #; (wrb) a2  <-- 1
-           1131000                                              #; (lsu) a1  <-- 0
+           1132000    0x8000228c li      a2, 1                  #; (wrb) a2  <-- 1
+           1142000                                              #; (lsu) a1  <-- 0
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:69)
 #;     __atomic_add_fetch(&(_snrt_barrier.cnt), 1, __ATOMIC_RELAXED);
-           1132000    0x80002284 amoadd.w a3, a2, (a0)          #; a0  = 0x8000700c, a2  = 1, a3  <~~ Word[0x8000700c]
-           1150000                                              #; (lsu) a3  <-- 0
+           1143000    0x80002290 amoadd.w a3, a2, (a0)          #; a0  = 0x8000700c, a2  = 1, a3  <~~ Word[0x8000700c]
+           1161000                                              #; (lsu) a3  <-- 0
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:72)
 #;     if (cnt == snrt_cluster_num()) {
-           1151000    0x80002288 beqz    a3, pc + 16            #; a3  = 0, taken, goto 0x80002298
+           1162000    0x80002294 beqz    a3, pc + 16            #; a3  = 0, taken, goto 0x800022a4
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:73)
 #;     _snrt_barrier.cnt = 0;
-           1152000    0x80002298 sw      zero, 0(a0)            #; a0  = 0x8000700c, 0 ~~> Word[0x8000700c]
-           1153000    0x8000229c addi    a0, a0, 4              #; a0  = 0x8000700c, (wrb) a0  <-- 0x80007010
+           1174000    0x800022a4 sw      zero, 0(a0)            #; a0  = 0x8000700c, 0 ~~> Word[0x8000700c]
+           1175000    0x800022a8 addi    a0, a0, 4              #; a0  = 0x8000700c, (wrb) a0  <-- 0x80007010
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:74)
 #;     __atomic_add_fetch(&(_snrt_barrier.iteration), 1, __ATOMIC_RELAXED);
-           1164000    0x800022a0 amoadd.w a0, a2, (a0)          #; a0  = 0x80007010, a2  = 1, a0  <~~ Word[0x80007010]
-           1165000    0x800022a4 j       pc + 0x328             #; goto 0x800025cc
+           1176000    0x800022ac amoadd.w a0, a2, (a0)          #; a0  = 0x80007010, a2  = 1, a0  <~~ Word[0x80007010]
+           1177000    0x800022b0 j       pc + 0x31c             #; goto 0x800025cc
 #; main (main.c:12)
 #;   snrt_global_barrier (sync.h:81)
 #;     snrt_cluster_hw_barrier (sync.h:59)
 #;       asm volatile("csrr x0, 0x7C2" ::: "memory");
-           1176000    0x800025cc csrs    unknown_7c2, zero      #; csr@7c2 = 0
-           1182000                                              #; (lsu) a0  <-- 0
+           1186000    0x800025cc csrs    unknown_7c2, zero      #; csr@7c2 = 0
+           1202000                                              #; (lsu) a0  <-- 0
 #; main (main.c:14)
 #;   return 0;
-           1183000    0x800025d0 li      a0, 0                  #; (wrb) a0  <-- 0
-           1184000    0x800025d4 lw      s8, 12(sp)             #; sp  = 0x1001df48, s8  <~~ Word[0x1001df54]
-           1187000                                              #; (lsu) s8  <-- 0
-           1188000    0x800025d8 lw      s7, 16(sp)             #; sp  = 0x1001df48, s7  <~~ Word[0x1001df58]
-           1191000                                              #; (lsu) s7  <-- 0
-           1192000    0x800025dc lw      s6, 20(sp)             #; sp  = 0x1001df48, s6  <~~ Word[0x1001df5c]
-           1195000                                              #; (lsu) s6  <-- 0
-           1196000    0x800025e0 lw      s5, 24(sp)             #; sp  = 0x1001df48, s5  <~~ Word[0x1001df60]
-           1199000                                              #; (lsu) s5  <-- 0
-           1200000    0x800025e4 lw      s4, 28(sp)             #; sp  = 0x1001df48, s4  <~~ Word[0x1001df64]
-           1203000                                              #; (lsu) s4  <-- 0
-           1204000    0x800025e8 lw      s3, 32(sp)             #; sp  = 0x1001df48, s3  <~~ Word[0x1001df68]
-           1207000                                              #; (lsu) s3  <-- 0
-           1208000    0x800025ec lw      s2, 36(sp)             #; sp  = 0x1001df48, s2  <~~ Word[0x1001df6c]
-           1211000                                              #; (lsu) s2  <-- 8
-           1212000    0x800025f0 lw      s1, 40(sp)             #; sp  = 0x1001df48, s1  <~~ Word[0x1001df70]
-           1215000                                              #; (lsu) s1  <-- 0x80006c98
-           1216000    0x800025f4 lw      s0, 44(sp)             #; sp  = 0x1001df48, s0  <~~ Word[0x1001df74]
-           1217000    0x800025f8 addi    sp, sp, 48             #; sp  = 0x1001df48, (wrb) sp  <-- 0x1001df78
-           1218000    0x800025fc ret                            #; ra  = 0x8000624c, goto 0x8000624c
-           1219000                                              #; (lsu) s0  <-- 0x80006ca8
+           1203000    0x800025d0 li      a0, 0                  #; (wrb) a0  <-- 0
+           1204000    0x800025d4 lw      s8, 12(sp)             #; sp  = 0x1001df48, s8  <~~ Word[0x1001df54]
+           1207000                                              #; (lsu) s8  <-- 0
+           1208000    0x800025d8 lw      s7, 16(sp)             #; sp  = 0x1001df48, s7  <~~ Word[0x1001df58]
+           1211000                                              #; (lsu) s7  <-- 0
+           1212000    0x800025dc lw      s6, 20(sp)             #; sp  = 0x1001df48, s6  <~~ Word[0x1001df5c]
+           1215000                                              #; (lsu) s6  <-- 0
+           1216000    0x800025e0 lw      s5, 24(sp)             #; sp  = 0x1001df48, s5  <~~ Word[0x1001df60]
+           1219000                                              #; (lsu) s5  <-- 0
+           1220000    0x800025e4 lw      s4, 28(sp)             #; sp  = 0x1001df48, s4  <~~ Word[0x1001df64]
+           1223000                                              #; (lsu) s4  <-- 0
+           1224000    0x800025e8 lw      s3, 32(sp)             #; sp  = 0x1001df48, s3  <~~ Word[0x1001df68]
+           1227000                                              #; (lsu) s3  <-- 0
+           1228000    0x800025ec lw      s2, 36(sp)             #; sp  = 0x1001df48, s2  <~~ Word[0x1001df6c]
+           1231000                                              #; (lsu) s2  <-- 8
+           1232000    0x800025f0 lw      s1, 40(sp)             #; sp  = 0x1001df48, s1  <~~ Word[0x1001df70]
+           1235000                                              #; (lsu) s1  <-- 0x80006c98
+           1236000    0x800025f4 lw      s0, 44(sp)             #; sp  = 0x1001df48, s0  <~~ Word[0x1001df74]
+           1237000    0x800025f8 addi    sp, sp, 48             #; sp  = 0x1001df48, (wrb) sp  <-- 0x1001df78
+           1238000    0x800025fc ret                            #; ra  = 0x8000624c, goto 0x8000624c
+           1239000                                              #; (lsu) s0  <-- 0x80006ca8
 #; snrt_main (start.c:168)
 #;   snrt_cluster_hw_barrier (sync.h:59)
 #;     asm volatile("csrr x0, 0x7C2" ::: "memory");
-           1231000    0x8000624c csrs    unknown_7c2, zero      #; csr@7c2 = 0
+           1250000    0x8000624c csrs    unknown_7c2, zero      #; csr@7c2 = 0
 #; snrt_main (start.c:176)
 #;   snrt_exit (start.c:101)
 #;     if (snrt_global_core_idx() == 0)
-           1285000    0x80006250 bnez    s2, pc + 24            #; s2  = 8, taken, goto 0x80006268
+           1300000    0x80006250 bnez    s2, pc + 24            #; s2  = 8, taken, goto 0x80006268
 #; snrt_main (start.c:182)
 #;   }
-           1286000    0x80006268 lw      s2, 16(sp)             #; sp  = 0x1001df78, s2  <~~ Word[0x1001df88]
-           1289000                                              #; (lsu) s2  <-- 0
-           1290000    0x8000626c lw      s1, 20(sp)             #; sp  = 0x1001df78, s1  <~~ Word[0x1001df8c]
-           1293000                                              #; (lsu) s1  <-- 0
+           1301000    0x80006268 lw      s2, 16(sp)             #; sp  = 0x1001df78, s2  <~~ Word[0x1001df88]
+           1304000                                              #; (lsu) s2  <-- 0
+           1305000    0x8000626c lw      s1, 20(sp)             #; sp  = 0x1001df78, s1  <~~ Word[0x1001df8c]
+           1308000                                              #; (lsu) s1  <-- 0

@@ -555,18 +555,18 @@
            1083000    0x800020f0 srli    a0, s2, 3              #; s2  = 4, (wrb) a0  <-- 0
            1084000    0x800020f4 andi    a1, s2, 7              #; s2  = 4, (wrb) a1  <-- 4
            1085000    0x800020f8 sltu    a1, s4, a1             #; s4  = 4, a1  = 4, (wrb) a1  <-- 0
-           1086000    0x800020fc add     a0, a0, a1             #; a0  = 0, a1  = 0, (wrb) a0  <-- 0
+           1086000    0x800020fc add     a1, a0, a1             #; a0  = 0, a1  = 0, (wrb) a1  <-- 0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:882)
 #;     snrt_ssr_loop_1d (ssr.h:74)
 #;       --b0;
-           1087000    0x80002100 addi    a1, a0, -1             #; a0  = 0, (wrb) a1  <-- -1
+           1087000    0x80002100 addi    a0, a1, -1             #; a1  = 0, (wrb) a0  <-- -1
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:882)
 #;     snrt_ssr_loop_1d (ssr.h:75)
 #;       write_ssr_cfg (ssr.h:68)
 #;         asm volatile("scfgwi %[value], %[dm] | %[reg]<<5\n" ::[value] "r"(value),
-           1088000    0x80002104 scfgwi  a1, 95                 #; a1  = -1
+           1088000    0x80002104 scfgwi  a0, 95                 #; a0  = -1
            1089000    0x80002108 li      a2, 64                 #; (wrb) a2  <-- 64
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:882)
@@ -581,43 +581,53 @@
            1091000    0x80002110 csrr    a2, mcycle             #; mcycle = 1087, (wrb) a2  <-- 1087
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:886)
-#;     snrt_cluster_hw_barrier();
-           1092000    0x80002114 csrwi   unknown_7c3, 0         #; 
-#; main (main.c:10)
-#;   batchnorm_backward_training (batchnorm.h:887)
 #;     snrt_cluster_hw_barrier (sync.h:59)
 #;       asm volatile("csrr x0, 0x7C2" ::: "memory");
-           1093000    0x80002118 csrs    unknown_7c2, zero      #; csr@7c2 = 0
+           1092000    0x80002114 csrs    unknown_7c2, zero      #; csr@7c2 = 0
 #; main (main.c:10)
-#;   batchnorm_backward_training (batchnorm.h:895)
+#;   batchnorm_backward_training (batchnorm.h:894)
 #;     snrt_mcycle (riscv.h:17)
 #;       asm volatile("csrr %0, mcycle" : "=r"(r) : : "memory");
-           1178000    0x8000211c csrr    a2, mcycle             #; mcycle = 1174, (wrb) a2  <-- 1174
+           1188000    0x80002118 csrr    a2, mcycle             #; mcycle = 1184, (wrb) a2  <-- 1184
 #; main (main.c:10)
-#;   batchnorm_backward_training (batchnorm.h:896)
-#;     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
-           1179000    0x80002120 beqz    a0, pc + 1196          #; a0  = 0, taken, goto 0x800025cc
-#; main (main.c:12)
-#;   snrt_global_barrier (sync.h:81)
+#;   batchnorm_backward_training (batchnorm.h:894)
+#;     snrt_mcycle (riscv.h:-1)
+#; 
+           1189000    0x8000211c lui     a2, 0x10000            #; (wrb) a2  <-- 0x10000000
+#; main (main.c:10)
+#;   batchnorm_backward_training (riscv.h:-1)
+#; 
+           1190000    0x80002120 add     t5, a4, a2             #; a4  = 32, a2  = 0x10000000, (wrb) t5  <-- 0x10000020
+           1191000    0x80002124 slli    t1, s4, 3              #; s4  = 4, (wrb) t1  <-- 32
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:895)
+#;     if (num_channels_work_for_core > 0) {
+           1192000    0x80002128 beqz    a1, pc + 88            #; a1  = 0, taken, goto 0x80002180
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:918)
+#;     DUMP(0);
+           1214000    0x80002180 csrwi   unknown_7c3, 0         #; 
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:919)
 #;     snrt_cluster_hw_barrier (sync.h:59)
 #;       asm volatile("csrr x0, 0x7C2" ::: "memory");
-           1194000    0x800025cc csrs    unknown_7c2, zero      #; csr@7c2 = 0
-#; main (main.c:14)
-#;   return 0;
-           1285000    0x800025d0 li      a0, 0                  #; (wrb) a0  <-- 0
-           1286000    0x800025d4 lw      s8, 12(sp)             #; sp  = 0x1001ef68, s8  <~~ Word[0x1001ef74]
-           1289000                                              #; (lsu) s8  <-- 0
-           1290000    0x800025d8 lw      s7, 16(sp)             #; sp  = 0x1001ef68, s7  <~~ Word[0x1001ef78]
-           1293000                                              #; (lsu) s7  <-- 0
-           1294000    0x800025dc lw      s6, 20(sp)             #; sp  = 0x1001ef68, s6  <~~ Word[0x1001ef7c]
-           1297000                                              #; (lsu) s6  <-- 0
-           1298000    0x800025e0 lw      s5, 24(sp)             #; sp  = 0x1001ef68, s5  <~~ Word[0x1001ef80]
-           1301000                                              #; (lsu) s5  <-- 0
-           1302000    0x800025e4 lw      s4, 28(sp)             #; sp  = 0x1001ef68, s4  <~~ Word[0x1001ef84]
-           1305000                                              #; (lsu) s4  <-- 0
-           1306000    0x800025e8 lw      s3, 32(sp)             #; sp  = 0x1001ef68, s3  <~~ Word[0x1001ef88]
-           1309000                                              #; (lsu) s3  <-- 0
-           1310000    0x800025ec lw      s2, 36(sp)             #; sp  = 0x1001ef68, s2  <~~ Word[0x1001ef8c]
-           1313000                                              #; (lsu) s2  <-- 4
-           1314000    0x800025f0 lw      s1, 40(sp)             #; sp  = 0x1001ef68, s1  <~~ Word[0x1001ef90]
-           1317000                                              #; (lsu) s1  <-- 0x80006c98
+           1215000    0x80002184 csrs    unknown_7c2, zero      #; csr@7c2 = 0
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:-1)
+#; 
+           1300000    0x80002188 add     t4, t5, a4             #; t5  = 0x10000020, a4  = 32, (wrb) t4  <-- 0x10000040
+           1301000    0x8000218c mul     t6, t0, a7             #; t0  = 2, a7  = 2
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:929)
+#;     for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+           1302000    0x80002190 sltu    a6, s4, s2             #; s4  = 4, s2  = 4, (wrb) a6  <-- 0
+           1303000    0x80002194 bgeu    s4, s2, pc + 208       #; s4  = 4, s2  = 4, taken, goto 0x80002264
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:938)
+#;     DUMP(1);
+           1306000    0x80002264 csrwi   unknown_7c3, 1         #; 
+#; main (main.c:10)
+#;   batchnorm_backward_training (batchnorm.h:939)
+#;     snrt_cluster_hw_barrier (sync.h:59)
+#;       asm volatile("csrr x0, 0x7C2" ::: "memory");
+           1307000    0x80002268 csrs    unknown_7c2, zero      #; csr@7c2 = 0

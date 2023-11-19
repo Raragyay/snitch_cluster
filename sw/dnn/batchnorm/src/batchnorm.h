@@ -66,6 +66,26 @@ typedef struct {
     precision_t dtype;
 } batchnorm_backward_layer_t;
 
+typedef struct {
+    uint32_t CI;
+    uint32_t IH;
+    uint32_t IW;
+    // uint32_t TILE_CI;
+
+    double const *ifmap;
+    double const *grad_ofmap;
+    double const *current_mean;
+    double const *current_var;
+    double const *weight;
+
+    double *grad_ifmap;
+    double *grad_weight;
+    double *grad_bias;
+
+    float eps;
+    precision_t dtype;
+} batchnorm_backward_training_layer_t;
+
 /**
  * @brief implementation of a FP64 batchnorm as a linear combination
  * y = gamma * x + beta
@@ -474,6 +494,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     ptrdiff_t grad_bias_scratch_len = C * num_compute_cores,
               grad_weight_scratch_len = C * num_compute_cores;
 
+    // dataflow:
     double *ptr = (double *)snrt_l1_start_addr();
     double *weight_scratch = ptr;
     ptr += C;
@@ -787,13 +808,107 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     }
     uint32_t end_dma_writeback = snrt_mcycle();
     snrt_cluster_hw_barrier();
-    uint32_t kernel_end = snrt_mcycle();
 }
-// batchnorm backprop for training
-// changes:
-// calculate invstd from data (or assume given, probably easier)
-// grad_ifmap:
-// dotp = dy * (x[i,C]-running_mean[C]) (this is the component of grad_weight
-// not incl) k = dotp * invstd * invstd / num_points = grad_weight * invstd /
-// num_points dx = (x - mean) * k dx = (dy - grad_bias / N - dx) * invstd *
-// weight does this mean that I will h
+
+static inline void batchnorm_backward_training(batchnorm_backward_training_layer_t *l) {
+    // data is in HWC format
+    const uint32_t num_compute_cores =
+        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
+    const uint32_t compute_id =
+        snrt_cluster_core_idx();  
+
+    // Calculate output dimensions
+    uint32_t N = 1;
+    uint32_t H = l->IH;
+    uint32_t W = l->IW;
+    uint32_t C = l->CI;
+    double eps = l->eps;
+    uint32_t num_points = N * H * W;
+    
+    // Intermediate
+    double *ptr = (double *)snrt_l1_start_addr();
+    double *invstd = ptr;
+    ptr += C;
+    double *sum = ptr;
+    ptr += C;
+    double *dotp = ptr;
+    ptr += C;
+    double *k = ptr;
+    ptr += C;
+    double *grad_mean = ptr;
+    ptr += C;
+    double *dx = ptr;
+    ptr += C * num_points;
+
+    // Input
+    double *curr_mean = ptr;
+    ptr += C;
+    double *curr_var = ptr;
+    ptr += C;
+    double *grad_ofmap = ptr;
+    ptr += C * num_points;
+    double *ifmap = ptr;
+    ptr += C * num_points;
+
+    // Output
+    double *grad_ifmap = ptr;
+    ptr += C * num_points;
+    double *grad_weight = ptr;
+    ptr += C;
+    double *grad_bias = ptr;
+    ptr += C;
+
+    if (snrt_is_dm_core()) {
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        return;
+    }
+
+    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        invstd[channel] = 1 / sqrt(l->current_var[channel] + eps);
+        sum[channel] = 0;
+        dotp[channel] = 0;
+        for (uint32_t i = 0; i < num_points; i++) {
+            sum[channel] += l->grad_ofmap[i * num_points + channel];
+            dotp[channel] += l->grad_ofmap[i * num_points + channel] 
+                           * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+        }
+    }
+    DUMP(1);
+    snrt_cluster_hw_barrier();
+
+    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        k[channel] = dotp[channel] * invstd[channel] * invstd[channel] / num_points;
+        grad_mean[channel] = sum[channel] / num_points;
+    }
+    DUMP(2);
+    snrt_cluster_hw_barrier();
+
+    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        for (uint32_t i = 0; i < num_points; i++ ) {
+            dx[i * num_points + channel] = (l->ifmap[i * num_points + channel] - l->current_mean[channel]) 
+                                         * k[channel];
+        }
+    }
+    DUMP(3);
+    snrt_cluster_hw_barrier();
+
+    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        for (uint32_t i = 0; i < num_points; i++) {
+            l->grad_ifmap[i * num_points + channel] = (l->grad_ofmap[i * num_points + channel] - grad_mean[channel] - dx[i * num_points + channel]) 
+                                                    * invstd[channel] * l->weight[channel];
+        }
+    }
+    DUMP(5);
+    snrt_cluster_hw_barrier();
+
+    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        l->grad_bias[channel] = sum[channel];
+        l->grad_weight[channel] = dotp[channel] * invstd[channel];
+    }
+    DUMP(6);
+    snrt_cluster_hw_barrier();
+}

@@ -57,7 +57,6 @@ def golden_model_training(ifmap, eps, momentum, running_mean, running_var, weigh
 
 
 def golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype) ->(torch.Tensor, torch.Tensor, torch.Tensor):
-    # note: need to change data to be save_mean and save_var if in train mode
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
     bn.weight = weight
@@ -69,6 +68,77 @@ def golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, running
     ofmap.retain_grad()
     ofmap.flatten().dot(grad_ofmap.flatten()).backward()
     return ifmap.grad, bn.weight.grad, bn.bias.grad
+
+def golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, dtype) ->(torch.Tensor, torch.Tensor, torch.Tensor):
+    n, ci, ih, iw = ifmap.shape
+    bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
+    bn.weight = weight
+    bn.bias = bias
+    ofmap = bn(ifmap)
+    ofmap.retain_grad()
+    ofmap.flatten().dot(grad_ofmap.flatten()).backward()
+    return ifmap.grad, bn.weight.grad, bn.bias.grad
+
+# # sum += dy;
+# # dotp += (x - mean) * dy;
+# # k = dotp * invstd * invstd / N;
+# # grad_mean = sum / N;
+# # dx = (x - mean) * k;
+# # (dy - grad_mean - dx) * invstd * w;
+def my_golden_model_backward_training(ifmap, grad_ofmap, weight, bias, current_mean, current_var, eps, dtype) ->(torch.Tensor, torch.Tensor, torch.Tensor):
+    n, ci, ih, iw = ifmap.shape
+    num_points = n*ih*iw
+
+    invstd = torch.rsqrt(current_var + eps)
+    sum = grad_ofmap.sum(dim=(0, 2, 3))
+    # dotp = sum(dy*(x-mu))
+    dotp = torch.zeros(ci)
+    for c in range(ci):
+        dotp[c] = torch.sum(grad_ofmap[:, c, :, :] * ((ifmap[:, c, :, :] - current_mean[c])))
+    # k = sum(dy*(x-mu))*inv_var/ num_points
+    k = dotp * invstd * invstd / num_points
+    grad_mean = sum / num_points
+    dx = torch.zeros(ifmap.shape)
+    for c in range(ci):
+        dx[:, c, :, :] = (ifmap[:, c, :, :] - current_mean[c]) * k[c]
+    grad_ifmap = torch.zeros(ifmap.shape)
+    for c in range(ci):
+        grad_ifmap[:, c, :, :] = (grad_ofmap[:, c, :, :] - grad_mean[c] - dx[:, c, :, :]) * invstd[c] * weight[c]
+    grad_weight = dotp * invstd
+    grad_bias = sum
+    
+    return grad_ifmap, grad_weight, grad_bias
+
+    
+    # grad_weight = torch.zeros(ci)
+    # grad_x_hat = torch.zeros(ifmap.shape)
+    # grad_var = torch.zeros(ci)
+    # grad_mean = torch.zeros(ci)
+    # grad_ifmap = torch.zeros(ifmap.shape)
+    
+    # for c in range(ci):
+    #     grad_weight[c] += torch.sum(grad_ofmap[:, c, :, :] * ((ifmap[:, c, :, :] - current_mean[c]) * invstd[c]))
+    
+    # for c in range(ci):
+    #     grad_x_hat[:, c, :, :] = grad_ofmap[:, c, :, :] * weight[c]
+    
+    # for c in range(ci):
+    #     grad_var[c] = torch.sum(grad_x_hat[:, c, :, :] * (ifmap[:, c, :, :] - current_mean[c]) * (-0.5) * invstd[c]**1.5)
+    #     grad_mean[c] = torch.sum(grad_x_hat[:, c, :, :] * -1 * invstd[c])
+    
+    #     grad_ifmap[:, c, :, :] = grad_x_hat[:, c, :, :] * invstd[c] \
+    #                             + grad_var[c] * 2 * (ifmap[:, c, :, :] - current_mean[c]) / n \
+    #                             + grad_mean[c] / n
+    
+    # # dy * w * invstd - (sum of dy * w) * invstd/ N - (sum of dy * (x - mean)) * invstd * invstd * invstd * w / N
+    # # dy * invstd * w - sum / N * invstd * w - (x - mean) * dotp * invstd * invstd / N * invstd * w;
+    # # (dy - sum / N - (x - mean) * dotp * invstd * invstd / N) * invstd * w;
+    # # (dy - sum / N - (x - mean) * k) * invstd * w;
+    # # (dy - sum / N - dx) * invstd * w;
+    
+    # for c in range(ci):
+    #     grad_ifmap[:, c, :, :] = grad_ofmap[:, c, :, :] -  * weight[c] * invstd[c]
+        
 
 
 def emit_header(**kwargs):
@@ -122,6 +192,9 @@ def emit_header(**kwargs):
         dtype=torch_dtype,
         requires_grad=True
     )
+    current_mean = torch.mean(ifmap, (0, 2, 3))
+    current_var = torch.var(ifmap, (0, 2, 3), correction=0)
+    
     with torch.no_grad():
         ofmap = golden_model_eval(
             ifmap, eps, running_mean, running_var, weight, bias, torch_dtype
@@ -131,14 +204,18 @@ def emit_header(**kwargs):
         dtype=torch_dtype,
         requires_grad=False )
     grad_ifmap, grad_weight, grad_bias = golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, torch_dtype)
+    grad_ifmap_training, grad_weight_training, grad_bias_training = golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, torch_dtype)
+    print(grad_ifmap_training.shape)
+    
     # consider .detach().numpy()
 
     with torch.no_grad():
-        # convert from CHW to HWC format
+        # convert from NCHW to NHWC format
         ifmap = ifmap.permute(0, 2, 3, 1)
         ofmap = ofmap.permute(0, 2, 3, 1)
         grad_ofmap = grad_ofmap.permute(0,2,3,1)
         grad_ifmap = grad_ifmap.permute(0,2,3,1)
+        grad_ifmap_training = grad_ifmap_training.permute(0,2,3,1)
 
         batch_size, ih, iw, ci = ifmap.shape
 
@@ -146,6 +223,8 @@ def emit_header(**kwargs):
         ofmap_uid = "ofmap"
         beta_uid = "beta"
         gamma_uid = "gamma"
+        current_mean_uid = "current_mean"
+        current_var_uid = "current_var"
         running_mean_uid = "running_mean"
         running_var_uid = "running_var"
         weight_uid = "weight"
@@ -155,6 +234,9 @@ def emit_header(**kwargs):
         grad_ifmap_uid = "grad_ifmap"
         grad_weight_uid = "grad_weight"
         grad_bias_uid = "grad_bias"
+        grad_ifmap_training_uid = "grad_ifmap_training"
+        grad_weight_training_uid = "grad_weight_training"
+        grad_bias_training_uid = "grad_bias_training"
 
 
         layer_cfg = {
@@ -186,6 +268,22 @@ def emit_header(**kwargs):
             "dtype": PRECISION_T[prec],
         }
 
+        backward_training_layer_cfg = {
+            "CI": ci,
+            "IH": ih,
+            "IW": iw,
+            "ifmap": ifmap_uid,
+            "grad_ofmap": grad_ofmap_uid,
+            "current_mean": current_mean_uid,
+            "current_var": current_var_uid,
+            "weight": weight_uid,
+            "grad_ifmap": grad_ifmap_training_uid,
+            "grad_weight": grad_weight_training_uid,
+            "grad_bias": grad_bias_training_uid,
+            "eps": eps,
+            "dtype": PRECISION_T[prec],
+        }
+
         # training_layer_cfg = {
         #     "CI": ci,
         #     "IH": ih,
@@ -207,14 +305,19 @@ def emit_header(**kwargs):
         data_str += [format_array_declaration(ctype, ofmap_uid, ofmap.shape)]
         data_str += [format_array_declaration(ctype, beta_uid, beta.shape)]
         data_str += [format_array_declaration(ctype, gamma_uid, gamma.shape)]
+        data_str += [format_array_declaration(ctype, current_mean_uid, current_mean.shape)]
+        data_str += [format_array_declaration(ctype, current_var_uid, current_var.shape)]
         data_str += [format_array_declaration(ctype, running_mean_uid, running_mean.shape)]
         data_str += [format_array_declaration(ctype, running_var_uid, running_var.shape)]
         data_str += [format_array_declaration(ctype, weight_uid, weight.shape)]
         data_str += [format_array_declaration(ctype, bias_uid, bias.shape)]
         data_str += [format_array_declaration(ctype, grad_ifmap_uid, grad_ifmap.shape)]
-        data_str += [format_array_declaration(ctype, grad_ofmap_uid, grad_ofmap.shape)]
         data_str += [format_array_declaration(ctype, grad_weight_uid, grad_weight.shape)]
         data_str += [format_array_declaration(ctype, grad_bias_uid, grad_bias.shape)]
+        data_str += [format_array_declaration(ctype, grad_ofmap_uid, grad_ofmap.shape)]
+        data_str += [format_array_declaration(ctype, grad_ifmap_training_uid, grad_ifmap_training.shape)]
+        data_str += [format_array_declaration(ctype, grad_weight_training_uid, grad_weight_training.shape)]
+        data_str += [format_array_declaration(ctype, grad_bias_training_uid, grad_bias_training.shape)]
         data_str += [format_array_declaration(ctype, "temp", (8,ci))]
         # Layer struct
         data_str += [format_struct_definition("batchnorm_layer_t", "layer", layer_cfg)]
@@ -223,10 +326,17 @@ def emit_header(**kwargs):
                 "batchnorm_backward_layer_t", "backward_layer", backward_layer_cfg
             )
         ]
+        data_str += [
+            format_struct_definition(
+                "batchnorm_backward_training_layer_t", "backward_training_layer", backward_training_layer_cfg
+            )
+        ]
         # Array definitions
         data_str += [format_array_definition(ctype, ifmap_uid, ifmap)]
         data_str += [format_array_definition(ctype, beta_uid, beta)]
         data_str += [format_array_definition(ctype, gamma_uid, gamma)]
+        data_str += [format_array_definition(ctype, current_mean_uid, current_mean)]
+        data_str += [format_array_definition(ctype, current_var_uid, current_var)]
         data_str += [format_array_definition(ctype, running_mean_uid, running_mean)]
         data_str += [format_array_definition(ctype, running_var_uid, running_var)]
         data_str += [format_array_definition(ctype, weight_uid, weight)]

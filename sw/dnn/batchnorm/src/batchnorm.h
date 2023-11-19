@@ -877,7 +877,6 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         curr_var_load = snrt_dma_start_1d(invstd, l->current_var,
                                           C * sizeof(double));
         snrt_dma_wait(curr_var_load);
-        return;
     } else {
         snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
                          num_compute_cores * sizeof(double));
@@ -927,6 +926,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     //     return;
     // } else {
     for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        invstd[channel] = 1 / sqrt(l->current_var[channel] + eps);
         sum[channel] = 0;
         dotp[channel] = 0;
         for (uint32_t i = 0; i < num_points; i++) {

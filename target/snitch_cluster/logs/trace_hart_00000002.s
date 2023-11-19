@@ -693,7 +693,7 @@
            1282000    0x8000218c csrs    unknown_7c2, zero      #; csr@7c2 = 0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:928)
-#;     for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+#;     // } else {
            1285000    0x80002190 sltu    a6, s4, s2             #; s4  = 2, s2  = 4, (wrb) a6  <-- 1
            1286000    0x80002194 bgeu    s4, s2, pc + 276       #; s4  = 2, s2  = 4, not taken
            1287000    0x80002198 beqz    t6, pc + 284           #; t6  = 4, not taken
@@ -707,7 +707,7 @@
            1331000    0x800021a4 lw      s3, 20(t3)             #; t3  = 0x80006f60, s3  <~~ Word[0x80006f74]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:928)
-#;     for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+#;     // } else {
            1332000    0x800021a8 add     s7, a0, t1             #; a0  = 0x80006d88, t1  = 16, (wrb) s7  <-- 0x80006d98
            1333000    0x800021ac mul     a0, t0, a7             #; t0  = 2, a7  = 2
            1336000                                              #; (acc) a0  <-- 4
@@ -717,19 +717,19 @@
                  M    0x800021b8 fcvt.d.w ft0, zero             #; ac1  = 0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1341000    0x800021c0 li      a1, 0                  #; (wrb) a1  <-- 0
                  M                                              #; (f:fpu) ft0  <-- 0.0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:929)
-#;     sum[channel] = 0;
+#;     for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
            1342000    0x800021c4 slli    a3, s5, 3              #; s5  = 2, (wrb) a3  <-- 16
            1343000    0x800021c8 add     a5, t5, a3             #; t5  = 0x10000020, a3  = 16, (wrb) a5  <-- 0x10000030
            1344000    0x800021cc sw      zero, 0(a5)            #; a5  = 0x10000030, 0 ~~> Word[0x10000030]
            1345000    0x800021d0 sw      zero, 4(a5)            #; a5  = 0x10000030, 0 ~~> Word[0x10000034]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:930)
-#;     dotp[channel] = 0;
+#;     sum[channel] = 0;
            1346000    0x800021d4 add     a0, t4, a3             #; t4  = 0x10000040, a3  = 16, (wrb) a0  <-- 0x10000050
            1347000    0x800021d8 sw      zero, 0(a0)            #; a0  = 0x10000050, 0 ~~> Word[0x10000050]
            1350000                                              #; (lsu) s3  <-- 0x80006f98
@@ -737,23 +737,23 @@
            1352000    0x800021e0 add     s1, s3, a3             #; s3  = 0x80006f98, a3  = 16, (wrb) s1  <-- 0x80006fa8
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1353000    0x800021e4 mv      a3, t6                 #; t6  = 4, (wrb) a3  <-- 4
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1356000    0x800021f0 add     a2, s8, a1             #; s8  = 0x80006e90, a1  = 0, (wrb) a2  <-- 0x80006e90
                  M    0x800021e8 fsgnj.d ft1, ft0, ft0          #; ft0  = 0.0, ft0  = 0.0
            1357000    0x800021ec fsgnj.d ft2, ft0, ft0          #; ft0  = 0.0, ft0  = 0.0, (f:fpu) ft1  <-- 0.0
            1358000                                              #; (f:fpu) ft2  <-- 0.0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1360000    0x80002200 add     s0, s7, a1             #; s7  = 0x80006d98, a1  = 0, (wrb) s0  <-- 0x80006d98
                  M    0x800021f4 fld     ft3, 0(a2)             #; ft3  <~~ Doub[0x80006e90]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:931)
-#;     for (uint32_t i = 0; i < num_points; i++) {
+#;     dotp[channel] = 0;
            1368000    0x80002220 addi    a3, a3, -1             #; a3  = 4, (wrb) a3  <-- 3
            1369000    0x80002224 add     a1, a1, s6             #; a1  = 0, s6  = 32, (wrb) a1  <-- 32
                  M                                              #; (f:lsu) ft3  <-- -0.2869266
@@ -761,27 +761,27 @@
                  M    0x800021f8 fadd.d  ft2, ft2, ft3          #; ft2  = 0.0, ft3  = -0.2869266
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1371000    0x800021f0 add     a2, s8, a1             #; s8  = 0x80006e90, a1  = 32, (wrb) a2  <-- 0x80006eb0
            1373000                                              #; (f:fpu) ft2  <-- -0.2869266
            1374000    0x800021fc fsd     ft2, 0(a5)             #; -0.2869266 ~~> Doub[0x10000030]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1375000    0x80002200 add     s0, s7, a1             #; s7  = 0x80006d98, a1  = 32, (wrb) s0  <-- 0x80006db8
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:931)
-#;     for (uint32_t i = 0; i < num_points; i++) {
+#;     dotp[channel] = 0;
            1383000    0x80002220 addi    a3, a3, -1             #; a3  = 3, (wrb) a3  <-- 2
            1384000    0x80002224 add     a1, a1, s6             #; a1  = 32, s6  = 32, (wrb) a1  <-- 64
            1385000    0x80002228 bnez    a3, pc - 56            #; a3  = 2, taken, goto 0x800021f0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1386000    0x800021f0 add     a2, s8, a1             #; s8  = 0x80006e90, a1  = 64, (wrb) a2  <-- 0x80006ed0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1389000    0x80002204 fld     ft3, 0(s0)             #; ft3  <~~ Doub[0x80006d98]
            1398000                                              #; (f:lsu) ft3  <-- 0.0840302
            1409000    0x80002208 fld     ft4, 0(s1)             #; ft4  <~~ Doub[0x80006fa8]
@@ -789,11 +789,11 @@
            1418000                                              #; (f:lsu) ft4  <-- 0.1925215
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1429000    0x8000220c fld     ft5, 0(a2)             #; ft5  <~~ Doub[0x80006e90]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1430000    0x80002210 fsub.d  ft3, ft3, ft4          #; ft3  = 0.0840302, ft4  = 0.1925215
            1433000                                              #; (f:fpu) ft3  <-- -0.1084913
            1438000                                              #; (f:lsu) ft5  <-- -0.2869266
@@ -801,19 +801,19 @@
            1442000                                              #; (f:fpu) ft3  <-- 0.0311291
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1443000    0x80002218 fadd.d  ft1, ft1, ft3          #; ft1  = 0.0, ft3  = 0.0311291
            1446000                                              #; (f:fpu) ft1  <-- 0.0311291
            1447000    0x8000221c fsd     ft1, 0(a0)             #; 0.0311291 ~~> Doub[0x10000050]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1450000    0x800021f4 fld     ft3, 0(a2)             #; ft3  <~~ Doub[0x80006eb0]
            1459000                                              #; (f:lsu) ft3  <-- 0.6076122
            1460000    0x800021f8 fadd.d  ft2, ft2, ft3          #; ft2  = -0.2869266, ft3  = 0.6076122
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:931)
-#;     for (uint32_t i = 0; i < num_points; i++) {
+#;     dotp[channel] = 0;
            1463000    0x80002220 addi    a3, a3, -1             #; a3  = 2, (wrb) a3  <-- 1
                  M                                              #; (f:fpu) ft2  <-- 0.3206856
            1464000    0x80002224 add     a1, a1, s6             #; a1  = 64, s6  = 32, (wrb) a1  <-- 96
@@ -821,11 +821,11 @@
            1465000    0x80002228 bnez    a3, pc - 56            #; a3  = 1, taken, goto 0x800021f0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1466000    0x800021f0 add     a2, s8, a1             #; s8  = 0x80006e90, a1  = 96, (wrb) a2  <-- 0x80006ef0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1479000    0x80002204 fld     ft3, 0(s0)             #; ft3  <~~ Doub[0x80006db8]
            1488000                                              #; (f:lsu) ft3  <-- 0.3900035
            1499000    0x80002208 fld     ft4, 0(s1)             #; ft4  <~~ Doub[0x80006fa8]
@@ -833,11 +833,11 @@
            1508000                                              #; (f:lsu) ft4  <-- 0.1925215
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1510000    0x8000220c fld     ft5, 0(a2)             #; ft5  <~~ Doub[0x80006eb0]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1511000    0x80002210 fsub.d  ft3, ft3, ft4          #; ft3  = 0.3900035, ft4  = 0.1925215
            1514000                                              #; (f:fpu) ft3  <-- 0.1974820
            1519000                                              #; (f:lsu) ft5  <-- 0.6076122
@@ -845,19 +845,19 @@
            1523000                                              #; (f:fpu) ft3  <-- 0.1199925
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1524000    0x80002218 fadd.d  ft1, ft1, ft3          #; ft1  = 0.0311291, ft3  = 0.1199925
            1527000                                              #; (f:fpu) ft1  <-- 0.1511215
            1528000    0x8000221c fsd     ft1, 0(a0)             #; 0.1511215 ~~> Doub[0x10000050]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1539000    0x800021f4 fld     ft3, 0(a2)             #; ft3  <~~ Doub[0x80006ed0]
            1548000                                              #; (f:lsu) ft3  <-- 0.6058412
            1549000    0x800021f8 fadd.d  ft2, ft2, ft3          #; ft2  = 0.3206856, ft3  = 0.6058412
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:931)
-#;     for (uint32_t i = 0; i < num_points; i++) {
+#;     dotp[channel] = 0;
            1552000    0x80002220 addi    a3, a3, -1             #; a3  = 1, (wrb) a3  <-- 0
                  M                                              #; (f:fpu) ft2  <-- 0.9265268
            1553000    0x80002224 add     a1, a1, s6             #; a1  = 96, s6  = 32, (wrb) a1  <-- 128
@@ -865,7 +865,7 @@
            1554000    0x80002228 bnez    a3, pc - 56            #; a3  = 0, not taken
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:928)
-#;     for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+#;     // } else {
            1555000    0x8000222c addi    s5, s5, 8              #; s5  = 2, (wrb) s5  <-- 10
            1556000    0x80002230 addi    s7, s7, 64             #; s7  = 0x80006d98, (wrb) s7  <-- 0x80006dd8
            1557000    0x80002234 addi    s8, s8, 64             #; s8  = 0x80006e90, (wrb) s8  <-- 0x80006ed0
@@ -873,7 +873,7 @@
            1559000    0x8000223c j       pc + 0xdc              #; goto 0x80002318
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:937)
-#;     DUMP(1);
+#;     }
            1562000    0x80002318 csrwi   unknown_7c3, 1         #; 
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:938)
@@ -882,18 +882,18 @@
            1563000    0x8000231c csrs    unknown_7c2, zero      #; csr@7c2 = 0
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1570000    0x80002204 fld     ft3, 0(s0)             #; ft3  <~~ Doub[0x80006dd8]
            1579000                                              #; (f:lsu) ft3  <-- -0.5798415
            1580000    0x80002208 fld     ft4, 0(s1)             #; ft4  <~~ Doub[0x80006fa8]
            1589000                                              #; (f:lsu) ft4  <-- 0.1925215
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1599000    0x8000220c fld     ft5, 0(a2)             #; ft5  <~~ Doub[0x80006ed0]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1600000    0x80002210 fsub.d  ft3, ft3, ft4          #; ft3  = -0.5798415, ft4  = 0.1925215
            1603000                                              #; (f:fpu) ft3  <-- -0.7723630
            1608000                                              #; (f:lsu) ft5  <-- 0.6058412
@@ -901,13 +901,13 @@
            1612000                                              #; (f:fpu) ft3  <-- -0.4679293
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1613000    0x80002218 fadd.d  ft1, ft1, ft3          #; ft1  = 0.1511215, ft3  = -0.4679293
            1616000                                              #; (f:fpu) ft1  <-- -0.3168078
            1617000    0x8000221c fsd     ft1, 0(a0)             #; -0.3168078 ~~> Doub[0x10000050]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:932)
-#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
+#;     for (uint32_t i = 0; i < num_points; i++) {
            1620000    0x800021f4 fld     ft3, 0(a2)             #; ft3  <~~ Doub[0x80006ef0]
            1629000                                              #; (f:lsu) ft3  <-- 1.3109622
            1630000    0x800021f8 fadd.d  ft2, ft2, ft3          #; ft2  = 0.9265268, ft3  = 1.3109622
@@ -915,24 +915,24 @@
            1634000    0x800021fc fsd     ft2, 0(a5)             #; 2.2374890 ~~> Doub[0x10000030]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1649000    0x80002204 fld     ft3, 0(s0)             #; ft3  <~~ Doub[0x80006df8]
            1658000                                              #; (f:lsu) ft3  <-- 0.8758939
            1659000    0x80002208 fld     ft4, 0(s1)             #; ft4  <~~ Doub[0x80006fa8]
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1660000    0x8000220c fld     ft5, 0(a2)             #; ft5  <~~ Doub[0x80006ef0]
            1668000                                              #; (f:lsu) ft4  <-- 0.1925215
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:934)
-#;     * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
            1669000    0x80002210 fsub.d  ft3, ft3, ft4          #; ft3  = 0.8758939, ft4  = 0.1925215, (f:lsu) ft5  <-- 1.3109622
            1672000                                              #; (f:fpu) ft3  <-- 0.6833724
            1673000    0x80002214 fmul.d  ft3, ft5, ft3          #; ft5  = 1.3109622, ft3  = 0.6833724
            1676000                                              #; (f:fpu) ft3  <-- 0.8958753
 #; main (main.c:10)
 #;   batchnorm_backward_training (batchnorm.h:933)
-#;     dotp[channel] += l->grad_ofmap[i * num_points + channel]
+#;     sum[channel] += l->grad_ofmap[i * num_points + channel];
            1677000    0x80002218 fadd.d  ft1, ft1, ft3          #; ft1  = -0.3168078, ft3  = 0.8958753
            1680000                                              #; (f:fpu) ft1  <-- 0.5790675

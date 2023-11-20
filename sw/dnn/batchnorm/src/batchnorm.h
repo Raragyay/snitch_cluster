@@ -391,7 +391,7 @@ static inline void batchnorm_backward_tile_fp64(
                   [ weight_times_invstd ] "fr"(weight_times_invstd),
                   [ invstd ] "fr"(invstd), [ zero ] "fr"(ZERO),
                   [ n_frep ] "r"(num_points_work_in_tile / 3 -
-                                 1)  // we repeat n_frep+1 times
+                               1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",
                   "ft8");
         }
@@ -429,7 +429,7 @@ static inline void batchnorm_backward_tile_fp64(
                     "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
                     "fmul.d ft1, ft3, %[weight_times_invstd]\n"
                     "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
-                    : [ grad_weight_0 ] "+fr"(grad_weight_0),
+                    : [ grad_weight_0 ] "+fr"(grad_weight_0), 
                       [ grad_bias_0 ] "+fr"(grad_bias_0)
                     : [ running_mean_times_invstd ] "fr"(
                           running_mean_times_invstd),
@@ -609,7 +609,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 :
                 : [ eps ] "fr"(eps), [ ONE ] "fr"(ONE),
                   [ n_frep ] "r"(num_channels_work_for_core -
-                                 1)  // we repeat n_frep+1 times
+                               1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2", "ft3");
 
             snrt_fpu_fence();                     // thought: do we need this?
@@ -645,7 +645,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "fmul.d ft1, ft0, ft2 \n"
                 :
                 : [ n_frep ] "r"(num_channels_work_for_core -
-                                 1)  // we repeat n_frep+1 times
+                               1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
@@ -661,7 +661,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                                            // running_mean * invstd
                 :
                 : [ n_frep ] "r"(num_channels_work_for_core -
-                                 1)  // we repeat n_frep+1 times
+                               1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
             snrt_fpu_fence();                     // thought: do we need this?
@@ -794,10 +794,17 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
                 "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
                 // NOTE: floating point addition is 3 cycles, causing stalls
+<<<<<<< HEAD
                 // here. But pretty small compared to the big loop.
                 : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
                                                        grad_weight_sum)
                 : [n_frep] "r"(num_compute_cores -
+=======
+                // here
+                : [ bias_sum ] "+fr"(grad_bias_sum), 
+                  [ weight_sum ] "+fr"(grad_weight_sum)
+                : [ n_frep ] "r"(num_compute_cores -
+>>>>>>> parent of 91a053b (clean (lint))
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
             snrt_fpu_fence();
@@ -840,7 +847,7 @@ static inline void batchnorm_backward_training(
         get_core_num_work_items(C, num_compute_cores, compute_id);
     uint32_t num_points_work_per_channel_for_core =
         get_core_num_work_items(num_points, num_compute_cores, compute_id);
-
+    
     uint32_t grad_weight_len = C * num_compute_cores,
              sum_len = C * num_compute_cores, dotp_len = C * num_compute_cores;
     uint32_t grad_ofmap_len = num_data, grad_ifmap_len = num_data,
@@ -848,7 +855,7 @@ static inline void batchnorm_backward_training(
 
     // Using TCDM as scratchpad
     double *ptr = (double *)snrt_l1_start_addr();
-
+    
     // Intermediate value
     double *invstd = ptr;
     ptr += C;
@@ -888,11 +895,11 @@ static inline void batchnorm_backward_training(
 
     uint32_t start_dma_load = snrt_mcycle();
     if (snrt_is_dm_core()) {
-        curr_var_load =
+        curr_var_load = 
             snrt_dma_start_1d(invstd, l->current_var, C * sizeof(double));
-        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap, l->grad_ofmap,
+        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap, l->grad_ofmap, 
                                             grad_ofmap_len * sizeof(double));
-        ifmap_load =
+        ifmap_load = 
             snrt_dma_start_1d(ifmap, l->ifmap, ifmap_len * sizeof(double));
         curr_mean_load = 
             snrt_dma_start_1d(curr_mean, l->current_mean, C * sizeof(double));
@@ -942,10 +949,10 @@ static inline void batchnorm_backward_training(
             snrt_ssr_loop_2d(
                 SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core, C,
                 num_compute_cores * C * sizeof(double), sizeof(double));
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D,
-                          &grad_ofmap[compute_id * C + 0]);
-            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D,
-                          &ifmap[compute_id * C + 0]);
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, 
+                         &grad_ofmap[compute_id * C + 0]);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, 
+                         &ifmap[compute_id * C + 0]);
             for (uint32_t channel = 0; channel < C; ++channel) {
                 register volatile double sum_reg = 0;
                 register volatile double dotp_reg = 0;
@@ -959,7 +966,7 @@ static inline void batchnorm_backward_training(
                     "fmul.d %[dotp], ft3, %[sum]\n"
                     : [ sum ] "+fr"(sum_reg), [ dotp ] "+fr"(dotp_reg)
                     : [ curr_mean ] "fr"(curr_mean_reg), [ zero ] "fr"(ZERO),
-                      [ n_frep ] "r"(num_points_work_per_channel_for_core - 1)
+                    [ n_frep ] "r"(num_points_work_per_channel_for_core - 1)
                     : "ft0", "ft1", "ft2", "ft3");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
@@ -1013,7 +1020,7 @@ static inline void batchnorm_backward_training(
             const register double ZERO = 0;
             snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
                              C * sizeof(double));
-
+            
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &grad_weight[compute_id]);
             snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, &dotp[compute_id]);
@@ -1021,7 +1028,7 @@ static inline void batchnorm_backward_training(
             asm volatile(
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fmul.d ft1, ft0, ft2 \n"
-                :
+                : 
                 : [ n_frep ] "r"(num_channels_work_for_core - 1)
                 : "ft0", "ft1", "ft2");
             snrt_fpu_fence();
@@ -1036,7 +1043,7 @@ static inline void batchnorm_backward_training(
                 "frep.o %[n_frep], 2, 0, 0 \n"
                 "fmul.d ft3, ft0, ft2 \n"
                 "fdiv.d ft1, ft3, %[num_points] \n"
-                :
+                : 
                 : [ n_frep ] "r"(num_channels_work_for_core - 1),
                   [ num_points ] "fr"(num_points_reg), [ zero ] "fr"(ZERO)
                 : "ft0", "ft1", "ft2", "ft3", "ft4");
@@ -1050,7 +1057,7 @@ static inline void batchnorm_backward_training(
             asm volatile(
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fdiv.d ft1, ft0, %[num_points] \n"
-                :
+                : 
                 : [ n_frep ] "r"(num_channels_work_for_core - 1),
                   [ num_points ] "fr"(num_points_reg)
                 : "ft0", "ft1", "ft2");
@@ -1070,8 +1077,7 @@ static inline void batchnorm_backward_training(
             snrt_ssr_loop_2d(
                 SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core, C,
                 num_compute_cores * C * sizeof(double), sizeof(double));
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, 
-                          &ifmap[compute_id * C + 0]);
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &ifmap[compute_id * C + 0]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
                            &grad_ifmap[compute_id * C + 0]);
             snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D,
@@ -1093,8 +1099,8 @@ static inline void batchnorm_backward_training(
                     "fmul.d ft1, ft4, %[weight] \n"
                     :
                     : [ curr_mean ] "fr"(curr_mean_reg), [ k ] "fr"(k_reg),
-                      [ grad_mean ] "fr"(grad_mean_reg),
-                      [ invstd ] "fr"(invstd_reg), [ weight ] "fr"(weight_reg),
+                      [ grad_mean ] "fr"(grad_mean_reg), [ invstd ] "fr"(invstd_reg),
+                      [ weight ] "fr"(weight_reg),
                       [ n_frep ] "r"(num_points_work_per_channel_for_core - 1)
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 snrt_fpu_fence();

@@ -14,6 +14,8 @@ import sys
 import os
 import torch
 import data_utils  # noqa: E402
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../util/sim/"))
 from data_utils import (
     emit_license,
     format_struct_definition,
@@ -21,8 +23,6 @@ from data_utils import (
     format_array_declaration,
     format_ifdef_wrapper,
 )  # noqa: E402
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../util/sim/"))
 
 torch.manual_seed(42)
 
@@ -56,8 +56,8 @@ def golden_model_training(ifmap, eps, momentum, running_mean, running_var, weigh
     return ofmap, bn.running_mean, bn.running_var
 
 
-def golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, 
-                          running_var, eps, dtype) -> (torch.Tensor, torch.Tensor, torch.Tensor):
+def golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype)\
+    -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
     bn.weight = weight
@@ -71,8 +71,7 @@ def golden_model_backward(ifmap, grad_ofmap, weight, bias, running_mean,
     return ifmap.grad, bn.weight.grad, bn.bias.grad
 
 
-def golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, dtype) \
-        -> (torch.Tensor, torch.Tensor, torch.Tensor):
+def golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, dtype) ->(torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
     bn.weight = weight
@@ -83,9 +82,9 @@ def golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, dtype) 
     return ifmap.grad, bn.weight.grad, bn.bias.grad
 
 
-def my_golden_model_backward_training(ifmap, grad_ofmap, weight, bias,
-                                      current_mean, current_var, eps, dtype) \
-        -> (torch.Tensor, torch.Tensor, torch.Tensor):
+def my_golden_model_backward_training(ifmap, grad_ofmap, weight, bias, \
+    current_mean, current_var, eps, dtype)\
+    -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     num_points = n*ih*iw
     invstd = torch.rsqrt(current_var + eps)
@@ -166,9 +165,8 @@ def emit_header(**kwargs):
         )
 
     grad_ofmap = torch.randn_like(ofmap, dtype=torch_dtype, requires_grad=False)
-    grad_ifmap, grad_weight, grad_bias \
-        = golden_model_backward(ifmap, grad_ofmap, weight, bias,
-                                running_mean, running_var, eps, torch_dtype)
+    grad_ifmap, grad_weight, grad_bias = golden_model_backward(ifmap, grad_ofmap, weight, bias, \
+        running_mean, running_var, eps, torch_dtype)
     grad_ifmap_training, grad_weight_training, grad_bias_training \
         = golden_model_backward_training(ifmap, grad_ofmap, weight, bias, eps, torch_dtype)
     print(grad_ifmap_training.shape)
@@ -278,11 +276,11 @@ def emit_header(**kwargs):
         data_str += [format_array_declaration(ctype, grad_weight_uid, grad_weight.shape)]
         data_str += [format_array_declaration(ctype, grad_bias_uid, grad_bias.shape)]
         data_str += [format_array_declaration(ctype, grad_ofmap_uid, grad_ofmap.shape)]
-        data_str += [format_array_declaration(ctype, grad_ifmap_training_uid,
+        data_str += [format_array_declaration(ctype, grad_ifmap_training_uid, 
                                               grad_ifmap_training.shape)]
-        data_str += [format_array_declaration(ctype, grad_weight_training_uid,
+        data_str += [format_array_declaration(ctype, grad_weight_training_uid, 
                                               grad_weight_training.shape)]
-        data_str += [format_array_declaration(ctype, grad_bias_training_uid,
+        data_str += [format_array_declaration(ctype, grad_bias_training_uid, 
                                               grad_bias_training.shape)]
         data_str += [format_array_declaration(ctype, "temp", (8, ci))]
         # Layer struct

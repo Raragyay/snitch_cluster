@@ -989,6 +989,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     snrt_cluster_hw_barrier();
 
     if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_bias, sum, C * sizeof(double));
     } else if (snrt_is_compute_core()) {
         if (num_channels_work_for_core > 0) {
             uint32_t start_compute_k_grad_mean = snrt_mcycle();
@@ -996,15 +997,27 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
             const register double ZERO = 0;
             snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core, C * sizeof(double));
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
-            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &k[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &grad_weight[compute_id]);
             snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, &dotp[compute_id]);
             snrt_ssr_enable();
             asm volatile(
-                "frep.o %[n_frep], 4, 0, 0 \n"
-                "fadd.d ft3, ft0, %[zero] \n"
-                "fmul.d ft3, ft3, ft3 \n"
-                "fdiv.d ft4, ft2, %[num_points] \n"
-                "fmul.d ft1, ft3, ft4 \n"
+                "frep.o %[n_frep], 1, 0, 0 \n"
+                "fmul.d ft1, ft0, ft2 \n"
+                : 
+                : [n_frep] "r"(num_channels_work_for_core - 1)
+                : "ft0", "ft1", "ft2");
+            snrt_fpu_fence();
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
+            snrt_ssr_disable();
+
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &k[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, &grad_weight[compute_id]);
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 2, 0, 0 \n"
+                "fmul.d ft3, ft0, ft2 \n"
+                "fdiv.d ft1, ft3, %[num_points] \n"
                 : 
                 : [n_frep] "r"(num_channels_work_for_core - 1),
                   [num_points] "fr"(num_points_reg), [zero] "fr"(ZERO)
@@ -1029,13 +1042,54 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
             uint32_t end_compute_k_grad_mean = snrt_mcycle();
         }
     }
+    DUMP(0);
     snrt_cluster_hw_barrier();
 
+    // if (snrt_is_dm_core()) {
+    // } else {
+    //     if (num_points_work_per_channel_for_core > 0) {
+    //         uint32_t start_compute_grad_ifmap = snrt_mcycle();
+    //         snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core,
+    //                         C, num_compute_cores * C * sizeof(double),
+    //                         sizeof(double));
+    //         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &ifmap[compute_id * C + 0]);
+    //         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, &grad_ifmap[compute_id * C + 0]);
+    //         snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_2D, &grad_ofmap[compute_id * C + 0]);
+    //         for (uint32_t channel = 0; channel < C; ++channel) {
+    //             register double curr_mean_reg = curr_mean[channel];
+    //             register double k_reg = k[channel];
+    //             register double grad_mean_reg = grad_mean[channel];
+    //             register double invstd_reg = invstd[channel];
+    //             register double weight_reg = l->weight[channel];
+    //             snrt_ssr_enable();
+    //             asm volatile(
+    //                 "frep.o %[n_frep], 6, 0, 0 \n"
+    //                 "fsub.d ft3, ft0, %[curr_mean] \n"
+    //                 "fmul.d ft4, ft3, %[k] \n"
+    //                 "fsub.d ft4, ft2, ft4 \n"
+    //                 "fsub.d ft4, ft4, %[grad_mean] \n"
+    //                 "fmul.d ft4, ft4, %[invstd] \n"
+    //                 "fmul.d ft1, ft4, %[weight] \n"
+    //                 :
+    //                 : [curr_mean] "fr"(curr_mean_reg), [k] "fr"(k_reg),
+    //                   [grad_mean] "fr"(grad_mean_reg), [invstd] "fr"(invstd_reg),
+    //                   [weight] "fr"(weight_reg),
+    //                 [n_frep] "r"(num_points_work_per_channel_for_core - 1)
+    //                 : "ft0", "ft1", "ft2", "ft3", "ft4");
+    //             snrt_fpu_fence();
+    //             snrt_ssr_disable();
+    //         }
+    //         __builtin_ssr_barrier(SNRT_SSR_DM1);
+    //         uint32_t end_compute_grad_ifmap = snrt_mcycle();
+    //     }
+    // }
+    // DUMP(1);
+    // snrt_cluster_hw_barrier();
+
     if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_weight, grad_weight, C * sizeof(double));
         snrt_cluster_hw_barrier();
         snrt_cluster_hw_barrier();
-        snrt_cluster_hw_barrier();
-        return;
     } else if (snrt_is_compute_core()){
         for (uint32_t channel = 0; channel < C; channel++) {
             for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
@@ -1043,6 +1097,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                                             * k[channel];
             }
         }
+        DUMP(2);
         snrt_cluster_hw_barrier();
 
         for (uint32_t channel = 0; channel < C; channel++) {
@@ -1051,12 +1106,20 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                                                         * invstd[channel] * l->weight[channel];
             }
         }
+        DUMP(3);
         snrt_cluster_hw_barrier();
 
-        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-            l->grad_bias[channel] = sum[channel];
-            l->grad_weight[channel] = dotp[channel] * invstd[channel];
-        }
-        snrt_cluster_hw_barrier();
+        // for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+        //     l->grad_weight[channel] = dotp[channel] * invstd[channel];
+        // }
+        // snrt_cluster_hw_barrier();
     }
+
+    if (snrt_is_dm_core()) {
+        // snrt_dma_start_1d(l->grad_ifmap, grad_ifmap, C * num_points * sizeof(double));
+        snrt_dma_wait_all();
+    } else {
+    }
+    DUMP(4);
+    snrt_cluster_hw_barrier();
 }

@@ -12,6 +12,7 @@ from operator import itemgetter
 import numpy as np
 import torch
 from data.datagen import golden_model_backward_training
+import pickle
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
 import verification  # noqa: E402

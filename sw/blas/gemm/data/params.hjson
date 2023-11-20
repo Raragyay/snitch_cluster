@@ -5,9 +5,9 @@
 // Parameters for a GEMM
 
 {
-    M: 4,
+    M: 8,
     N: 4,
-    K: 4,
+    K: 8,
     beta: 0,
     ta: false,
     tb: false, // must be true for SIMD

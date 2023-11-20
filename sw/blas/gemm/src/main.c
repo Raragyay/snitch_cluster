@@ -8,14 +8,28 @@
 #define CEIL(x, y) ((((x) - 1) / (y)) + 1)
 #define MIN(x, y) ((x) < (y)?(x):(y))
 
-DATA_TYPE local[]={1,2,3,4,5,6,7,8,9,10};
+//#define SINGLE_CORE
+
+// DATA_TYPE local[]={1,2,3,4,5,6,7,8,9,10};
 
 int main(int argc, char *argv[]) {
+
+    // uint32_t M_odd = M%2;
+    // uint32_t N_odd = N%2;
+    // uint32_t K_odd = K%2;
 
     // Allocate space in TCDM
     uint32_t size_a = M * K * sizeof(DATA_TYPE);
     uint32_t size_b = K * N * sizeof(DATA_TYPE);
     uint32_t size_c = M * N * sizeof(DATA_TYPE);
+
+    // M += M_odd;
+    // N += N_odd;
+    // K += K_odd;
+
+    // uint32_t padded_size_a = M * K * sizeof(DATA_TYPE);
+    // uint32_t padded_size_b = K * N * sizeof(DATA_TYPE);
+    // uint32_t padded_size_c = M * N * sizeof(DATA_TYPE);
 
     DATA_TYPE *local_a, *local_b, *local_c;
     local_a = (DATA_TYPE *)snrt_l1_next();
@@ -35,6 +49,14 @@ int main(int argc, char *argv[]) {
 
     // Compute
     if (!snrt_is_dm_core()) {
+
+    // if (M_odd)
+    //     for (uint32_t i = 0; i < K; i++)
+    //         local_a[(M-1)*K + i] = 0.0;
+
+    // if (N_odd)
+    //     for (uint32_t i = 0; i < K; i++)
+    //         local_b[i*N + N-1] = 0.0;
 
     #ifdef SINGLE_CORE
     if (snrt_cluster_core_idx() == 0)
@@ -97,8 +119,9 @@ int main(int argc, char *argv[]) {
                 local_c[i*N +j] += t[i*N +j];
         }
         snrt_fpu_fence();
+
+#endif
     }
-    #endif
     snrt_cluster_hw_barrier();
 
     // Copy data out of TCDM

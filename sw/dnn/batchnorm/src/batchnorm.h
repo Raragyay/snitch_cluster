@@ -831,15 +831,24 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         get_core_num_work_items(num_points, num_compute_cores, compute_id);
     
     double eps = l->eps;
+
+
+    uint32_t grad_weight_len = C * num_compute_cores,
+             grad_bias_len = C * num_compute_cores,
+             sum_len = C * num_compute_cores,
+             dotp_len = C * num_compute_cores;
+    uint32_t grad_ofmap_len = num_data, 
+             grad_ifmap_len = num_data,
+             ifmap_len = num_data;
     
     // Intermediate
     double *ptr = (double *)snrt_l1_start_addr();
     double *invstd = ptr;
     ptr += C;
     double *sum = ptr;
-    ptr += C;
+    ptr += sum_len;
     double *dotp = ptr;
-    ptr += C;
+    ptr += dotp_len;
     double *k = ptr;
     ptr += C;
     double *grad_mean = ptr;
@@ -856,12 +865,6 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     ptr += num_data;
     double *ifmap = ptr;
     ptr += num_data;
-
-    uint32_t grad_weight_len = C * num_compute_cores,
-             grad_bias_len = C * num_compute_cores;
-    uint32_t grad_ofmap_len = num_data, 
-             grad_ifmap_len = num_data,
-             ifmap_len = num_data;
 
     // Output
     double *grad_ifmap = ptr;
@@ -880,7 +883,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         curr_var_load = snrt_dma_start_1d(invstd, l->current_var,
                                           C * sizeof(double));
         snrt_dma_wait(curr_var_load);
-    } else {
+    } else if (snrt_is_compute_core()) {
         snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
                          num_compute_cores * sizeof(double));
     }
@@ -890,11 +893,13 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     if (snrt_is_dm_core()) {
         grad_ofmap_load = snrt_dma_start_1d(grad_ofmap, l->grad_ofmap, grad_ofmap_len * sizeof(double));
         ifmap_load = snrt_dma_start_1d(ifmap, l->ifmap, ifmap_len * sizeof(double));
+        curr_mean_load = snrt_dma_start_1d(curr_mean, l->current_mean, C * sizeof(double));
         snrt_dma_wait(grad_ofmap_load);
         snrt_dma_wait(ifmap_load);
-    } else {
-        uint32_t start_compute_invstd_load = snrt_mcycle();
+        snrt_dma_wait(curr_mean_load);
+    } else if (snrt_is_compute_core()) {
         if (num_channels_work_for_core > 0) {
+            uint32_t start_compute_invstd_load = snrt_mcycle();
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &invstd[compute_id]);
             register double eps = l->eps;
@@ -914,63 +919,143 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
             snrt_fpu_fence();                     // thought: do we need this?
             __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
             snrt_ssr_disable();
-            uint32_t end_compute_invstd_load = snrt_mcycle();
+            uint32_t end_compute_invstd_load = snrt_mcycle();   
         }
     }
-    DUMP(0);
     snrt_cluster_hw_barrier();
 
     // if (snrt_is_dm_core()) {
-    //     snrt_cluster_hw_barrier();
-    //     snrt_cluster_hw_barrier();
-    //     snrt_cluster_hw_barrier();
-    //     snrt_cluster_hw_barrier();
-    //     snrt_cluster_hw_barrier();
-    //     return;
     // } else {
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        invstd[channel] = 1 / sqrt(l->current_var[channel] + eps);
-        sum[channel] = 0;
-        dotp[channel] = 0;
-        for (uint32_t i = 0; i < num_points; i++) {
-            sum[channel] += l->grad_ofmap[i * num_points + channel];
-            dotp[channel] += l->grad_ofmap[i * num_points + channel] 
-                        * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
-        }
-    }
-    DUMP(1);
-    snrt_cluster_hw_barrier();
+    //     if (num_points_work_per_channel_for_core > 0) {
+    //         uint32_t start_compute_sum_dotp_reduction_1 = snrt_mcycle();
+    //         for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+    //             register volatile double sum_reg = 0;
+    //             register volatile double dotp_reg = 0;
+    //             register double curr_mean_reg = curr_mean[channel];
+    //             const register double ZERO = 0;
+    //             snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, 
+    //                             num_points_work_per_channel_for_core,
+    //                             num_compute_cores * num_points * sizeof(double));
+    //             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &grad_ofmap[compute_id * num_points + channel]);
+    //             snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, &ifmap[compute_id * num_points + channel]);
+    //             snrt_ssr_enable();
+    //             asm volatile(
+    //                 "frep.o %[n_frep], 3, 0, 0 \n"
+    //                 "fadd.d %[sum], ft0, %[zero] \n"
+    //                 "fsub.d ft3, ft1, %[curr_mean]\n"
+    //                 "fmul.d %[dotp], ft3, %[sum]\n"
+    //                 : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
+    //                 : [curr_mean] "fr"(curr_mean_reg), [zero] "fr"(ZERO),
+    //                 [n_frep] "r"(num_points_work_per_channel_for_core -
+    //                             1)  // we repeat n_frep+1 times
+    //                 : "ft0", "ft1", "ft2", "ft3");
+    //             snrt_fpu_fence();
+    //             snrt_ssr_disable();
 
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        k[channel] = dotp[channel] * invstd[channel] * invstd[channel] / num_points;
-        grad_mean[channel] = sum[channel] / num_points;
-    }
-    DUMP(2);
-    snrt_cluster_hw_barrier();
-
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        for (uint32_t i = 0; i < num_points; i++ ) {
-            dx[i * num_points + channel] = (l->ifmap[i * num_points + channel] - l->current_mean[channel]) 
-                                        * k[channel];
-        }
-    }
-    DUMP(3);
-    snrt_cluster_hw_barrier();
-
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        for (uint32_t i = 0; i < num_points; i++) {
-            l->grad_ifmap[i * num_points + channel] = (l->grad_ofmap[i * num_points + channel] - grad_mean[channel] - dx[i * num_points + channel]) 
-                                                    * invstd[channel] * l->weight[channel];
-        }
-    }
-    DUMP(5);
-    snrt_cluster_hw_barrier();
-
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        l->grad_bias[channel] = sum[channel];
-        l->grad_weight[channel] = dotp[channel] * invstd[channel];
-    }
-    DUMP(6);
-    snrt_cluster_hw_barrier();
+    //             sum[compute_id * C + channel] = sum_reg;
+    //             dotp[compute_id * C + channel] = dotp_reg;
+    //         }
+    //         __builtin_ssr_barrier(SNRT_SSR_DM1);
+    //         uint32_t end_compute_sum_dotp_reduction_1 = snrt_mcycle();
+    //     }
     // }
+    // DUMP(0);
+    // snrt_cluster_hw_barrier();
+
+    // if (snrt_is_dm_core()) {
+    // } else {
+    //     if (num_compute_cores > 0) {
+    //         uint32_t start_compute_sum_dotp_reduction_2 = snrt_mcycle();
+    //         for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+    //             register volatile double sum_reg = 0;
+    //             register volatile double dotp_reg = 0;
+    //             snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores, C * sizeof(double));
+    //             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &sum[channel]);
+    //             snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, &dotp[channel]);
+    //             snrt_ssr_enable();
+    //             asm volatile(
+    //                 "frep.o %[n_frep], 2, 0, 0 \n"
+    //                 "fadd.d %[sum], ft0, %[sum] \n"
+    //                 "fadd.d %[dotp], ft1, %[dotp] \n"
+    //                 // NOTE: floating point addition is 3 cycles, causing stalls here
+    //                 : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
+    //                 : [n_frep] "r"(num_compute_cores - 1)  // we repeat n_frep+1 times
+    //                 : "ft0", "ft1", "ft2");
+    //             snrt_fpu_fence();
+    //             snrt_ssr_disable();
+    //             sum[channel] = sum_reg;
+    //             dotp[channel] = dotp_reg;
+    //         }
+    //         uint32_t end_compute_sum_dotp_reduction_2 = snrt_mcycle();
+    //     }
+    // }
+    // DUMP(1);
+    // snrt_cluster_hw_barrier();
+
+    if (snrt_is_dm_core()) {
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        snrt_cluster_hw_barrier();
+        // snrt_cluster_hw_barrier();
+        return;
+    } else {
+
+        uint32_t start_compute_sum_dotp_reduction_1 = snrt_mcycle();
+        for (uint32_t channel = 0; channel < C; channel++) {
+            sum[compute_id * C + channel] = 0;
+            dotp[compute_id * C + channel] = 0;
+            for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
+                sum[compute_id * C + channel] += l->grad_ofmap[i * C + channel];
+                dotp[compute_id * C + channel] += l->grad_ofmap[i * C + channel] 
+                            * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+            }
+        }
+        uint32_t end_compute_sum_dotp_reduction_1 = snrt_mcycle();
+        snrt_cluster_hw_barrier();
+
+        uint32_t start_compute_sum_dotp_reduction_2 = snrt_mcycle();
+        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+            double sum_acc = 0;
+            double dotp_acc = 0;
+            for (uint32_t core_id = 0; core_id < num_compute_cores; core_id++) {
+                sum_acc += sum[core_id * C + channel];
+                dotp_acc += dotp[core_id * C + channel];
+            }
+            sum[channel] = sum_acc;
+            dotp[channel] = dotp_acc;
+        }
+        uint32_t end_compute_sum_dotp_reduction_2 = snrt_mcycle();
+        snrt_cluster_hw_barrier();
+
+        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+            k[channel] = dotp[channel] * invstd[channel] * invstd[channel] / num_points;
+            grad_mean[channel] = sum[channel] / num_points;
+        }
+        snrt_cluster_hw_barrier();
+
+        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+            for (uint32_t i = 0; i < num_points; i++ ) {
+                dx[i * num_points + channel] = (l->ifmap[i * num_points + channel] - l->current_mean[channel]) 
+                                            * k[channel];
+            }
+        }
+        snrt_cluster_hw_barrier();
+
+        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+            for (uint32_t i = 0; i < num_points; i++) {
+                l->grad_ifmap[i * num_points + channel] = (l->grad_ofmap[i * num_points + channel] - grad_mean[channel] - dx[i * num_points + channel]) 
+                                                        * invstd[channel] * l->weight[channel];
+            }
+        }
+        snrt_cluster_hw_barrier();
+
+        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+            l->grad_bias[channel] = sum[channel];
+            l->grad_weight[channel] = dotp[channel] * invstd[channel];
+        }
+        snrt_cluster_hw_barrier();
+    }
 }

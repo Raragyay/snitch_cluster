@@ -11,7 +11,8 @@ from operator import itemgetter
 
 import numpy as np
 import torch
-from data.datagen import golden_model_backward_training
+from data.datagen import golden_model_backward_training, my_golden_model_backward_training
+from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
 import verification  # noqa: E402
@@ -21,6 +22,7 @@ from data_utils import (  # noqa: E402
     bytes_to_struct,
     floating_point_torch_type,
 )
+import pickle
 
 ERR_THRESHOLD = 1e-7
 
@@ -38,8 +40,7 @@ def extract_torch_arr(label, prec, dtype, shape: tuple, requires_grad=False):
     numpy_rep = numpy_rep.reshape(shape)
     return torch.tensor(numpy_rep, requires_grad=requires_grad)
 
-
-def check_correctness(test, golden, actual):
+def check_correctness(test, golden,actual):
     golden = golden.detach().numpy().flatten()
     actual = actual.detach().numpy().flatten()
     absolute_err = np.absolute(golden - actual)
@@ -54,7 +55,6 @@ def check_correctness(test, golden, actual):
         print(f"{test} verification passed.")
     return int(fail)
 
-
 def main():
     global elf
     # Run simulation and get outputs
@@ -66,8 +66,7 @@ def main():
         log=args.log,
         output_uids=["grad_ifmap_training", "grad_weight_training", "grad_bias_training", "temp"],
     )
-    with open(Path(__file__).parent/"batchnorm_backward_training_test_results"/"raw_results.pkl",
-              "wb") as f:
+    with open(Path(__file__).parent/"batchnorm_backward_training_test_results"/"raw_results.pkl", "wb") as f:
         pickle.dump(raw_results, f)
 
     print("Simulation complete. Verifying result...")
@@ -93,9 +92,8 @@ def main():
         "eps": "f",
         "dtype": "I",
     }
-    layer = bytes_to_struct(elf.get_symbol_contents("backward_training_layer"),
-                            backward_training_layer_struct)
-    CI, IH, IW = itemgetter("CI", "IH", "IW")(layer)
+    layer = bytes_to_struct(elf.get_symbol_contents("backward_training_layer"), backward_training_layer_struct)
+    CI, IH, IW= itemgetter("CI", "IH", "IW")(layer)
     eps = layer["eps"]
     prec = PRECISION_T[layer["dtype"]]
 
@@ -128,15 +126,20 @@ def main():
             bytes_to_float(raw_results["grad_bias_training"], prec), dtype=NUMPY_T[prec]
         ).reshape((CI,))
     )
-
+    temp = torch.from_numpy(
+        np.array(
+            bytes_to_float(raw_results["temp"], prec), dtype=NUMPY_T[prec]
+        ).reshape((8,CI))
+    )
+    
     # convert from NHWC to NCHW format
     ifmap = ifmap.permute(0, 3, 1, 2)
     ifmap.retain_grad()
-    grad_ofmap = grad_ofmap.permute(0, 3, 1, 2)
+    grad_ofmap = grad_ofmap.permute(0,3,1,2)
 
     # print("All data extracted from simulation and binary. Comparing to golden model. ")
     grad_ifmap_golden, grad_weight_golden, grad_bias_golden = (
-        golden_model_backward_training(
+        my_golden_model_backward_training(
             ifmap,
             grad_ofmap,
             weight,
@@ -151,8 +154,7 @@ def main():
     bias_fail = check_correctness("grad_bias", grad_bias_golden, grad_bias_actual)
     weight_fail = check_correctness("grad_weight", grad_weight_golden, grad_weight_actual)
     # write out in NHWC format
-    ifmap_fail = check_correctness("grad_ifmap", grad_ifmap_golden.permute(0, 2, 3, 1),
-                                   grad_ifmap_actual)
+    ifmap_fail = check_correctness("grad_ifmap", grad_ifmap_golden.permute(0,2,3,1), grad_ifmap_actual)
 
     return int(bias_fail or weight_fail or ifmap_fail)
 

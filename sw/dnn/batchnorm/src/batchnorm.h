@@ -912,12 +912,11 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                 "fdiv.d ft1, %[ONE], ft3\n"
                 :
                 : [eps] "fr"(eps), [ONE] "fr"(ONE),
-                    [n_frep] "r"(num_channels_work_for_core -
-                                1)  // we repeat n_frep+1 times
+                    [n_frep] "r"(num_channels_work_for_core - 1)
                 : "ft0", "ft1", "ft2", "ft3");
 
-            snrt_fpu_fence();                     // thought: do we need this?
-            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
+            snrt_fpu_fence();
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
             snrt_ssr_disable();
             uint32_t end_compute_invstd_load = snrt_mcycle();   
         }
@@ -946,8 +945,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     "fmul.d %[dotp], ft3, %[sum]\n"
                     : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
                     : [curr_mean] "fr"(curr_mean_reg), [zero] "fr"(ZERO),
-                    [n_frep] "r"(num_points_work_per_channel_for_core -
-                                1)  // we repeat n_frep+1 times
+                    [n_frep] "r"(num_points_work_per_channel_for_core - 1)
                     : "ft0", "ft1", "ft2", "ft3");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
@@ -978,7 +976,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     "fadd.d %[dotp], ft1, %[dotp] \n"
                     // NOTE: floating point addition is 3 cycles, causing stalls here
                     : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
-                    : [n_frep] "r"(num_compute_cores - 1)  // we repeat n_frep+1 times
+                    : [n_frep] "r"(num_compute_cores - 1)
                     : "ft0", "ft1", "ft2");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
@@ -1003,16 +1001,16 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         }
         snrt_cluster_hw_barrier();
 
-        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-            for (uint32_t i = 0; i < num_points; i++ ) {
+        for (uint32_t channel = 0; channel < C; channel++) {
+            for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
                 dx[i * num_points + channel] = (l->ifmap[i * num_points + channel] - l->current_mean[channel]) 
                                             * k[channel];
             }
         }
         snrt_cluster_hw_barrier();
 
-        for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-            for (uint32_t i = 0; i < num_points; i++) {
+        for (uint32_t channel = 0; channel < C; channel++) {
+            for (uint32_t i = compute_id; i < num_points; i += num_compute_cores) {
                 l->grad_ifmap[i * num_points + channel] = (l->grad_ofmap[i * num_points + channel] - grad_mean[channel] - dx[i * num_points + channel]) 
                                                         * invstd[channel] * l->weight[channel];
             }

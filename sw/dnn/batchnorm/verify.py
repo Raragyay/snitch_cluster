@@ -123,7 +123,7 @@ def main():
             Path.cwd() / "batchnorm_results.csv",
         )
     else:
-        print(f"All verifications passed.")
+        print("All verifications passed.")
 
     return int(fail)
 

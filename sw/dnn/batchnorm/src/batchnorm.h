@@ -140,8 +140,8 @@ static inline void batchnorm_fp64(
             "frep.o %[n_frep], 1, 0, 0 \n"
             "fmadd.d ft1, ft0, %[gamma], %[beta] \n"
             :
-            : [gamma] "f"(g), [beta] "f"(b),
-              [n_frep] "r"(OW - 1)  // we repeat n_frep+1 times
+            : [ gamma ] "f"(g), [ beta ] "f"(b),
+              [ n_frep ] "r"(OW - 1)  // we repeat n_frep+1 times
             : "ft0", "ft1", "ft2");
     }
     snrt_fpu_fence();
@@ -378,16 +378,16 @@ static inline void batchnorm_backward_tile(
                 "fmul.d ft1, ft3, %[weight_times_invstd]\n"
                 "fmul.d ft1, ft5, %[weight_times_invstd]\n"
                 "fmul.d ft1, ft7, %[weight_times_invstd]\n"
-                : [grad_weight_0] "+fr"(grad_weight_0),
-                  [grad_weight_1] "+fr"(grad_weight_1),
-                  [grad_weight_2] "+fr"(grad_weight_2),
-                  [grad_bias_0] "+fr"(grad_bias_0),
-                  [grad_bias_1] "+fr"(grad_bias_1),
-                  [grad_bias_2] "+fr"(grad_bias_2)
-                : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
-                  [weight_times_invstd] "fr"(weight_times_invstd),
-                  [invstd] "fr"(invstd), [zero] "fr"(ZERO),
-                  [n_frep] "r"(num_points_work_in_tile / 3 -
+                : [ grad_weight_0 ] "+fr"(grad_weight_0),
+                  [ grad_weight_1 ] "+fr"(grad_weight_1),
+                  [ grad_weight_2 ] "+fr"(grad_weight_2),
+                  [ grad_bias_0 ] "+fr"(grad_bias_0),
+                  [ grad_bias_1 ] "+fr"(grad_bias_1),
+                  [ grad_bias_2 ] "+fr"(grad_bias_2)
+                : [ running_mean_times_invstd ] "fr"(running_mean_times_invstd),
+                  [ weight_times_invstd ] "fr"(weight_times_invstd),
+                  [ invstd ] "fr"(invstd), [ zero ] "fr"(ZERO),
+                  [ n_frep ] "r"(num_points_work_in_tile / 3 -
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",
                   "ft8");
@@ -407,14 +407,14 @@ static inline void batchnorm_backward_tile(
                     "fmul.d ft1, ft5, %[weight_times_invstd]\n"
                     "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
                     "fmadd.d %[grad_weight_1], ft6, ft5, %[grad_weight_1]\n"
-                    : [grad_weight_0] "+fr"(grad_weight_0),
-                      [grad_weight_1] "+fr"(grad_weight_1),
-                      [grad_bias_0] "+fr"(grad_bias_0),
-                      [grad_bias_1] "+fr"(grad_bias_1)
-                    : [running_mean_times_invstd] "fr"(
+                    : [ grad_weight_0 ] "+fr"(grad_weight_0),
+                      [ grad_weight_1 ] "+fr"(grad_weight_1),
+                      [ grad_bias_0 ] "+fr"(grad_bias_0),
+                      [ grad_bias_1 ] "+fr"(grad_bias_1)
+                    : [ running_mean_times_invstd ] "fr"(
                           running_mean_times_invstd),
-                      [weight_times_invstd] "fr"(weight_times_invstd),
-                      [invstd] "fr"(invstd), [zero] "fr"(ZERO)
+                      [ weight_times_invstd ] "fr"(weight_times_invstd),
+                      [ invstd ] "fr"(invstd), [ zero ] "fr"(ZERO)
                     : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
                 break;
 
@@ -426,12 +426,12 @@ static inline void batchnorm_backward_tile(
                     "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
                     "fmul.d ft1, ft3, %[weight_times_invstd]\n"
                     "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
-                    : [grad_weight_0] "+fr"(grad_weight_0), [grad_bias_0] "+fr"(
-                                                                grad_bias_0)
-                    : [running_mean_times_invstd] "fr"(
+                    : [ grad_weight_0 ] "+fr"(grad_weight_0), 
+                      [ grad_bias_0 ] "+fr"(grad_bias_0)
+                    : [ running_mean_times_invstd ] "fr"(
                           running_mean_times_invstd),
-                      [weight_times_invstd] "fr"(weight_times_invstd),
-                      [invstd] "fr"(invstd), [zero] "fr"(ZERO)
+                      [ weight_times_invstd ] "fr"(weight_times_invstd),
+                      [ invstd ] "fr"(invstd), [ zero ] "fr"(ZERO)
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 break;
         }
@@ -591,8 +591,8 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "fsqrt.d ft3, ft3\n"
                 "fdiv.d ft1, %[ONE], ft3\n"
                 :
-                : [eps] "fr"(eps), [ONE] "fr"(ONE),
-                  [n_frep] "r"(num_channels_work_for_core -
+                : [ eps ] "fr"(eps), [ ONE ] "fr"(ONE),
+                  [ n_frep ] "r"(num_channels_work_for_core -
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2", "ft3");
 
@@ -628,7 +628,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fmul.d ft1, ft0, ft2 \n"
                 :
-                : [n_frep] "r"(num_channels_work_for_core -
+                : [ n_frep ] "r"(num_channels_work_for_core -
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
@@ -644,7 +644,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "fmul.d ft1, ft0, ft2 \n"  // running_mean =
                                            // running_mean * invstd
                 :
-                : [n_frep] "r"(num_channels_work_for_core -
+                : [ n_frep ] "r"(num_channels_work_for_core -
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
 
@@ -783,9 +783,9 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
                 // NOTE: floating point addition is 3 cycles, causing stalls
                 // here
-                : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
-                                                       grad_weight_sum)
-                : [n_frep] "r"(num_compute_cores -
+                : [ bias_sum ] "+fr"(grad_bias_sum), 
+                  [ weight_sum ] "+fr"(grad_weight_sum)
+                : [ n_frep ] "r"(num_compute_cores -
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
             snrt_fpu_fence();
@@ -810,10 +810,11 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     snrt_cluster_hw_barrier();
 }
 
-static inline void batchnorm_backward_training(batchnorm_backward_training_layer_t *l) {
+static inline void batchnorm_backward_training(
+    batchnorm_backward_training_layer_t *l) {
     // data is in HWC format
     const uint32_t num_compute_cores = snrt_cluster_compute_core_num();
-    const uint32_t compute_id = snrt_cluster_core_idx();  
+    const uint32_t compute_id = snrt_cluster_core_idx();
 
     // Calculate output dimensions
     uint32_t N = 1;
@@ -829,10 +830,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         get_core_num_work_items(num_points, num_compute_cores, compute_id);
     
     uint32_t grad_weight_len = C * num_compute_cores,
-             sum_len = C * num_compute_cores,
-             dotp_len = C * num_compute_cores;
-    uint32_t grad_ofmap_len = num_data, 
-             grad_ifmap_len = num_data,
+             sum_len = C * num_compute_cores, dotp_len = C * num_compute_cores;
+    uint32_t grad_ofmap_len = num_data, grad_ifmap_len = num_data,
              ifmap_len = num_data;
 
     // Using TCDM as scratchpad
@@ -872,16 +871,19 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     // grad_bias = sum
 
     // Load data
-    snrt_dma_txid_t invstd_load, curr_var_load, weight_load, 
-        curr_mean_load, grad_ofmap_load, ifmap_load;
+    snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load,
+        grad_ofmap_load, ifmap_load;
 
     uint32_t start_dma_load = snrt_mcycle();
     if (snrt_is_dm_core()) {
-        curr_var_load = snrt_dma_start_1d(invstd, l->current_var,
-                                          C * sizeof(double));
-        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap, l->grad_ofmap, grad_ofmap_len * sizeof(double));
-        ifmap_load = snrt_dma_start_1d(ifmap, l->ifmap, ifmap_len * sizeof(double));
-        curr_mean_load = snrt_dma_start_1d(curr_mean, l->current_mean, C * sizeof(double));
+        curr_var_load = 
+            snrt_dma_start_1d(invstd, l->current_var, C * sizeof(double));
+        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap, l->grad_ofmap, 
+                                            grad_ofmap_len * sizeof(double));
+        ifmap_load = 
+            snrt_dma_start_1d(ifmap, l->ifmap, ifmap_len * sizeof(double));
+        curr_mean_load = 
+            snrt_dma_start_1d(curr_mean, l->current_mean, C * sizeof(double));
         weight_load = snrt_dma_start(weight, l->weight, C * sizeof(double));
         snrt_dma_wait(curr_var_load);
     } else if (snrt_is_compute_core()) {
@@ -909,8 +911,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                 "fsqrt.d ft3, ft3\n"
                 "fdiv.d ft1, %[ONE], ft3\n"
                 :
-                : [eps] "fr"(eps), [ONE] "fr"(ONE),
-                    [n_frep] "r"(num_channels_work_for_core - 1)
+                : [ eps ] "fr"(eps), [ ONE ] "fr"(ONE),
+                  [ n_frep ] "r"(num_channels_work_for_core - 1)
                 : "ft0", "ft1", "ft2", "ft3");
 
             snrt_fpu_fence();
@@ -918,18 +920,20 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
             snrt_ssr_disable();
         }
     }
-    uint32_t end_compute_invstd_load = snrt_mcycle();   
+    uint32_t end_compute_invstd_load = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
     uint32_t start_compute_sum_dotp_reduction_1 = snrt_mcycle();
     if (snrt_is_dm_core()) {
     } else {
         if (num_points_work_per_channel_for_core > 0) {
-            snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core,
-                            C, num_compute_cores * C * sizeof(double),
-                            sizeof(double));
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &grad_ofmap[compute_id * C + 0]);
-            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, &ifmap[compute_id * C + 0]);
+            snrt_ssr_loop_2d(
+                SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core, C,
+                num_compute_cores * C * sizeof(double), sizeof(double));
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, 
+                         &grad_ofmap[compute_id * C + 0]);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, 
+                         &ifmap[compute_id * C + 0]);
             for (uint32_t channel = 0; channel < C; ++channel) {
                 register volatile double sum_reg = 0;
                 register volatile double dotp_reg = 0;
@@ -941,9 +945,9 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     "fadd.d %[sum], ft0, %[zero] \n"
                     "fsub.d ft3, ft1, %[curr_mean]\n"
                     "fmul.d %[dotp], ft3, %[sum]\n"
-                    : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
-                    : [curr_mean] "fr"(curr_mean_reg), [zero] "fr"(ZERO),
-                    [n_frep] "r"(num_points_work_per_channel_for_core - 1)
+                    : [ sum ] "+fr"(sum_reg), [ dotp ] "+fr"(dotp_reg)
+                    : [ curr_mean ] "fr"(curr_mean_reg), [ zero ] "fr"(ZERO),
+                    [ n_frep ] "r"(num_points_work_per_channel_for_core - 1)
                     : "ft0", "ft1", "ft2", "ft3");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
@@ -961,10 +965,12 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     if (snrt_is_dm_core()) {
     } else if (snrt_is_compute_core()) {
         if (num_compute_cores > 0) {
-            for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+            for (uint32_t channel = compute_id; channel < C;
+                 channel += num_compute_cores) {
                 register volatile double sum_reg = 0;
                 register volatile double dotp_reg = 0;
-                snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores, C * sizeof(double));
+                snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores,
+                                 C * sizeof(double));
                 snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &sum[channel]);
                 snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, &dotp[channel]);
                 snrt_ssr_enable();
@@ -972,8 +978,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     "frep.o %[n_frep], 2, 0, 0 \n"
                     "fadd.d %[sum], ft0, %[sum] \n"
                     "fadd.d %[dotp], ft1, %[dotp] \n"
-                    : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
-                    : [n_frep] "r"(num_compute_cores - 1)
+                    : [ sum ] "+fr"(sum_reg), [ dotp ] "+fr"(dotp_reg)
+                    : [ n_frep ] "r"(num_compute_cores - 1)
                     : "ft0", "ft1", "ft2");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
@@ -993,7 +999,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         if (num_channels_work_for_core > 0) {
             register double num_points_reg = num_points;
             const register double ZERO = 0;
-            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core, C * sizeof(double));
+            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
+                             C * sizeof(double));
             
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &grad_weight[compute_id]);
@@ -1003,7 +1010,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fmul.d ft1, ft0, ft2 \n"
                 : 
-                : [n_frep] "r"(num_channels_work_for_core - 1)
+                : [ n_frep ] "r"(num_channels_work_for_core - 1)
                 : "ft0", "ft1", "ft2");
             snrt_fpu_fence();
             __builtin_ssr_barrier(SNRT_SSR_DM1);
@@ -1018,8 +1025,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                 "fmul.d ft3, ft0, ft2 \n"
                 "fdiv.d ft1, ft3, %[num_points] \n"
                 : 
-                : [n_frep] "r"(num_channels_work_for_core - 1),
-                  [num_points] "fr"(num_points_reg), [zero] "fr"(ZERO)
+                : [ n_frep ] "r"(num_channels_work_for_core - 1),
+                  [ num_points ] "fr"(num_points_reg), [ zero ] "fr"(ZERO)
                 : "ft0", "ft1", "ft2", "ft3", "ft4");
             snrt_fpu_fence();
             __builtin_ssr_barrier(SNRT_SSR_DM1);
@@ -1032,8 +1039,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fdiv.d ft1, ft0, %[num_points] \n"
                 : 
-                : [n_frep] "r"(num_channels_work_for_core - 1),
-                  [num_points] "fr"(num_points_reg)
+                : [ n_frep ] "r"(num_channels_work_for_core - 1),
+                  [ num_points ] "fr"(num_points_reg)
                 : "ft0", "ft1", "ft2");
             snrt_fpu_fence();
             __builtin_ssr_barrier(SNRT_SSR_DM1);
@@ -1048,12 +1055,14 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         snrt_dma_start_1d(l->grad_weight, grad_weight, C * sizeof(double));
     } else {
         if (num_points_work_per_channel_for_core > 0) {
-            snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core,
-                            C, num_compute_cores * C * sizeof(double),
-                            sizeof(double));
+            snrt_ssr_loop_2d(
+                SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core, C,
+                num_compute_cores * C * sizeof(double), sizeof(double));
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &ifmap[compute_id * C + 0]);
-            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, &grad_ifmap[compute_id * C + 0]);
-            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, &grad_ofmap[compute_id * C + 0]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
+                           &grad_ifmap[compute_id * C + 0]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D,
+                          &grad_ofmap[compute_id * C + 0]);
             for (uint32_t channel = 0; channel < C; ++channel) {
                 register double curr_mean_reg = curr_mean[channel];
                 register double k_reg = k[channel];
@@ -1070,10 +1079,10 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     "fmul.d ft4, ft4, %[invstd] \n"
                     "fmul.d ft1, ft4, %[weight] \n"
                     :
-                    : [curr_mean] "fr"(curr_mean_reg), [k] "fr"(k_reg),
-                      [grad_mean] "fr"(grad_mean_reg), [invstd] "fr"(invstd_reg),
-                      [weight] "fr"(weight_reg),
-                    [n_frep] "r"(num_points_work_per_channel_for_core - 1)
+                    : [ curr_mean ] "fr"(curr_mean_reg), [ k ] "fr"(k_reg),
+                      [ grad_mean ] "fr"(grad_mean_reg), [ invstd ] "fr"(invstd_reg),
+                      [ weight ] "fr"(weight_reg),
+                      [ n_frep ] "r"(num_points_work_per_channel_for_core - 1)
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
@@ -1085,6 +1094,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     snrt_cluster_hw_barrier();
 
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap, C * num_points * sizeof(double));
+        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap,
+                          C * num_points * sizeof(double));
     }
 }

@@ -11,6 +11,7 @@
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
+#define ceildiv(a, b) ((((a)-1) / (b)) + 1)
 
 typedef struct {
     uint32_t CI;
@@ -322,14 +323,16 @@ static inline void batchnorm_training(batchnorm_training_layer_t *layer) {
     // pass << batch mean and batch var >> as parameters to compute beta/gamma
     // call batchnorm_layer
 }
-static inline void batchnorm_backward_tile(
+
+static inline void batchnorm_backward_tile_fp64(
     const double *grad_ofmap_scratch, double *grad_ifmap_scratch,
     const double *ifmap_scratch,
     const double *running_mean_times_invstd_scratch,
     const double *weight_times_invstd_scratch, const double *invstd_scratch,
     double *grad_bias_scratch, double *grad_weight_scratch, uint32_t C,
-    uint32_t num_compute_cores, uint32_t num_points_work_in_tile,
-    bool is_first_iteration, bool is_last_iteration) {
+    uint32_t compute_id, uint32_t num_compute_cores,
+    uint32_t num_points_work_in_tile, bool is_first_iteration,
+    bool is_last_iteration) {
     // access pattern: iterate over the different channels, then over
     // the different points split over points
     // outside loop: channels
@@ -340,7 +343,7 @@ static inline void batchnorm_backward_tile(
                          C,                        // dimension of outer loop
                          C * sizeof(double),  // stride per inner loop iteration
                          sizeof(double));     // stride per outer loop iteration
-    } 
+    }
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
@@ -458,10 +461,9 @@ static inline void batchnorm_backward_tile(
 
 static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t start = snrt_mcycle();
-    // data is in HWC format
+    // data is in NHWC format
     const uint32_t num_clusters =
-        snrt_cluster_num();  // how many clusters are there in total? currently
-                             // 1 in the config i think
+        snrt_cluster_num();  // how many clusters are there in total?
     const uint32_t cluster_id = snrt_cluster_idx();  // which cluster are we?
     const uint32_t num_compute_cores =
         snrt_cluster_compute_core_num();  // how many compute cores per cluster?
@@ -506,25 +508,39 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     ptr += grad_bias_scratch_len;
     double *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
+    double *tile_size_in_points_scratch = ptr;
+    ptr += 8;  // Align?
+    ptrdiff_t tile_size_in_points;
 
-    // here, we have the more unbounded ones.
-    // How much? util/trace/stack.py stack pointer shows that currently core
-    // 8 uses up to 0x1001df58. So probably fine to use up to 0x18000 or
-    // 64KB. can tune might change if this is called from external, of
-    // course. But currently no way to inspect the stack Ideally the len is
-    // a multiple of C so ALIGN_DOWN, C but also with this, we need to
-    // consider what happens with the final modulo as well (if not
-    // multiple).. hmm probably have to recompute the point_work
-    double *used_tcdm_end_addr =
-        (double *)(snrt_l1_end_addr() -
-                   (snrt_l1_end_addr() - snrt_l1_start_addr()) /
-                       4);  // use 3/4 for now
-    ptrdiff_t space_left = used_tcdm_end_addr - ptr;
-    // C doubles per point (assume fp64)
-    // We want two halves to work with
-    // We need three buffers, one for grad_ofmap, one for grad_ifmap, one for
-    // ifmap
-    ptrdiff_t tile_size_in_points = min((space_left / C) / 2 / 3, num_points);
+    // Dynamically compute tile sizes
+    if (compute_id == 0) {
+        double *used_tcdm_end_addr =
+            (double *)(snrt_l1_end_addr() -
+                       (snrt_l1_end_addr() - snrt_l1_start_addr()) /
+                           4);  // use 3/4 for now
+        ptrdiff_t space_left = used_tcdm_end_addr - ptr;
+        // C doubles per point (assume fp64)
+        // We want two halves to work with
+        // We need three buffers, one for grad_ofmap, one for grad_ifmap, one
+        // for ifmap Thought: tile CI instead of points. Reason is because we
+        // can't easily ssr the stuff related to CI
+
+        // For now only tile based on points. Explore tiling by CI afterwards.
+        ptrdiff_t max_tile_size_in_points = (space_left / (3 * 2 * C));
+        if (max_tile_size_in_points > num_points) {
+            tile_size_in_points = num_points;
+        } else {
+            uint32_t min_loops = ceildiv(num_points, max_tile_size_in_points);
+            tile_size_in_points = ceildiv(num_points, min_loops);
+        }
+
+        // uint32_t num_loops = ceildiv(num_points, tile_size_in_points);
+        *tile_size_in_points_scratch = tile_size_in_points;
+        snrt_cluster_hw_barrier();
+    } else {
+        snrt_cluster_hw_barrier();
+        tile_size_in_points = *tile_size_in_points_scratch;
+    }
     DUMP(tile_size_in_points);
 
     ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2,
@@ -656,17 +672,14 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
-    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
-                                     SNRT_PERF_CNT_TCDM_ACCESSED);
-    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
-                                     SNRT_PERF_CNT_TCDM_CONGESTED);
     // compute grad_weight first step, grad_bias first step, grad_ifmap
     // this is where the tiling would come in place
 
     uint32_t start_grad_ifmap_and_partial_bias_weight = snrt_mcycle();
-    uint32_t num_points_work_in_tile, num_points_work_for_core_for_tile;
+    uint32_t num_points_work_in_tile, num_points_work_for_core_for_tile,
+        blocked_offset;
     // for dma core
-    uint32_t prev_point_start, num_points_work_in_prev_tile, blocked_offset;
+    uint32_t prev_point_start, num_points_work_in_prev_tile;
     bool is_last_iteration = false;
     for (uint32_t point_start = 0; point_start < num_points;
          point_start += tile_size_in_points) {
@@ -688,6 +701,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             blocked_offset = get_offset_for_core_work_blocked(
                 num_points_work_in_tile, num_compute_cores, compute_id);
         }
+        // iterate over CI here?
 
         if (snrt_is_dm_core()) {
             // technically we could optimize by loading in both sides ahead of
@@ -709,6 +723,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             // grad_ifmap[!buf_flag] done?
             snrt_cluster_hw_barrier();
             // write out the buffer that was just computed
+            // IDEA: should be able to skip this on last iteration as well
             if (point_start != 0) {
                 grad_ifmap_write = snrt_dma_start_1d(
                     &l->grad_ifmap[prev_point_start * C],
@@ -719,7 +734,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                     num_points_work_in_prev_tile * C * sizeof(double));
                 buf_flag = !buf_flag;
             }
-
             prev_point_start = point_start;
             num_points_work_in_prev_tile = num_points_work_in_tile;
 
@@ -729,7 +743,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
             // dma core will signal to us when we can start next computation
             snrt_cluster_hw_barrier();
-            batchnorm_backward_tile(
+            batchnorm_backward_tile_fp64(
                 &grad_ofmap_scratch
                     [(buf_flag * tile_size_in_points + blocked_offset) * C],
                 &grad_ifmap_scratch
@@ -738,9 +752,9 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                     [(buf_flag * tile_size_in_points + blocked_offset) * C],
                 running_mean_scratch, weight_scratch, invstd_scratch,
                 &grad_bias_scratch[compute_id * C],
-                &grad_weight_scratch[compute_id * C], C, num_compute_cores,
-                num_points_work_for_core_for_tile, point_start == 0,
-                is_last_iteration);
+                &grad_weight_scratch[compute_id * C], C, compute_id,
+                num_compute_cores, num_points_work_for_core_for_tile,
+                point_start == 0, is_last_iteration);
             buf_flag = !buf_flag;
         }
     }
@@ -749,8 +763,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // no barrier here so that compute core can immediately start the second
     // reduction
     snrt_cluster_hw_barrier();
-    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
-    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
     // reduce from [num_threads, C] to [C] by splitting over C
     // just reduce back into the first buffer.
@@ -782,7 +794,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                 "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
                 "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
                 // NOTE: floating point addition is 3 cycles, causing stalls
-                // here
+                // here. But pretty small compared to the big loop.
                 : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
                                                        grad_weight_sum)
                 : [n_frep] "r"(num_compute_cores -
@@ -810,12 +822,12 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     snrt_cluster_hw_barrier();
 }
 
-static inline void batchnorm_backward_training(batchnorm_backward_training_layer_t *l) {
+static inline void batchnorm_backward_training(
+    batchnorm_backward_training_layer_t *l) {
     // data is in HWC format
     const uint32_t num_compute_cores =
         snrt_cluster_compute_core_num();  // how many compute cores per cluster?
-    const uint32_t compute_id =
-        snrt_cluster_core_idx();  
+    const uint32_t compute_id = snrt_cluster_core_idx();
 
     // Calculate output dimensions
     uint32_t N = 1;
@@ -824,7 +836,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     uint32_t C = l->CI;
     double eps = l->eps;
     uint32_t num_points = N * H * W;
-    
+
     // Intermediate
     double *ptr = (double *)snrt_l1_start_addr();
     double *invstd = ptr;
@@ -867,45 +879,55 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         return;
     }
 
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+    for (uint32_t channel = compute_id; channel < C;
+         channel += num_compute_cores) {
         invstd[channel] = 1 / sqrt(l->current_var[channel] + eps);
         sum[channel] = 0;
         dotp[channel] = 0;
         for (uint32_t i = 0; i < num_points; i++) {
             sum[channel] += l->grad_ofmap[i * num_points + channel];
-            dotp[channel] += l->grad_ofmap[i * num_points + channel] 
-                           * (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
+            dotp[channel] +=
+                l->grad_ofmap[i * num_points + channel] *
+                (l->ifmap[i * num_points + channel] - l->current_mean[channel]);
         }
     }
     DUMP(1);
     snrt_cluster_hw_barrier();
 
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        k[channel] = dotp[channel] * invstd[channel] * invstd[channel] / num_points;
+    for (uint32_t channel = compute_id; channel < C;
+         channel += num_compute_cores) {
+        k[channel] =
+            dotp[channel] * invstd[channel] * invstd[channel] / num_points;
         grad_mean[channel] = sum[channel] / num_points;
     }
     DUMP(2);
     snrt_cluster_hw_barrier();
 
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-        for (uint32_t i = 0; i < num_points; i++ ) {
-            dx[i * num_points + channel] = (l->ifmap[i * num_points + channel] - l->current_mean[channel]) 
-                                         * k[channel];
+    for (uint32_t channel = compute_id; channel < C;
+         channel += num_compute_cores) {
+        for (uint32_t i = 0; i < num_points; i++) {
+            dx[i * num_points + channel] = (l->ifmap[i * num_points + channel] -
+                                            l->current_mean[channel]) *
+                                           k[channel];
         }
     }
     DUMP(3);
     snrt_cluster_hw_barrier();
 
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+    for (uint32_t channel = compute_id; channel < C;
+         channel += num_compute_cores) {
         for (uint32_t i = 0; i < num_points; i++) {
-            l->grad_ifmap[i * num_points + channel] = (l->grad_ofmap[i * num_points + channel] - grad_mean[channel] - dx[i * num_points + channel]) 
-                                                    * invstd[channel] * l->weight[channel];
+            l->grad_ifmap[i * num_points + channel] =
+                (l->grad_ofmap[i * num_points + channel] - grad_mean[channel] -
+                 dx[i * num_points + channel]) *
+                invstd[channel] * l->weight[channel];
         }
     }
     DUMP(5);
     snrt_cluster_hw_barrier();
 
-    for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+    for (uint32_t channel = compute_id; channel < C;
+         channel += num_compute_cores) {
         l->grad_bias[channel] = sum[channel];
         l->grad_weight[channel] = dotp[channel] * invstd[channel];
     }

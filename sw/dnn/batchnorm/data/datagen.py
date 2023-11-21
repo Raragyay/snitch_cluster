@@ -215,6 +215,7 @@ def emit_header(**kwargs):
             "CI": ci,
             "IH": ih,
             "IW": iw,
+            "TILE_CI": tile_ci,
             "ifmap": ifmap_uid,
             "grad_ofmap": grad_ofmap_uid,
             "running_mean": running_mean_uid,

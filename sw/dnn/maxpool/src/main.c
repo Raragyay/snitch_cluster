@@ -7,11 +7,16 @@
 
 #include "dnn.h"
 
-#include "data.h"
+#include "benchmark_2.5.h"
+
+// #include "printf.h"
 
 int main() {
     maxpool_layer(&layer);
 
     snrt_global_barrier();
+
+    // if (snrt_global_core_idx() == 1) for (int i = 0; i < 81; ++i) printf("%lf\n", ofmap[i]);
+
     return 0;
 }

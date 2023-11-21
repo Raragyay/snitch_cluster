@@ -44,3 +44,5 @@ void maxpool_f64_3d_with_index_row_major(maxpool_attributes*, double*, double*, 
 void maxpool_f64_3d_with_index_col_major(maxpool_attributes*, double*, double*, int*);
 
 void maxpool_f64_3d_no_index(maxpool_attributes*, double*, double*);
+
+void maxpool_fp64_layer(maxpool_attributes*, double*, double*, int*);

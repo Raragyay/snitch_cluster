@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "snrt.h"
+// #include "printf.h"
 
 /**
  * @struct conv_layer_struct
@@ -155,10 +156,12 @@ static inline void maxpool_layer(const maxpool_layer_t *l) {
                 // wait for data to arrive
                 snrt_cluster_hw_barrier();
 
+                snrt_mcycle();
                 maxpool_fp64(&ifmap[read_buf * ifmap_size / 2 + compute_id],
                              &ofmap[write_buf * ofmap_size / 2 + compute_id],
                              l->tile_ci, l->FH, l->FW, compute_num);
-
+                snrt_mcycle();
+                
                 write_buf = !write_buf;
                 read_buf = !read_buf;
             }

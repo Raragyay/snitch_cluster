@@ -135,3 +135,14 @@ COPY --from=builder /tools/riscv-isa-sim/build/spike-dasm bin/
 # See https://click.palletsprojects.com/en/8.1.x/unicode-support/
 ENV LC_ALL "C.UTF-8"
 ENV LANG   "C.UTF-8"
+
+ENV NODE_VERSION=16.20.2
+RUN apt install -y curl
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+ENV NVM_DIR=/root/.nvm
+RUN . "$NVM_DIR/nvm.sh" && nvm install ${NODE_VERSION}
+RUN . "$NVM_DIR/nvm.sh" && nvm use v${NODE_VERSION}
+RUN . "$NVM_DIR/nvm.sh" && nvm alias default v${NODE_VERSION}
+ENV PATH="/root/.nvm/versions/node/v${NODE_VERSION}/bin/:${PATH}"
+RUN node --version
+RUN npm --version

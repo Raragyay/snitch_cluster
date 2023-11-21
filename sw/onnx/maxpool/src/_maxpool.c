@@ -191,7 +191,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
 
 void MAXPOOL_FN_1D(maxpool_attributes* attr, double* in, double* out, int* idx, int core_idx, int n_cores) {
 
-  if (attr->n_dim != 1) return; // error
+  // if (attr->n_dim != 1) return; // error
 
   int total_channels = attr->input_shape[0] * attr->input_shape[1]; // batch size * num channels
 
@@ -258,7 +258,9 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr, double* in, double* out, int* idx, 
       if (!Yh_init || in[x_d + h] > Yh) {
         Yh = in[x_d + h];
         Yh_init = 1;
+        #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
         h_index = h;
+        #endif
       }
     }
 
@@ -275,7 +277,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr, double* in, double* out, int* idx, 
 
 void MAXPOOL_FN_2D(maxpool_attributes* attr, double* in, double* out, int* idx, int core_idx, int n_cores) {
 
-  if (attr->n_dim != 2) return; // error
+  // if (attr->n_dim != 2) return; // error
 
   int total_channels = attr->input_shape[0] * attr->input_shape[1]; // batch size * num channels
 
@@ -363,9 +365,11 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr, double* in, double* out, int* idx, 
 
       #endif
 
-      #else
+    #else
 
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
       int h_index, w_index;
+      #endif
       double Yh;
       int Yh_init = 0;
       for (int h = hstart; h < hend; h += attr->dilations[0]) {
@@ -380,13 +384,15 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr, double* in, double* out, int* idx, 
           if (!Yh_init || in[x_d + input_index] > Yh) {
             Yh = in[x_d + input_index];
             Yh_init = 1;
+            #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
             h_index = h;
             w_index = w;
+            #endif
           }
         }
       }
 
-      if (!Yh_init) continue;
+      // if (!Yh_init) continue;
 
       out[y_d + pool_index] = Yh;
       
@@ -404,7 +410,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr, double* in, double* out, int* idx, 
 
 void MAXPOOL_FN_3D(maxpool_attributes* attr, double* in, double* out, int* idx, int core_idx, int n_cores) {
 
-  if (attr->n_dim != 3) return; // error
+  // if (attr->n_dim != 3) return; // error
 
   int total_channels = attr->input_shape[0] * attr->input_shape[1]; // batch size * num channels
 
@@ -448,36 +454,49 @@ void MAXPOOL_FN_3D(maxpool_attributes* attr, double* in, double* out, int* idx, 
     int dend = dstart + attr->kernel_shape[2] * attr->dilations[2];
 
     int pool_index = ph * pooled_width * pooled_depth + pw * pooled_depth + pd;
-    int h_index, w_index, d_index;
-    double Yh;
-    int Yh_init = 0;
 
-    for (int h = hstart; h < hend; h += attr->dilations[0]) {
-      if (h < 0 || h >= height) continue;
+    #if USE_SSR_FREP_2D || USE_SSR_FREP_ALL
+    #else
 
-      for (int w = wstart; w < wend; w += attr->dilations[1]) {
-        if (w < 0 || w >= width) continue;
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+      int h_index, w_index, d_index;
+      #endif
+      double Yh;
+      int Yh_init = 0;
 
-        for (int d = dstart; d < dend; d += attr->dilations[2]) {
-          if (d < 0 || d >= depth) continue;
+      for (int h = hstart; h < hend; h += attr->dilations[0]) {
+        if (h < 0 || h >= height) continue;
 
-          int input_index = h * width * depth + w * depth + d;
-          if (!Yh_init || in[x_d + input_index] > Yh) {
-            Yh = in[x_d + input_index];
-            Yh_init = 1;
-            h_index = h;
-            w_index = w;
-            d_index = d;
+        for (int w = wstart; w < wend; w += attr->dilations[1]) {
+          if (w < 0 || w >= width) continue;
+
+          for (int d = dstart; d < dend; d += attr->dilations[2]) {
+            if (d < 0 || d >= depth) continue;
+
+            int input_index = h * width * depth + w * depth + d;
+            if (!Yh_init || in[x_d + input_index] > Yh) {
+              Yh = in[x_d + input_index];
+              Yh_init = 1;
+              #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+              h_index = h;
+              w_index = w;
+              d_index = d;
+              #endif
+            }
           }
         }
       }
-    }
 
-    out[y_d + pool_index] = Yh;
-    if (idx != NULL) {
-      if (!attr->storage_order) idx[y_d + pool_index] = h_index * width * depth + w_index * depth + d_index;
-      else idx[y_d + pool_index] = h_index + w_index * height + d_index * height * width;
-    }
+      out[y_d + pool_index] = Yh;
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+        #if defined(MAXPOOL_ROW_MAJOR)
+        idx[y_d + pool_index] = h_index * width * depth + w_index * depth + d_index;
+        #else
+        idx[y_d + pool_index] = h_index + w_index * height + d_index * height * width;
+        #endif
+      #endif
+
+    #endif
 
   }
   

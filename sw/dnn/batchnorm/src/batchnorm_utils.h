@@ -64,14 +64,16 @@ static inline snrt_dma_txid_t initiate_dma_1d_or_2d(uint64_t dst, uint64_t src,
 }
 
 static inline void batchnorm_backward_tile_fp64(
-    const double* grad_ofmap_scratch, double* grad_ifmap_scratch,
+    const double* restrict grad_ofmap_scratch,
+    double*
+        grad_ifmap_scratch,  // no restrict because grad_ifmap and ifmap used
     const double* ifmap_scratch,
-    const double* running_mean_times_invstd_scratch,
-    const double* weight_times_invstd_scratch, const double* invstd_scratch,
-    double* grad_bias_scratch, double* grad_weight_scratch, uint32_t TILE_CI,
-    uint32_t compute_id, uint32_t num_compute_cores,
-    uint32_t num_points_work_for_core_in_tile, bool is_first_iteration,
-    bool is_last_iteration) {
+    const double* restrict running_mean_times_invstd_scratch,
+    const double* restrict weight_times_invstd_scratch,
+    const double* restrict invstd_scratch, double* restrict grad_bias_scratch,
+    double* restrict grad_weight_scratch, uint32_t TILE_CI, uint32_t compute_id,
+    uint32_t num_compute_cores, uint32_t num_points_work_for_core_in_tile,
+    bool is_first_iteration, bool is_last_iteration) {
     // access pattern: iterate over the different channels, then over
     // the different points split over points
     // outside loop: channels

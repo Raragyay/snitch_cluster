@@ -605,7 +605,7 @@ static inline void batchnorm_backward_training(
             snrt_dma_start_1d(ifmap, l->ifmap, ifmap_len * sizeof(double));
         curr_mean_load =
             snrt_dma_start_1d(curr_mean, l->current_mean, C * sizeof(double));
-        weight_load = snrt_dma_start(weight, l->weight, C * sizeof(double));
+        weight_load = snrt_dma_start_1d(weight, l->weight, C * sizeof(double));
         snrt_dma_wait(curr_var_load);
     } else if (snrt_is_compute_core()) {
         snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,

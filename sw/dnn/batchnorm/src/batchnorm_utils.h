@@ -87,6 +87,18 @@ static inline void batchnorm_backward_tile_fp64(
             TILE_CI * sizeof(double),  // stride per inner loop iteration
             sizeof(double));           // stride per outer loop iteration
     }
+
+    // thought: how could I minimize the # of reads to grad_ofmap?
+    // dy is used for: grad_bias (addition)
+    //                 grad_weight (dy * (x[i,C]-running_mean[C]) * invstd[C])
+    //                             (can it become a fused somehow? not really..
+    //                             can precompute invstd * running_mean though)
+    //                             then you get an fmsub(x[i,C], invstd[C],
+    //                             invstd[C]*running_mean[C])
+    //                 grad_ifmap (dy * invstd[C] * weight[C])
+    // from this I think that the best result is to tile dy and x.
+    // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
+
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);

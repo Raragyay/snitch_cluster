@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include "batchnorm_data_structures.h"
 #include "batchnorm_utils.h"
+#include "batchnorm_reference.h"
 #include "printf.h"
 #include "snrt.h"
 
@@ -277,17 +278,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t num_points_work_per_channel_for_core =
         get_core_num_work_items(num_points, num_compute_cores, compute_id);
 
-    // thought: how could I minimize the # of reads to grad_ofmap?
-    // dy is used for: grad_bias (addition)
-    //                 grad_weight (dy * (x[i,C]-running_mean[C]) * invstd[C])
-    //                             (can it become a fused somehow? not really..
-    //                             can precompute invstd * running_mean though)
-    //                             then you get an fmsub(x[i,C], invstd[C],
-    //                             invstd[C]*-running_mean[C])
-    //                 grad_ifmap (dy * invstd[C] * weight[C])
-    // from this I think that the best result is to tile dy and x.
-    // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
-
     ptrdiff_t grad_bias_scratch_len = C * num_compute_cores,
               grad_weight_scratch_len = C * num_compute_cores;
 
@@ -343,10 +333,9 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
     double *grad_ofmap_scratch = ptr;
     ptr += grad_ofmap_len;
-    double *grad_ifmap_scratch = ptr;
-    ptr += grad_ifmap_len;
     double *ifmap_scratch = ptr;
     ptr += ifmap_len;
+    double *grad_ifmap_scratch = ifmap_scratch; // reuse the buffer
 
     bool buf_flag = 0;
 
@@ -529,6 +518,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     }
     uint32_t end_dma_writeback = snrt_mcycle();
     snrt_cluster_hw_barrier();
+    uint32_t done = snrt_mcycle();
 }
 
 static inline void batchnorm_backward_training(

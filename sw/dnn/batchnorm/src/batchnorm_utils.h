@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include "batchnorm_data_structures.h"
 #include "snrt.h"
 
@@ -56,24 +57,24 @@ static inline snrt_dma_txid_t initiate_dma_1d_or_2d(uint64_t dst, uint64_t src,
                                                     size_t src_stride,
                                                     size_t repeat, bool is_1d) {
     if (is_1d) {
-        return snrt_dma_start_1d(dst, src, size * repeat);
+        return snrt_dma_start_1d((void*)dst, (void*)src, size * repeat);
     } else {
-        return snrt_dma_start_2d(dst, src, size, dst_stride, src_stride,
-                                 repeat);
+        return snrt_dma_start_2d((void*)dst, (void*)src, size, dst_stride,
+                                 src_stride, repeat);
     }
 }
 
 static inline void batchnorm_backward_tile_fp64(
-    const double* restrict grad_ofmap_scratch,
+    const double* grad_ofmap_scratch,
     double*
         grad_ifmap_scratch,  // no restrict because grad_ifmap and ifmap used
     const double* ifmap_scratch,
-    const double* restrict running_mean_times_invstd_scratch,
-    const double* restrict weight_times_invstd_scratch,
-    const double* restrict invstd_scratch, double* restrict grad_bias_scratch,
-    double* restrict grad_weight_scratch, uint32_t TILE_CI, uint32_t compute_id,
-    uint32_t num_compute_cores, uint32_t num_points_work_for_core_in_tile,
-    bool is_first_iteration, bool is_last_iteration) {
+    const double* running_mean_times_invstd_scratch,
+    const double* weight_times_invstd_scratch, const double* invstd_scratch,
+    double* grad_bias_scratch, double* grad_weight_scratch, uint32_t TILE_CI,
+    uint32_t compute_id, uint32_t num_compute_cores,
+    uint32_t num_points_work_for_core_in_tile, bool is_first_iteration,
+    bool is_last_iteration) {
     // access pattern: iterate over the different channels, then over
     // the different points split over points
     // outside loop: channels
@@ -104,12 +105,12 @@ static inline void batchnorm_backward_tile_fp64(
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
+    snrt_ssr_enable();
     for (uint32_t channel = 0; channel < TILE_CI; ++channel) {
         register double running_mean_times_invstd =
-            running_mean_times_invstd_scratch[channel];
-        register double weight_times_invstd =
-            weight_times_invstd_scratch[channel];
-        register double invstd = invstd_scratch[channel];
+            *running_mean_times_invstd_scratch;
+        register double weight_times_invstd = *weight_times_invstd_scratch;
+        register double invstd = *invstd_scratch;
         register double grad_weight_0 = 0;
         register double grad_weight_1 = 0;
         register double grad_weight_2 = 0;
@@ -117,9 +118,9 @@ static inline void batchnorm_backward_tile_fp64(
         register double grad_bias_1 = 0;
         register double grad_bias_2 = 0;
         register double ZERO = 0;  // can consider fcvt instead
-        snrt_ssr_enable();
         // Can only manual unroll 3 times since the max for frep is 16
-        // thought: after issuing this, increment all the channels manually. That way we dual issue a bit better
+        // thought: after issuing this, increment all the channels manually.
+        // That way we dual issue a bit better
         if (num_points_work_for_core_in_tile >= 3) {
             asm volatile(
                 // manual unroll for
@@ -153,6 +154,33 @@ static inline void batchnorm_backward_tile_fp64(
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",
                   "ft8");
         }
+        // invstd_scratch += 1;
+        // weight_times_invstd_scratch += 1;
+        // running_mean_times_invstd_scratch += 1;
+        // if (channel != 0) {
+        //     grad_bias_scratch += 1;
+        //     grad_weight_scratch += 1;
+        // }
+        // Inline the asm to force pseudo-dual issue
+        asm volatile(
+            "addi %[invstd_scratch], %[invstd_scratch], 8\n"
+            "addi %[weight_times_invstd_scratch], "
+            "%[weight_times_invstd_scratch], 8\n"
+            "addi %[running_mean_times_invstd_scratch], "
+            "%[running_mean_times_invstd_scratch], 8\n"
+            "beqz %[channel], 1f\n"
+            "addi %[grad_bias_scratch], %[grad_bias_scratch], 8\n"
+            "addi %[grad_weight_scratch], %[grad_weight_scratch], 8\n"
+            "1:\n"
+            : [invstd_scratch] "+r"(invstd_scratch),
+              [weight_times_invstd_scratch] "+r"(weight_times_invstd_scratch),
+              [running_mean_times_invstd_scratch] "+r"(
+                  running_mean_times_invstd_scratch),
+              [grad_bias_scratch] "+r"(grad_bias_scratch),
+              [grad_weight_scratch] "+r"(grad_weight_scratch)
+            : [channel] "r"(channel)
+            : "ft0", "ft1", "ft2");
+
         switch (num_points_work_for_core_in_tile % 3) {
             case 2:
                 asm volatile(
@@ -235,8 +263,6 @@ static inline void batchnorm_backward_tile_fp64(
               [is_first_iteration] "r"(is_first_iteration)
             : "ft0", "ft1", "ft2");
         snrt_fpu_fence();
-        grad_bias_scratch += 1;
-        grad_weight_scratch += 1;
     }
     __builtin_ssr_barrier(SNRT_SSR_DM1);
     snrt_ssr_disable();

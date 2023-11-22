@@ -1,6 +1,4 @@
-#ifndef MAXPOOL_FN
-#error "Maxpool function name not defined"
-#endif
+#ifdef MAXPOOL_FN // serves as an include guard
 
 #define _CONCAT(A, B) A ## B
 #define CONCAT(A, B) _CONCAT(A, B)
@@ -38,18 +36,43 @@ void ssr_asm_with_index(int* out_idx, int total_iter) {
   );
 }
 
-static inline void ssr_asm_no_index(int);
+void ssr_asm_no_index(int);
 
 void ssr_asm_no_index(int total_iter) {
-  asm volatile(
-    "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
-    "frep.o %[n_frep], 1, 0, 0\n"
-    "fmax.d ft3, ft3, ft0\n"
-    "fadd.d ft1, %[zero], ft3\n" /* store the final value */
-    :
-    : [zero] "f"(0.0), [n_frep] "r"(total_iter) /* loading initial val takes 1 read */
-    : "ft0", "ft1", "ft2", "ft3", "memory"
-  );
+  if (total_iter % 2 == 0) {
+    asm volatile(
+      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "fmax.d ft3, ft3, ft0\n"
+      "frep.o %[n_frep], 2, 0, 0\n"
+      "fmax.d ft4, ft3, ft0\n"
+      "fmax.d ft3, ft4, ft0\n"
+      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+      :
+      : [zero] "f"(0.0), [n_frep] "r"(total_iter / 2 - 1) /* loading initial val takes 1 read */
+      : "ft0", "ft1", "ft2", "ft3", "ft4", "memory"
+    );
+  }
+  else {
+    asm volatile(
+      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "frep.o %[n_frep], 2, 0, 0\n"
+      "fmax.d ft4, ft3, ft0\n"
+      "fmax.d ft3, ft4, ft0\n"
+      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+      :
+      : [zero] "f"(0.0), [n_frep] "r"(total_iter / 2) /* loading initial val takes 1 read */
+      : "ft0", "ft1", "ft2", "ft3", "ft4", "memory"
+    );
+  }
+  // asm volatile(
+  //   "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+  //   "frep.o %[n_frep], 1, 0, 0\n"
+  //   "fmax.d ft3, ft3, ft0\n"
+  //   "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+  //   :
+  //   : [zero] "f"(0.0), [n_frep] "r"(total_iter) /* loading initial val takes 1 read */
+  //   : "ft0", "ft1", "ft2", "ft3", "memory"
+  // );
 }
 
 #endif
@@ -359,7 +382,6 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr, double* in, double* out, int* idx, 
       #endif
 
       #else
-
         ssr_asm_no_index(n_iter_h * n_iter_w - 2);
         snrt_ssr_disable();
 
@@ -501,3 +523,5 @@ void MAXPOOL_FN_3D(maxpool_attributes* attr, double* in, double* out, int* idx, 
   }
   
 }
+
+#endif

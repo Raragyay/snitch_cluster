@@ -1,7 +1,7 @@
 #include "maxpool.h"
 #include "snrt.h"
 
-#include "benchmark_2.5.h"
+#include "benchmark_8x16x16_fixed.h"
 
 /*
 typedef struct maxpool_attributes_struct {
@@ -26,12 +26,11 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 int main() {
 
   // compute_output_shape(&attr1, attr1.output_shape);
-  //snrt_mcycle();
-  // maxpool_f64_1d_with_index(&attr1,
+  // snrt_mcycle();
+  // maxpool_f64_1d_no_index(&attr1,
   //               ifmap1,
-  //               output_loc1,
-  //               idx_loc1);
-  //snrt_mcycle();
+  //               output_loc1);
+  // snrt_mcycle();
 
   compute_output_shape(&attr2, attr2.output_shape);
   //snrt_mcycle();

@@ -23,6 +23,7 @@ from data_utils import (
     format_array_definition,
     format_array_declaration,
     format_ifdef_wrapper,
+    format_scalar_definition,
 )  # noqa: E402
 
 torch.manual_seed(42)
@@ -108,7 +109,7 @@ def emit_header(**kwargs):
     eps = kwargs["eps"]
     tile_ci = kwargs["tile_ci"]
     prec = str(kwargs["prec"])
-    momentum = kwargs["momentum"]
+    impl_opt_level = kwargs['impl_opt_level']
 
     torch_dtype = data_utils.floating_point_torch_type(prec)
     ctype = data_utils.floating_point_ctype(prec)
@@ -261,6 +262,7 @@ def emit_header(**kwargs):
 
         data_str = [emit_license()]
         # Array forward declarations
+        data_str += [format_scalar_definition('impl_opt_level_t', 'impl_opt_level', impl_opt_level)]
         data_str += [format_array_declaration(ctype, ifmap_uid, ifmap.shape)]
         data_str += [format_array_declaration(ctype, ofmap_uid, ofmap.shape)]
         data_str += [format_array_declaration(ctype, beta_uid, beta.shape)]

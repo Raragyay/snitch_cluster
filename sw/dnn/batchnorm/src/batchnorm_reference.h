@@ -18,9 +18,6 @@ static inline void batchnorm_backward_single_core(
         snrt_cluster_compute_core_num();  // how many compute cores per cluster?
     const uint32_t compute_id =
         snrt_cluster_core_idx();  // which core are we in this cluster
-    if (compute_id != 0) {
-        return;
-    }
     // Calculate output dimensions
     uint32_t N = 1;
     uint32_t H = l->IH;
@@ -41,31 +38,42 @@ static inline void batchnorm_backward_single_core(
     ptr += weight_times_invstd_len;
     double *running_mean_times_invstd_scratch = ptr;
     ptr += running_mean_times_invstd_len;
-
+    uint32_t start_dma_load = snrt_mcycle();
+    uint32_t end_dma_load = snrt_mcycle();
     uint32_t start_invstd_computations = snrt_mcycle();
-    for (uint32_t channel = 0; channel < C; ++channel) {
-        double invstd = 1 / sqrt(l->running_var[channel] + eps);
-        invstd_scratch[channel] = invstd;
-        weight_times_invstd_scratch[channel] = invstd * l->weight[channel];
-        running_mean_times_invstd_scratch[channel] =
-            invstd * l->running_mean[channel];
+    if (compute_id == 0) {
+        for (uint32_t channel = 0; channel < C; ++channel) {
+            double invstd = 1 / sqrt(l->running_var[channel] + eps);
+            invstd_scratch[channel] = invstd;
+            weight_times_invstd_scratch[channel] = invstd * l->weight[channel];
+            running_mean_times_invstd_scratch[channel] =
+                invstd * l->running_mean[channel];
+        }
     }
     uint32_t end_invstd_computations = snrt_mcycle();
+    uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
+    uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
 
     uint32_t start_main_loop = snrt_mcycle();
-    for (uint32_t i = 0; i < num_points; i += 1) {
-        for (uint32_t channel = 0; channel < C; ++channel) {
-            double dy = l->grad_ofmap[i * C + channel];
-            double x = l->ifmap[i * C + channel];
-            l->grad_bias[channel] += dy;
-            l->grad_weight[channel] +=
-                dy * (x * invstd_scratch[channel] -
-                      running_mean_times_invstd_scratch[channel]);
-            l->grad_ifmap[i * C + channel] =
-                dy * weight_times_invstd_scratch[channel];
+    if (compute_id == 0) {
+        for (uint32_t i = 0; i < num_points; i += 1) {
+            for (uint32_t channel = 0; channel < C; ++channel) {
+                double dy = l->grad_ofmap[i * C + channel];
+                double x = l->ifmap[i * C + channel];
+                l->grad_bias[channel] += dy;
+                l->grad_weight[channel] +=
+                    dy * (x * invstd_scratch[channel] -
+                          running_mean_times_invstd_scratch[channel]);
+                l->grad_ifmap[i * C + channel] =
+                    dy * weight_times_invstd_scratch[channel];
+            }
         }
     }
     uint32_t end_main_loop = snrt_mcycle();
+    uint32_t start_grad_bias_weight_reduction = snrt_mcycle();
+    uint32_t end_grad_bias_weight_reduction = snrt_mcycle();
+    uint32_t start_dma_writeback = snrt_mcycle();
+    uint32_t end_dma_writeback = snrt_mcycle();
     uint32_t done = snrt_mcycle();
 }
 
@@ -116,7 +124,7 @@ static inline void batchnorm_backward_single_core_opt(
     ptr += grad_ofmap_len;
     double *ifmap_scratch = ptr;
     ptr += ifmap_len;
-    double *grad_ifmap_scratch = ifmap_scratch; // reuse the buffer
+    double *grad_ifmap_scratch = ifmap_scratch;  // reuse the buffer
 
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load, grad_ifmap_write;

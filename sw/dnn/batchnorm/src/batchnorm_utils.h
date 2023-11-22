@@ -119,6 +119,7 @@ static inline void batchnorm_backward_tile_fp64(
         register double ZERO = 0;  // can consider fcvt instead
         snrt_ssr_enable();
         // Can only manual unroll 3 times since the max for frep is 16
+        // thought: after issuing this, increment all the channels manually. That way we dual issue a bit better
         if (num_points_work_for_core_in_tile >= 3) {
             asm volatile(
                 // manual unroll for
@@ -195,25 +196,50 @@ static inline void batchnorm_backward_tile_fp64(
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 break;
         }
+        // in plain C:
+        // if (is_first_iteration) {
+        //     grad_bias_scratch[channel] =
+        //         grad_bias_0 + grad_bias_1 + grad_bias_2;
+        //     grad_weight_scratch[channel] =
+        //         grad_weight_0 + grad_weight_1 + grad_weight_2;
 
+        // } else {
+        //     grad_bias_scratch[channel] +=
+        //         grad_bias_0 + grad_bias_1 + grad_bias_2;
+        //     grad_weight_scratch[channel] +=
+        //         grad_weight_0 + grad_weight_1 + grad_weight_2;
+        // }
+        register double temp_grad_bias, temp_grad_weight;
+        asm volatile(
+            "bnez %[is_first_iteration], 3f\n"
+            "fld %[temp_grad_bias], 0(%[grad_bias_scratch])\n"
+            "fld %[temp_grad_weight], 0(%[grad_weight_scratch])\n"
+            "fadd.d %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
+            "fadd.d %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
+            "3:\n"
+            "fadd.d %[grad_bias_1], %[grad_bias_1], %[grad_bias_2]\n"
+            "fadd.d %[grad_weight_1], %[grad_weight_1], %[grad_weight_2]\n"
+            "fadd.d %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
+            "fadd.d %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
+            "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
+            "fsd %[grad_weight_0], 0(%[grad_weight_scratch])\n"
+            : [grad_bias_scratch] "+r"(grad_bias_scratch),
+              [grad_weight_scratch] "+r"(grad_weight_scratch),
+              [temp_grad_bias] "+fr"(temp_grad_bias),
+              [temp_grad_weight] "+fr"(temp_grad_weight)
+            : [grad_weight_0] "fr"(grad_weight_0),
+              [grad_weight_1] "fr"(grad_weight_1),
+              [grad_weight_2] "fr"(grad_weight_2),
+              [grad_bias_0] "fr"(grad_bias_0), [grad_bias_1] "fr"(grad_bias_1),
+              [grad_bias_2] "fr"(grad_bias_2),
+              [is_first_iteration] "r"(is_first_iteration)
+            : "ft0", "ft1", "ft2");
         snrt_fpu_fence();
-        // wait for writes to the ofmap to finish?
-        snrt_ssr_disable();
-
-        if (is_first_iteration) {
-            grad_bias_scratch[channel] =
-                grad_bias_0 + grad_bias_1 + grad_bias_2;
-            grad_weight_scratch[channel] =
-                grad_weight_0 + grad_weight_1 + grad_weight_2;
-
-        } else {
-            grad_bias_scratch[channel] +=
-                grad_bias_0 + grad_bias_1 + grad_bias_2;
-            grad_weight_scratch[channel] +=
-                grad_weight_0 + grad_weight_1 + grad_weight_2;
-        }
+        grad_bias_scratch += 1;
+        grad_weight_scratch += 1;
     }
     __builtin_ssr_barrier(SNRT_SSR_DM1);
+    snrt_ssr_disable();
 }
 
 static inline void batchnorm_backward_main_loop(

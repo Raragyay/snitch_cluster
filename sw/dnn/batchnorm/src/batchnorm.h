@@ -519,7 +519,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
         snrt_dma_wait_all();
     } else {
     }
-    uint32_t end_dma_writeback = snrt_mcycle();
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
     end_perf_and_dump_single_core(0, SNRT_PERF_CNT0);

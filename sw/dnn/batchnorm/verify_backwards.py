@@ -11,7 +11,7 @@ from operator import itemgetter
 
 import numpy as np
 import torch
-from data.datagen import golden_model_backward
+from data.golden_models import golden_model_backward
 from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
@@ -90,7 +90,7 @@ def main():
         "eps": "f",
         "dtype": "I",
     }
-    layer = bytes_to_struct(elf.get_symbol_contents("backward_layer"), backward_layer_struct)
+    layer = bytes_to_struct(elf.get_symbol_contents("backward_eval_layer"), backward_layer_struct)
     CI, IH, IW= itemgetter("CI", "IH", "IW")(layer)
     eps = layer["eps"]
     prec = PRECISION_T[layer["dtype"]]

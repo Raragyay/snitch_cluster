@@ -17,7 +17,7 @@ SECTION  ?=
 SRCS    ?= $(realpath $(SRC_DIR)/main.c)
 INCDIRS ?= $(DATA_DIR) $(SRC_DIR) $(COMMON_SRC_DIR)
 
-DATAGEN_PY := $(DATA_DIR)/datagen.py
+DATAGEN_PY := $(DATA_DIR)/*.py
 DATA_H     := $(DATA_DIR)/data.h
 
 $(DATA_H): $(DATAGEN_PY) $(DATA_CFG)

@@ -11,7 +11,7 @@ from operator import itemgetter
 
 import numpy as np
 import torch
-from data.datagen import golden_model_backward_training, my_golden_model_backward_training
+from data.golden_models import golden_model_backward_training, my_golden_model_backward_training
 from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
@@ -66,8 +66,6 @@ def main():
         log=args.log,
         output_uids=["grad_ifmap_training", "grad_weight_training", "grad_bias_training", "temp"],
     )
-    with open(Path(__file__).parent/"batchnorm_backward_training_test_results"/"raw_results.pkl", "wb") as f:
-        pickle.dump(raw_results, f)
 
     print("Simulation complete. Verifying result...")
     # Extract input operands from ELF file

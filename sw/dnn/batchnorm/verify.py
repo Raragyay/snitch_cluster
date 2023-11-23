@@ -11,7 +11,7 @@ from operator import itemgetter
 
 import numpy as np
 import torch
-from data.datagen import golden_model_eval
+from data.golden_models import golden_model_forward_eval
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
 import verification  # noqa: E402
@@ -70,7 +70,7 @@ def main():
         "eps": "f",
         "dtype": "I",
     }
-    layer = bytes_to_struct(elf.get_symbol_contents("layer"), layer_struct)
+    layer = bytes_to_struct(elf.get_symbol_contents("forward_eval_layer"), layer_struct)
     CI, IH, IW, TILE_CI = itemgetter("CI", "IH", "IW", "TILE_CI")(layer)
     eps = layer["eps"]
     prec = PRECISION_T[layer["dtype"]]
@@ -101,7 +101,7 @@ def main():
 
     print("All data extracted from simulation and binary. Comparing to golden model. ")
     ofmap_golden = (
-        golden_model_eval(
+        golden_model_forward_eval(
             ifmap,
             eps,
             running_mean,

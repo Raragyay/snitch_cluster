@@ -1,12 +1,14 @@
 {
   input_dim:
   {
-    channels: 32
-    height: 32
-    width: 16
+    channels: 16
+    height: 8
+    width: 8
   }
   eps: 1e-05
-  tile_ci: 32
+  tile_ci: 16
   prec: 64
   impl_opt_level: MULTICORE_OPT
+  is_forward: false
+  is_training: false
 }

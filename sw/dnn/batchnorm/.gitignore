@@ -1,1 +1,6 @@
 batchnorm_backward_test_errors
+scaling_raw_results
+*.csv
+plots
+*.ipynb
+.ipynb_checkpoints

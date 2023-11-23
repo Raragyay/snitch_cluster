@@ -279,8 +279,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t H = l->IH;
     uint32_t W = l->IW;
     uint32_t C = l->CI;
-    uint32_t TILE_CI = l->TILE_CI;
-    bool is_dma_1d = C == TILE_CI;
     uint32_t num_points = N * H * W;
 
     uint32_t num_channels_work_for_core =
@@ -321,7 +319,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
         // can't easily ssr the stuff related to CI
 
         // For now only tile based on points. Explore tiling by CI afterwards.
-        ptrdiff_t max_tile_size_in_points = (space_left / (3 * 2 * TILE_CI));
+        ptrdiff_t max_tile_size_in_points = (space_left / (2 * 2 * C));
         if (max_tile_size_in_points > num_points) {
             tile_size_in_points = num_points;
         } else {
@@ -338,7 +336,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     }
     DUMP(tile_size_in_points);
 
-    ptrdiff_t grad_ofmap_len = tile_size_in_points * TILE_CI * 2,
+    ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2,
               grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;
 
     double *grad_ofmap_scratch = ptr;
@@ -377,15 +375,12 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             running_mean_scratch, l->running_mean, C * sizeof(double));
         // load first tile in. We can do this here because sqrt/div are really
         // slow.
-        grad_ofmap_load = initiate_dma_1d_or_2d(
-            grad_ofmap_scratch, l->grad_ofmap, TILE_CI * sizeof(double),
-            TILE_CI * sizeof(double), C * sizeof(double), tile_size_in_points,
-            is_dma_1d);
+        grad_ofmap_load =
+            snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                              tile_size_in_points * C * sizeof(double));
+        ifmap_load = snrt_dma_start_1d(
+            ifmap_scratch, l->ifmap, tile_size_in_points * C * sizeof(double));
 
-        ifmap_load = initiate_dma_1d_or_2d(
-            ifmap_scratch, l->ifmap, TILE_CI * sizeof(double),
-            TILE_CI * sizeof(double), C * sizeof(double), tile_size_in_points,
-            is_dma_1d);
         buf_flag = !buf_flag;
         snrt_dma_wait(weight_load);
         snrt_dma_wait(running_mean_load);
@@ -472,8 +467,8 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // this is where the tiling would come in place
 
     batchnorm_backward_main_loop(
-        !(num_points == tile_size_in_points), !(C == TILE_CI), C, TILE_CI,
-        num_points, tile_size_in_points, compute_id, num_compute_cores, l,
+        !(num_points == tile_size_in_points), C, num_points,
+        tile_size_in_points, compute_id, num_compute_cores, l,
         grad_ofmap_scratch, ifmap_scratch, grad_ifmap_scratch,
         grad_weight_scratch, grad_bias_scratch, invstd_scratch,
         running_mean_scratch, weight_scratch, buf_flag);

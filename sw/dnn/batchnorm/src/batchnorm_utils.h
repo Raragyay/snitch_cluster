@@ -74,15 +74,13 @@ static inline void batchnorm_backward_tile_fp64(
     const double* running_mean_times_invstd_scratch,
     const double* weight_times_invstd_scratch, const double* invstd_scratch,
     double* grad_bias_scratch, double* grad_weight_scratch, uint32_t C,
-    uint32_t num_points_work_for_core_in_tile, uint32_t num_channels_to_process,
+    uint32_t num_points_work_for_core_in_tile,  // requires: > 0
+    uint32_t num_channels_to_process,           //  requires: > 0
     uint32_t channel_stride, bool is_first_iteration, bool is_last_iteration) {
     // access pattern: iterate over the different channels, then over
     // the different points split over points
     // outside loop: channels
     // inside loop: points
-    if (num_points_work_for_core_in_tile == 0 || num_channels_to_process == 0) {
-        return;
-    }
     if (is_first_iteration || is_last_iteration) {
         snrt_ssr_loop_2d(
             SNRT_SSR_DM_ALL,
@@ -110,19 +108,19 @@ static inline void batchnorm_backward_tile_fp64(
     snrt_ssr_enable();
     bool frep = num_points_work_for_core_in_tile >= 3;
     register uint32_t i = 0;  // updated during frep for pseudo-dual issue
+    const register double ZERO = 0;  // can consider fcvt instead
+    register double grad_weight_0 = 0;
+    register double grad_weight_1 = 0;
+    register double grad_weight_2 = 0;
+    register double grad_bias_0 = 0;
+    register double grad_bias_1 = 0;
+    register double grad_bias_2 = 0;
     while (i < num_channels_to_process) {
         register double running_mean_times_invstd =
             *running_mean_times_invstd_scratch;
         register double weight_times_invstd = *weight_times_invstd_scratch;
         register double invstd = *invstd_scratch;
         // IDEA: assign on first loop instead of doing 7 fsgnjs.
-        register double grad_weight_0 = 0;
-        register double grad_weight_1 = 0;
-        register double grad_weight_2 = 0;
-        register double grad_bias_0 = 0;
-        register double grad_bias_1 = 0;
-        register double grad_bias_2 = 0;
-        register double ZERO = 0;  // can consider fcvt instead
         // Can only manual unroll 3 times since the max for frep is 16
         // thought: after issuing this, increment all the channels manually.
         // That way we dual issue a bit better
@@ -260,21 +258,28 @@ static inline void batchnorm_backward_tile_fp64(
             "3:\n"
             "fadd.d %[grad_bias_1], %[grad_bias_1], %[grad_bias_2]\n"
             "fadd.d %[grad_weight_1], %[grad_weight_1], %[grad_weight_2]\n"
+            // interleave 0 resetting between stalls for addition
+            "fsgnj.d %[grad_bias_2],%[ZERO],%[ZERO]\n"
+            "fsgnj.d %[grad_weight_2],%[ZERO],%[ZERO]\n"
             // wonder if i could add the fld for the next set and fsgnj here?
             "fadd.d %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
             "fadd.d %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
+            "fsgnj.d %[grad_bias_1],%[ZERO],%[ZERO]\n"
+            "fsgnj.d %[grad_weight_1],%[ZERO],%[ZERO]\n"
             "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
             "fsd %[grad_weight_0], 0(%[grad_weight_scratch])\n"
+            "fsgnj.d %[grad_bias_0],%[ZERO],%[ZERO]\n"
+            "fsgnj.d %[grad_weight_0],%[ZERO],%[ZERO]\n"
             : [grad_bias_scratch] "+r"(grad_bias_scratch),
               [grad_weight_scratch] "+r"(grad_weight_scratch),
               [temp_grad_bias] "+fr"(temp_grad_bias),
-              [temp_grad_weight] "+fr"(temp_grad_weight)
-            : [grad_weight_0] "fr"(grad_weight_0),
-              [grad_weight_1] "fr"(grad_weight_1),
-              [grad_weight_2] "fr"(grad_weight_2),
-              [grad_bias_0] "fr"(grad_bias_0), [grad_bias_1] "fr"(grad_bias_1),
-              [grad_bias_2] "fr"(grad_bias_2),
-              [is_first_iteration] "r"(is_first_iteration)
+              [temp_grad_weight] "+fr"(temp_grad_weight),
+              [grad_weight_0] "+fr"(grad_weight_0),
+              [grad_weight_1] "+fr"(grad_weight_1),
+              [grad_weight_2] "+fr"(grad_weight_2),
+              [grad_bias_0] "+fr"(grad_bias_0),
+              [grad_bias_1] "+fr"(grad_bias_1), [grad_bias_2] "+fr"(grad_bias_2)
+            : [is_first_iteration] "r"(is_first_iteration), [ZERO] "fr"(ZERO)
             : "ft0", "ft1", "ft2");
         snrt_fpu_fence();
     }
@@ -283,126 +288,34 @@ static inline void batchnorm_backward_tile_fp64(
 }
 
 static inline void batchnorm_backward_main_loop(
-    bool loop_points, bool loop_channels, uint32_t C, uint32_t TILE_CI,
-    uint32_t num_points, uint32_t tile_size_in_points, uint32_t compute_id,
+    bool loop_points, uint32_t C, uint32_t num_points,
+    uint32_t tile_size_in_points, uint32_t compute_id,
     uint32_t num_compute_cores, batchnorm_backward_layer_t* l,
     double* grad_ofmap_scratch, double* ifmap_scratch,
     double* grad_ifmap_scratch, double* grad_weight_scratch,
     double* grad_bias_scratch, double* invstd_scratch,
     double* running_mean_times_invstd_scratch,
     double* weight_times_invstd_scratch, bool buf_flag) {
-        uint32_t start_main_loop = snrt_mcycle();
-    uint32_t num_points_work_in_tile;
-    uint32_t prev_point_start, num_points_work_in_prev_tile, prev_channel_start;
+        
+    uint32_t start_main_loop = snrt_mcycle();
     bool is_last_iteration = false;
 
     uint32_t num_channels_work_for_core =
-        get_core_num_work_items(TILE_CI, num_compute_cores, compute_id);
-    if (loop_points && loop_channels) {
-        DUMP(0);
-        for (uint32_t point_start = 0; point_start < num_points;
-             point_start += tile_size_in_points) {
-            if (point_start + tile_size_in_points >= num_points) {
-                // on last iteration
-                is_last_iteration = true;
-                num_points_work_in_tile = num_points - point_start;
-            } else if (point_start == 0) {
-                // on first iteration
-                num_points_work_in_tile = tile_size_in_points;
-            }
-            for (uint32_t channel_start = 0; channel_start < C;
-                 channel_start += TILE_CI) {
-                if (snrt_is_dm_core()) {
-                    // technically we could optimize by loading in both sides
-                    // ahead of time. For now not going to do that
-                    if (point_start != 0 || channel_start != 0) {
-                        // first buffer was already loaded in before
-                        snrt_dma_start_2d(
-                            &grad_ofmap_scratch[tile_size_in_points * TILE_CI *
-                                                buf_flag],
-                            &l->grad_ofmap[point_start * C + channel_start],
-                            TILE_CI * sizeof(double), TILE_CI * sizeof(double),
-                            C * sizeof(double), tile_size_in_points);
-                        snrt_dma_start_2d(
-                            &ifmap_scratch[tile_size_in_points * TILE_CI *
-                                           buf_flag],
-                            &l->ifmap[point_start * C + channel_start],
-                            TILE_CI * sizeof(double), TILE_CI * sizeof(double),
-                            C * sizeof(double), tile_size_in_points);
-                    }
-                    snrt_dma_wait_all();
-                    // wait for compute cores to finish computing current tile,
-                    // signal to them grad_ofmap[buf_flag], ifmap[buf_flag],
-                    // grad_ifmap[!buf_flag] done?
-                    snrt_cluster_hw_barrier();
-                    // write out the buffer that was just computed
-                    // IDEA: should be able to skip this on last iteration as
-                    // well
-                    if (point_start != 0 || channel_start != 0) {
-                        snrt_dma_start_2d(
-                            &l->grad_ifmap[prev_point_start * C +
-                                           prev_channel_start],
-                            &grad_ifmap_scratch[tile_size_in_points * TILE_CI *
-                                                (!buf_flag)],  // take !buf_flag
-                                                               // since dma core
-                                                               // is one
-                                                               // iteration
-                                                               // ahead of
-                                                               // compute core
-                            TILE_CI * sizeof(double), C * sizeof(double),
-                            TILE_CI * sizeof(double),
-                            num_points_work_in_prev_tile);
-                        buf_flag = !buf_flag;
-                    }
-                    prev_point_start = point_start;
-                    prev_channel_start = channel_start;
-                    num_points_work_in_prev_tile = num_points_work_in_tile;
+        get_core_num_work_items(C, num_compute_cores, compute_id);
 
-                } else {
-                    // since we didn't flip buf_flag with the dma load, buf_flag
-                    // starts at 0. Signifies the current tile being worked on.
+    uint32_t num_points_work_in_tile = tile_size_in_points;
 
-                    // dma core will signal to us when we can start next
-                    // computation
-                    snrt_cluster_hw_barrier();
-                    batchnorm_backward_tile_fp64(
-                        &grad_ofmap_scratch[(buf_flag * tile_size_in_points) *
-                                                TILE_CI +
-                                            compute_id],
-                        &grad_ifmap_scratch[(buf_flag * tile_size_in_points) *
-                                                TILE_CI +
-                                            compute_id],
-                        &ifmap_scratch[(buf_flag * tile_size_in_points) *
-                                           TILE_CI +
-                                       compute_id],
-                        &running_mean_times_invstd_scratch[channel_start +
-                                                           compute_id],
-                        &weight_times_invstd_scratch[channel_start +
-                                                     compute_id],
-                        &invstd_scratch[channel_start + compute_id],
-                        &grad_bias_scratch[compute_id * C + channel_start +
-                                           compute_id],
-                        &grad_weight_scratch[compute_id * C + channel_start +
-                                             compute_id],
-                        TILE_CI, num_points_work_in_tile,
-                        num_channels_work_for_core, num_compute_cores,
-                        point_start == 0 && channel_start == 0,
-                        is_last_iteration && channel_start == 0);
-                    buf_flag = !buf_flag;
-                }
-            }
-        }
-    } else if (loop_points && !loop_channels) {
+    // for DMA transfer-out
+    uint32_t prev_point_start, num_points_work_in_prev_tile, prev_channel_start;
+    if (loop_points) {
         DUMP(1);
+        bool is_last_iteration = false;
         for (uint32_t point_start = 0; point_start < num_points;
              point_start += tile_size_in_points) {
             if (point_start + tile_size_in_points >= num_points) {
                 // on last iteration
                 is_last_iteration = true;
                 num_points_work_in_tile = num_points - point_start;
-            } else if (point_start == 0) {
-                // on first iteration
-                num_points_work_in_tile = tile_size_in_points;
             }
             // iterate over CI here?
 
@@ -448,93 +361,26 @@ static inline void batchnorm_backward_main_loop(
 
                 // dma core will signal to us when we can start next computation
                 snrt_cluster_hw_barrier();
-                batchnorm_backward_tile_fp64(
-                    &grad_ofmap_scratch[(buf_flag * tile_size_in_points) * C +
-                                        compute_id],
-                    &grad_ifmap_scratch[(buf_flag * tile_size_in_points) * C +
-                                        compute_id],
-                    &ifmap_scratch[(buf_flag * tile_size_in_points) * C +
-                                   compute_id],
-                    &running_mean_times_invstd_scratch[compute_id],
-                    &weight_times_invstd_scratch[compute_id],
-                    &invstd_scratch[compute_id],
-                    &grad_bias_scratch[compute_id * C + compute_id],
-                    &grad_weight_scratch[compute_id * C + compute_id], C,
-                    num_points_work_in_tile, num_channels_work_for_core,
-                    num_compute_cores, point_start == 0, is_last_iteration);
-
-                buf_flag = !buf_flag;
-            }
-        }
-    } else if (!loop_points && loop_channels) {
-        DUMP(2);
-        for (uint32_t channel_start = 0; channel_start < C;
-             channel_start += TILE_CI) {
-            if (snrt_is_dm_core()) {
-                // technically we could optimize by loading in both sides
-                // ahead of time. For now not going to do that
-                if (channel_start != 0) {
-                    // first buffer was already loaded in before
-                    snrt_dma_start_2d(
-                        &grad_ofmap_scratch[num_points * TILE_CI * buf_flag],
-                        &l->grad_ofmap[channel_start], TILE_CI * sizeof(double),
-                        TILE_CI * sizeof(double), C * sizeof(double),
-                        num_points);
-                    snrt_dma_start_2d(
-                        &ifmap_scratch[num_points * TILE_CI * buf_flag],
-                        &l->ifmap[channel_start], TILE_CI * sizeof(double),
-                        TILE_CI * sizeof(double), C * sizeof(double),
-                        num_points);
-                }
-                snrt_dma_wait_all();
-                // wait for compute cores to finish computing current tile,
-                // signal to them grad_ofmap[buf_flag], ifmap[buf_flag],
-                // grad_ifmap[!buf_flag] done?
-                snrt_cluster_hw_barrier();
-                // write out the buffer that was just computed
-                // IDEA: should be able to skip this on last iteration as
-                // well
-                if (channel_start != 0) {
-                    snrt_dma_start_2d(
-                        &l->grad_ifmap[prev_channel_start],
-                        &grad_ifmap_scratch[tile_size_in_points * TILE_CI *
-                                            (!buf_flag)],  // take !buf_flag
-                                                           // since dma core
-                                                           // is one
-                                                           // iteration
-                                                           // ahead of
-                                                           // compute core
-                        TILE_CI * sizeof(double), C * sizeof(double),
-                        TILE_CI * sizeof(double),
-                        num_points);  // don't need to save num_points
-                    buf_flag = !buf_flag;
-                }
-                prev_channel_start = channel_start;
-
-            } else {
-                // since we didn't flip buf_flag with the dma load, buf_flag
-                // starts at 0. Signifies the current tile being worked on.
-
-                // dma core will signal to us when we can start next
-                // computation
-                snrt_cluster_hw_barrier();
-                batchnorm_backward_tile_fp64(
-                    &grad_ofmap_scratch[(buf_flag * num_points) * TILE_CI +
-                                        compute_id],
-                    &grad_ifmap_scratch[(buf_flag * num_points) * TILE_CI +
-                                        compute_id],
-                    &ifmap_scratch[(buf_flag * num_points) * TILE_CI +
-                                   compute_id],
-                    &running_mean_times_invstd_scratch[channel_start +
-                                                       compute_id],
-                    &weight_times_invstd_scratch[channel_start + compute_id],
-                    &invstd_scratch[channel_start + compute_id],
-                    &grad_bias_scratch[compute_id * C + channel_start +
+                if (num_points_work_in_tile > 0 &&
+                    num_channels_work_for_core >
+                        0) {  // refactor out num_channels?
+                    batchnorm_backward_tile_fp64(
+                        &grad_ofmap_scratch[(buf_flag * tile_size_in_points) *
+                                                C +
+                                            compute_id],
+                        &grad_ifmap_scratch[(buf_flag * tile_size_in_points) *
+                                                C +
+                                            compute_id],
+                        &ifmap_scratch[(buf_flag * tile_size_in_points) * C +
                                        compute_id],
-                    &grad_weight_scratch[compute_id * C + channel_start +
-                                         compute_id],
-                    TILE_CI, num_points, num_channels_work_for_core,
-                    num_compute_cores, channel_start == 0, channel_start == 0);
+                        &running_mean_times_invstd_scratch[compute_id],
+                        &weight_times_invstd_scratch[compute_id],
+                        &invstd_scratch[compute_id],
+                        &grad_bias_scratch[compute_id * C + compute_id],
+                        &grad_weight_scratch[compute_id * C + compute_id], C,
+                        num_points_work_in_tile, num_channels_work_for_core,
+                        num_compute_cores, point_start == 0, is_last_iteration);
+                }
                 buf_flag = !buf_flag;
             }
         }
@@ -542,33 +388,25 @@ static inline void batchnorm_backward_main_loop(
         DUMP(3);
         if (snrt_is_dm_core()) {
         } else {
-            batchnorm_backward_tile_fp64(
-                &grad_ofmap_scratch[compute_id],
-                &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
-                &running_mean_times_invstd_scratch[compute_id],
-                &weight_times_invstd_scratch[compute_id],
-                &invstd_scratch[compute_id],
-                &grad_bias_scratch[compute_id * C + compute_id],
-                &grad_weight_scratch[compute_id * C + compute_id], C,
-                num_points, num_channels_work_for_core, num_compute_cores, true,
-                true);
+            if (num_channels_work_for_core > 0) {
+                batchnorm_backward_tile_fp64(
+                    &grad_ofmap_scratch[compute_id],
+                    &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                    &running_mean_times_invstd_scratch[compute_id],
+                    &weight_times_invstd_scratch[compute_id],
+                    &invstd_scratch[compute_id],
+                    &grad_bias_scratch[compute_id * C + compute_id],
+                    &grad_weight_scratch[compute_id * C + compute_id], C,
+                    num_points, num_channels_work_for_core, num_compute_cores,
+                    true, true);
+            }
         }
     }
 
     uint32_t end_main_loop = snrt_mcycle();
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core()) {
-        if (loop_points && loop_channels) {
-            snrt_dma_start_2d(
-                &l->grad_ifmap[prev_point_start * C + prev_channel_start],
-                &grad_ifmap_scratch[tile_size_in_points * TILE_CI *
-                                    (!buf_flag)],  // take !buf_flag since
-                                                   // dma core is one
-                                                   // iteration ahead of
-                                                   // compute core
-                TILE_CI * sizeof(double), C * sizeof(double),
-                TILE_CI * sizeof(double), num_points_work_in_prev_tile);
-        } else if (loop_points && !loop_channels) {
+        if (loop_points) {
             snrt_dma_start_1d(
                 &l->grad_ifmap[prev_point_start * C],
                 &grad_ifmap_scratch[tile_size_in_points * C *
@@ -576,20 +414,7 @@ static inline void batchnorm_backward_main_loop(
                                                    // core is one iteration
                                                    // ahead of compute core
                 num_points_work_in_prev_tile * C * sizeof(double));
-        } else if (!loop_points && loop_channels) {
-            snrt_dma_start_2d(
-                &l->grad_ifmap[prev_channel_start],
-                &grad_ifmap_scratch[num_points * TILE_CI *
-                                    (!buf_flag)],  // take !buf_flag
-                                                   // since dma core
-                                                   // is one
-                                                   // iteration
-                                                   // ahead of
-                                                   // compute core
-                TILE_CI * sizeof(double), C * sizeof(double),
-                TILE_CI * sizeof(double),
-                num_points);  // don't need to save num_points
-        } else if (!loop_points && !loop_channels) {
+        } else {
             snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
                               num_points * C * sizeof(double));
         }

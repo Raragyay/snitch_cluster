@@ -37,7 +37,6 @@ typedef struct {
     uint32_t CI;
     uint32_t IH;
     uint32_t IW;
-    uint32_t TILE_CI;
 
     double const *ifmap;
     double const *grad_ofmap;

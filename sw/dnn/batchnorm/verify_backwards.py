@@ -78,7 +78,6 @@ def main():
         "CI": "I",
         "IH": "I",
         "IW": "I",
-        "TILE_CI": "I",
         "ifmap": "I",
         "grad_ofmap": "I",
         "running_mean": "I",

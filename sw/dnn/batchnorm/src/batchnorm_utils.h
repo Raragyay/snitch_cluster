@@ -78,7 +78,8 @@ static inline void batchnorm_backward_tile_fp64(
     uint32_t num_channels_to_process,           //  requires: > 0
     uint32_t channel_stride, bool is_first_iteration, bool is_last_iteration) {
     // access pattern: iterate over the different channels, then over
-    // the different points split over points
+    // the different points
+    // Split work over channels to maximize efficacy of frep.
     // outside loop: channels
     // inside loop: points
     if (is_first_iteration || is_last_iteration) {
@@ -86,7 +87,7 @@ static inline void batchnorm_backward_tile_fp64(
             SNRT_SSR_DM_ALL,
             num_points_work_for_core_in_tile,  // dimension of inner loop
             num_channels_to_process,           // dimension of outer loop
-            C * sizeof(double),  // stride per inner loop iteration
+            C * sizeof(double),  // stride per inner loop iteration: 1 point
             channel_stride *
                 sizeof(double));  // stride per outer loop iteration
     }
@@ -108,18 +109,19 @@ static inline void batchnorm_backward_tile_fp64(
     snrt_ssr_enable();
     bool frep = num_points_work_for_core_in_tile >= 3;
     register uint32_t i = 0;  // updated during frep for pseudo-dual issue
-    const register double ZERO = 0;  // can consider fcvt instead
-    register double grad_weight_0 = 0;
-    register double grad_weight_1 = 0;
-    register double grad_weight_2 = 0;
-    register double grad_bias_0 = 0;
-    register double grad_bias_1 = 0;
-    register double grad_bias_2 = 0;
+    register double ZERO asm("ft9");  // can consider fcvt instead
+    asm volatile("fcvt.d.w %[ZERO], zero\n" : [ZERO] "=r"(ZERO)::);
+    register double grad_weight_0 = ZERO;
+    register double grad_weight_1 = ZERO;
+    register double grad_weight_2 = ZERO;
+    register double grad_bias_0 = ZERO;
+    register double grad_bias_1 = ZERO;
+    register double grad_bias_2 = ZERO;
+    register double invstd = *invstd_scratch;
+    register double weight_times_invstd = *weight_times_invstd_scratch;
+    register double running_mean_times_invstd =
+        *running_mean_times_invstd_scratch;
     while (i < num_channels_to_process) {
-        register double running_mean_times_invstd =
-            *running_mean_times_invstd_scratch;
-        register double weight_times_invstd = *weight_times_invstd_scratch;
-        register double invstd = *invstd_scratch;
         // IDEA: assign on first loop instead of doing 7 fsgnjs.
         // Can only manual unroll 3 times since the max for frep is 16
         // thought: after issuing this, increment all the channels manually.
@@ -261,28 +263,42 @@ static inline void batchnorm_backward_tile_fp64(
             // interleave 0 resetting between stalls for addition
             "fsgnj.d %[grad_bias_2],%[ZERO],%[ZERO]\n"
             "fsgnj.d %[grad_weight_2],%[ZERO],%[ZERO]\n"
-            // wonder if i could add the fld for the next set and fsgnj here?
+            // don't need to synchronize here because the integer core can't
+            // issue these instructions until the previous increments have
+            // happened
+            "fld %[invstd],0(%[invstd_scratch])\n"
             "fadd.d %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
             "fadd.d %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
             "fsgnj.d %[grad_bias_1],%[ZERO],%[ZERO]\n"
             "fsgnj.d %[grad_weight_1],%[ZERO],%[ZERO]\n"
+            "fld %[weight_times_invstd],0(%[weight_times_invstd_scratch])\n"
             "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
             "fsd %[grad_weight_0], 0(%[grad_weight_scratch])\n"
             "fsgnj.d %[grad_bias_0],%[ZERO],%[ZERO]\n"
             "fsgnj.d %[grad_weight_0],%[ZERO],%[ZERO]\n"
+            "fld %[running_mean_times_invstd],"
+            "0(%[running_mean_times_invstd_scratch])\n"
             : [grad_bias_scratch] "+r"(grad_bias_scratch),
               [grad_weight_scratch] "+r"(grad_weight_scratch),
               [temp_grad_bias] "+fr"(temp_grad_bias),
               [temp_grad_weight] "+fr"(temp_grad_weight),
               [grad_weight_0] "+fr"(grad_weight_0),
               [grad_weight_1] "+fr"(grad_weight_1),
-              [grad_weight_2] "+fr"(grad_weight_2),
               [grad_bias_0] "+fr"(grad_bias_0),
-              [grad_bias_1] "+fr"(grad_bias_1), [grad_bias_2] "+fr"(grad_bias_2)
-            : [is_first_iteration] "r"(is_first_iteration), [ZERO] "fr"(ZERO)
+              [grad_bias_1] "+fr"(grad_bias_1),
+              [running_mean_times_invstd] "=fr"(running_mean_times_invstd),
+              [weight_times_invstd] "=fr"(weight_times_invstd),
+              [invstd] "=fr"(invstd)
+            : [is_first_iteration] "r"(is_first_iteration), [ZERO] "fr"(ZERO),
+              [invstd_scratch] "r"(invstd_scratch),
+              [weight_times_invstd_scratch] "r"(weight_times_invstd_scratch),
+              [running_mean_times_invstd_scratch] "r"(
+                  running_mean_times_invstd_scratch),
+              [grad_weight_2] "fr"(grad_weight_2),
+              [grad_bias_2] "fr"(grad_bias_2)
             : "ft0", "ft1", "ft2");
-        snrt_fpu_fence();
     }
+    // don't need to fpu_fence since last 3 instructions are inconsequential
     __builtin_ssr_barrier(SNRT_SSR_DM1);
     snrt_ssr_disable();
 }
@@ -296,7 +312,6 @@ static inline void batchnorm_backward_main_loop(
     double* grad_bias_scratch, double* invstd_scratch,
     double* running_mean_times_invstd_scratch,
     double* weight_times_invstd_scratch, bool buf_flag) {
-        
     uint32_t start_main_loop = snrt_mcycle();
     bool is_last_iteration = false;
 
@@ -322,20 +337,22 @@ static inline void batchnorm_backward_main_loop(
             if (snrt_is_dm_core()) {
                 // technically we could optimize by loading in both sides ahead
                 // of time. For now not going to do that
+
+                // first buffer was already initiated before
+                // since ifmap and grad_ifmap overlap, wait for grad_ifmap
+                // to finish writing out before overwriting it
+                snrt_dma_wait_all();
                 if (point_start != 0) {
-                    // first buffer was already loaded in before
                     snrt_dma_start_1d(
-                        &grad_ofmap_scratch[num_points_work_in_tile * C *
-                                            buf_flag],
+                        &grad_ofmap_scratch[tile_size_in_points * C * buf_flag],
                         &l->grad_ofmap[point_start * C],
                         num_points_work_in_tile * C * sizeof(double));
                     snrt_dma_start_1d(
-                        &ifmap_scratch[num_points_work_in_tile * C * buf_flag],
+                        &ifmap_scratch[tile_size_in_points * C * buf_flag],
                         &l->ifmap[point_start * C],
                         num_points_work_in_tile * C * sizeof(double));
                 }
-                snrt_dma_wait_all();
-                // wait for compute cores to finish computing current tile,
+                // wait for compute cores to finish computing previous tile
                 // signal to them grad_ofmap[buf_flag], ifmap[buf_flag],
                 // grad_ifmap[!buf_flag] done?
                 snrt_cluster_hw_barrier();

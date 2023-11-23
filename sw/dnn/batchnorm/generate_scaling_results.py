@@ -14,6 +14,8 @@ base_config = {
     "tile_ci": 16,
     "prec": 64,
     "impl_opt_level": "MULTICORE_OPT",
+    "is_forward": False,
+    "is_training": False
 }
 
 
@@ -33,6 +35,7 @@ config_path = base_path.parent / "data" / "params.hjson"
 target_snitch_cluster_path = (
     base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 )
+print(target_snitch_cluster_path)
 scaling_results_path = base_path.parent / "scaling_results.csv"
 columns = [
     "impl",
@@ -90,11 +93,9 @@ config_modifiers = {
         format_size(16, 8, 8),
         format_size(16, 16, 8),
         format_size(16, 16, 16),
-        format_size(16, 16, 16, tile_ci=8),
         format_size(32, 16, 16),
-        format_size(32, 16, 16, tile_ci=16),
-        format_size(32, 32, 16, tile_ci=16),
         format_size(32, 32, 16),
+        format_size(32, 32, 32),
     ],
 }
 

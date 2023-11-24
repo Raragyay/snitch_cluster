@@ -5,6 +5,13 @@
 #include "snrt.h"
 
 #define PERF_DEBUG 0
+#define PERF_WHOLE_BLOCK 0
+
+#if PERF_WHOLE_BLOCK
+#define SNRT_SECTIONED_MCYCLE() 0xdeadbeef
+#else
+#define SNRT_SECTIONED_MCYCLE() (snrt_mcycle())
+#endif
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define ceildiv(a, b) ((((a)-1) / (b)) + 1)
 
@@ -102,7 +109,6 @@ static inline void __attribute__((always_inline)) batchnorm_backward_tile_fp64(
     //                 grad_ifmap (dy * invstd[C] * weight[C])
     // from this I think that the best result is to tile dy and x.
     // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
-
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
@@ -110,7 +116,8 @@ static inline void __attribute__((always_inline)) batchnorm_backward_tile_fp64(
     bool frep = num_points_work_for_core_in_tile >= 3;
     register uint32_t i = 0;  // updated during frep for pseudo-dual issue
     register double ZERO asm("ft9");  // can consider fcvt instead
-    asm volatile("fcvt.d.w %[ZERO], zero\n" : [ZERO] "=r"(ZERO)::);
+    asm volatile("fcvt.d.w %[ZERO], zero\n"
+                 : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
     register double grad_weight_0 = ZERO;
     register double grad_weight_1 = ZERO;
     register double grad_weight_2 = ZERO;
@@ -123,6 +130,15 @@ static inline void __attribute__((always_inline)) batchnorm_backward_tile_fp64(
         *running_mean_times_invstd_scratch;
     do {  // while (i < num_channels_to_process)
         // Can only manual unroll 3 times since the max for frep is 16
+        asm volatile(
+            "fmul.d "
+            "%[running_mean_times_invstd],%[running_mean_times_invstd],%["
+            "invstd]\n"
+            "fmul.d %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
+            : [running_mean_times_invstd] "+fr"(running_mean_times_invstd),
+              [weight_times_invstd] "+fr"(weight_times_invstd)
+            : [invstd] "fr"(invstd)
+            : "ft0", "ft1", "ft2");
         if (frep) {
             asm volatile(
                 "frep.o %[n_frep], 15, 0, 0 \n"
@@ -308,7 +324,7 @@ static inline void batchnorm_backward_main_loop(
     double* grad_bias_scratch, double* invstd_scratch,
     double* running_mean_times_invstd_scratch,
     double* weight_times_invstd_scratch, bool buf_flag) {
-    uint32_t start_main_loop = snrt_mcycle();
+    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
     bool is_last_iteration = false;
 
     uint32_t num_channels_work_for_core =
@@ -327,10 +343,6 @@ static inline void batchnorm_backward_main_loop(
                 is_last_iteration = true;
                 num_points_work_in_tile = num_points - point_start;
             }
-
-            // if (compute_id == 0) {
-            //     DUMP(snrt_get_perf_counter(SNRT_PERF_CNT0));
-            // }
 
             if (snrt_is_dm_core()) {
                 // technically we could optimize by loading in both sides ahead
@@ -400,7 +412,10 @@ static inline void batchnorm_backward_main_loop(
     } else {
         DUMP(3);
         if (snrt_is_dm_core()) {
+            snrt_dma_wait_all();
+            snrt_cluster_hw_barrier();
         } else {
+            snrt_cluster_hw_barrier();
             if (num_channels_work_for_core > 0) {
                 batchnorm_backward_tile_fp64(
                     &grad_ofmap_scratch[compute_id],
@@ -414,7 +429,7 @@ static inline void batchnorm_backward_main_loop(
         }
     }
 
-    uint32_t end_main_loop = snrt_mcycle();
+    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
     if (snrt_is_dm_core()) {
         if (loop_points) {

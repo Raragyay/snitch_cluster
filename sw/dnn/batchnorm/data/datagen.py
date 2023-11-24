@@ -79,7 +79,10 @@ class BatchNormMode(Enum):
 
 struct_decls = {
     BatchNormMode.FORWARD_EVAL: ("batchnorm_layer_t", "forward_eval_layer"),
-    BatchNormMode.FORWARD_TRAINING: ("batchnorm_training_layer_t", "forward_training_layer"),
+    BatchNormMode.FORWARD_TRAINING: (
+        "batchnorm_training_layer_t",
+        "forward_training_layer",
+    ),
     BatchNormMode.BACKWARD_EVAL: ("batchnorm_backward_layer_t", "backward_eval_layer"),
     BatchNormMode.BACKWARD_TRAINING: (
         "batchnorm_backward_training_layer_t",
@@ -110,14 +113,20 @@ def build_base_kwargs(
     }
 
 
-def get_declarations(ctype, **map_uid_to_numpy_obj):
+def get_declarations(ctype, section=None, **map_uid_to_numpy_obj):
     data_str = []
     # Array forward declarations
     for uid, tensor in map_uid_to_numpy_obj.items():
+        alignment = None
         if tensor.ndim == 4:
             # convert from NCHW to NHWC format
             tensor = tensor.permute(0, 2, 3, 1)
-        data_str.append(format_array_declaration(ctype, uid, tensor.shape))
+            alignment = BURST_ALIGNMENT
+        data_str.append(
+            format_array_declaration(
+                ctype, uid, tensor.shape, section=section, alignment=alignment
+            )
+        )
 
     return data_str
 
@@ -126,10 +135,14 @@ def get_definitions(ctype, **map_uid_to_numpy_obj):
     data_str = []
     with torch.no_grad():
         for uid, tensor in map_uid_to_numpy_obj.items():
+            alignment = None
             if tensor.ndim == 4:
                 # convert from NCHW to NHWC format
                 tensor = tensor.permute(0, 2, 3, 1)
-            data_str.append(format_array_definition(ctype, uid, tensor))
+                alignment = BURST_ALIGNMENT
+            data_str.append(
+                format_array_definition(ctype, uid, tensor, alignment=alignment)
+            )
     return data_str
 
 
@@ -225,10 +238,12 @@ def get_backward_eval_tensors(
     return (
         {
             grad_ofmap_uid: grad_ofmap,
+        },
+        {
+            grad_ifmap_uid: grad_ifmap,
             grad_weight_uid: grad_weight,
             grad_bias_uid: grad_bias,
         },
-        {grad_ifmap_uid: grad_ifmap},
         get_struct_definition(BatchNormMode.BACKWARD_EVAL, layer_cfg),
     )
 
@@ -264,10 +279,12 @@ def get_backward_training_tensors(
     return (
         {
             grad_ofmap_uid: grad_ofmap,
+        },
+        {
+            grad_ifmap_training_uid: grad_ifmap_training,
             grad_weight_training_uid: grad_weight_training,
             grad_bias_training_uid: grad_bias_training,
         },
-        {grad_ifmap_training_uid: grad_ifmap_training},
         get_struct_definition(BatchNormMode.BACKWARD_TRAINING, layer_cfg),
     )
 
@@ -373,9 +390,10 @@ def emit_header(**kwargs):
     )
     data_str.append(format_scalar_definition("int", "is_forward", int(is_forward)))
     data_str.append(format_scalar_definition("int", "is_training", int(is_training)))
+    data_str.extend(get_declarations(**base_tensors, **mode_specific_inputs))
     data_str.extend(
         get_declarations(
-            **base_tensors, **mode_specific_inputs, **mode_specific_outputs
+            ctype=base_tensors["ctype"], **mode_specific_outputs, section=".data"
         )
     )
     data_str.append(format_array_declaration(ctype, "temp", (8, C)))

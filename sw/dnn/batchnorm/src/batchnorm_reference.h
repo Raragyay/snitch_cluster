@@ -39,8 +39,8 @@ static inline void batchnorm_backward_single_core(
     double *running_mean_times_invstd_scratch = ptr;
     ptr += running_mean_times_invstd_len;
     uint32_t start_dma_load = snrt_mcycle();
-    uint32_t end_dma_load = snrt_mcycle();
-    uint32_t start_invstd_computations = snrt_mcycle();
+    uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
+    uint32_t start_invstd_computations = SNRT_SECTIONED_MCYCLE();
     if (compute_id == 0) {
         for (uint32_t channel = 0; channel < C; ++channel) {
             double invstd = 1 / sqrt(l->running_var[channel] + eps);
@@ -50,11 +50,11 @@ static inline void batchnorm_backward_single_core(
                 invstd * l->running_mean[channel];
         }
     }
-    uint32_t end_invstd_computations = snrt_mcycle();
-    uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
-    uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
+    uint32_t end_invstd_computations = SNRT_SECTIONED_MCYCLE();
+    uint32_t start_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
 
-    uint32_t start_main_loop = snrt_mcycle();
+    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
     if (compute_id == 0) {
         for (uint32_t i = 0; i < num_points; i += 1) {
             for (uint32_t channel = 0; channel < C; ++channel) {
@@ -69,11 +69,11 @@ static inline void batchnorm_backward_single_core(
             }
         }
     }
-    uint32_t end_main_loop = snrt_mcycle();
-    uint32_t start_grad_bias_weight_reduction = snrt_mcycle();
-    uint32_t end_grad_bias_weight_reduction = snrt_mcycle();
-    uint32_t start_dma_writeback = snrt_mcycle();
-    uint32_t end_dma_writeback = snrt_mcycle();
+    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
+    uint32_t start_grad_bias_weight_reduction = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_grad_bias_weight_reduction = SNRT_SECTIONED_MCYCLE();
+    uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     uint32_t done = snrt_mcycle();
 }
 
@@ -141,11 +141,11 @@ static inline void batchnorm_backward_single_core_opt(
         // PRECONFIGURE: operations on arrays of size C, split by core.
         snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, C, sizeof(double));
     }
-    uint32_t end_dma_load = snrt_mcycle();
+    uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
     // compute invstd, load weight and running_mean in
-    uint32_t start_invstd_calc = snrt_mcycle();
+    uint32_t start_invstd_calc = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
         weight_load =
             snrt_dma_start_1d(weight_scratch, l->weight, point_size_in_bytes);
@@ -155,10 +155,9 @@ static inline void batchnorm_backward_single_core_opt(
         // slow.
         grad_ofmap_load =
             snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap, num_bytes);
-        grad_ofmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap, num_bytes);
+        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap, num_bytes);
 
-        snrt_dma_wait(weight_load);
-        snrt_dma_wait(running_mean_load);
+        snrt_dma_wait_all();
     } else if (compute_id == 0) {
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, invstd_scratch);
@@ -180,7 +179,7 @@ static inline void batchnorm_backward_single_core_opt(
         __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
         snrt_ssr_disable();
     }
-    uint32_t end_invstd_calc = snrt_mcycle();
+    uint32_t end_invstd_calc = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
     // compute weight*invstd and running_mean*invstd
@@ -191,41 +190,10 @@ static inline void batchnorm_backward_single_core_opt(
     // load weight: 1 ssr
     // write weight: 1 ssr
     // answer: not really. Still worth precomputing I think
-    uint32_t start_running_var_weight_inplace_mul = snrt_mcycle();
-    if (snrt_is_dm_core()) {
-        snrt_dma_wait_all();
-    } else if (compute_id == 0) {
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, weight_scratch);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, weight_scratch);
-        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, invstd_scratch);
-
-        snrt_ssr_enable();
-        asm volatile(
-            "frep.o %[n_frep], 1, 0, 0 \n"
-            "fmul.d ft1, ft0, ft2 \n"
-            :
-            : [n_frep] "r"(C - 1)  // we repeat n_frep+1 times
-            : "ft0", "ft1", "ft2");
-
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, running_mean_scratch);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, running_mean_scratch);
-        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, invstd_scratch);
-
-        asm volatile(
-            "frep.o %[n_frep], 1, 0, 0 \n"
-            "fmul.d ft1, ft0, ft2 \n"  // running_mean =
-                                       // running_mean * invstd
-            :
-            : [n_frep] "r"(C - 1)  // we repeat n_frep+1 times
-            : "ft0", "ft1", "ft2");
-
-        snrt_fpu_fence();                     // thought: do we need this?
-        __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
-        snrt_ssr_disable();
-    }
-    uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
+    uint32_t start_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
-    uint32_t start_main_loop = snrt_mcycle();
+    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
     // compute grad_weight, grad_bias, grad_ifmap
     if (snrt_is_dm_core()) {
     } else if (compute_id == 0) {
@@ -235,14 +203,14 @@ static inline void batchnorm_backward_single_core_opt(
                                      grad_bias_scratch, grad_weight_scratch, C,
                                      num_points, C, 1, true, true);
     }
-    uint32_t end_main_loop = snrt_mcycle();
+    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
     // don't need second reduction
     snrt_cluster_hw_barrier();
-    uint32_t start_grad_bias_weight_reduction = snrt_mcycle();
-    uint32_t end_grad_bias_weight_reduction = snrt_mcycle();
+    uint32_t start_grad_bias_weight_reduction = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_grad_bias_weight_reduction = SNRT_SECTIONED_MCYCLE();
     // write back grad_bias and grad_weight. then wait for all transactions to
     // complete
-    uint32_t start_dma_writeback = snrt_mcycle();
+    uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, C * sizeof(double));
         snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
@@ -251,7 +219,7 @@ static inline void batchnorm_backward_single_core_opt(
         snrt_dma_wait_all();
     } else if (compute_id == 0) {
     }
-    uint32_t end_dma_writeback = snrt_mcycle();
+    uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
 }

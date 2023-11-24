@@ -66,7 +66,7 @@ static inline snrt_dma_txid_t initiate_dma_1d_or_2d(uint64_t dst, uint64_t src,
     }
 }
 
-static inline void batchnorm_backward_tile_fp64(
+static inline void __attribute__((always_inline)) batchnorm_backward_tile_fp64(
     const double* grad_ofmap_scratch,
     double*
         grad_ifmap_scratch,  // no restrict because grad_ifmap and ifmap used
@@ -121,14 +121,10 @@ static inline void batchnorm_backward_tile_fp64(
     register double weight_times_invstd = *weight_times_invstd_scratch;
     register double running_mean_times_invstd =
         *running_mean_times_invstd_scratch;
-    while (i < num_channels_to_process) {
-        // IDEA: assign on first loop instead of doing 7 fsgnjs.
+    do {  // while (i < num_channels_to_process)
         // Can only manual unroll 3 times since the max for frep is 16
-        // thought: after issuing this, increment all the channels manually.
-        // That way we dual issue a bit better
         if (frep) {
             asm volatile(
-                // manual unroll for
                 "frep.o %[n_frep], 15, 0, 0 \n"
                 "fadd.d ft3, ft0, %[zero] \n"
                 "fadd.d ft5, ft0, %[zero] \n"
@@ -297,7 +293,7 @@ static inline void batchnorm_backward_tile_fp64(
               [grad_weight_2] "fr"(grad_weight_2),
               [grad_bias_2] "fr"(grad_bias_2)
             : "ft0", "ft1", "ft2");
-    }
+    } while (i < num_channels_to_process);
     // don't need to fpu_fence since last 3 instructions are inconsequential
     __builtin_ssr_barrier(SNRT_SSR_DM1);
     snrt_ssr_disable();
@@ -328,11 +324,13 @@ static inline void batchnorm_backward_main_loop(
         for (uint32_t point_start = 0; point_start < num_points;
              point_start += tile_size_in_points) {
             if (point_start + tile_size_in_points >= num_points) {
-                // on last iteration
                 is_last_iteration = true;
                 num_points_work_in_tile = num_points - point_start;
             }
-            // iterate over CI here?
+
+            // if (compute_id == 0) {
+            //     DUMP(snrt_get_perf_counter(SNRT_PERF_CNT0));
+            // }
 
             if (snrt_is_dm_core()) {
                 // technically we could optimize by loading in both sides ahead
@@ -378,9 +376,7 @@ static inline void batchnorm_backward_main_loop(
 
                 // dma core will signal to us when we can start next computation
                 snrt_cluster_hw_barrier();
-                if (num_points_work_in_tile > 0 &&
-                    num_channels_work_for_core >
-                        0) {  // refactor out num_channels?
+                if (num_channels_work_for_core > 0) {
                     batchnorm_backward_tile_fp64(
                         &grad_ofmap_scratch[(buf_flag * tile_size_in_points) *
                                                 C +
@@ -393,8 +389,8 @@ static inline void batchnorm_backward_main_loop(
                         &running_mean_times_invstd_scratch[compute_id],
                         &weight_times_invstd_scratch[compute_id],
                         &invstd_scratch[compute_id],
-                        &grad_bias_scratch[compute_id * C + compute_id],
-                        &grad_weight_scratch[compute_id * C + compute_id], C,
+                        &grad_bias_scratch[compute_id],
+                        &grad_weight_scratch[compute_id], C,
                         num_points_work_in_tile, num_channels_work_for_core,
                         num_compute_cores, point_start == 0, is_last_iteration);
                 }
@@ -411,11 +407,9 @@ static inline void batchnorm_backward_main_loop(
                     &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &running_mean_times_invstd_scratch[compute_id],
                     &weight_times_invstd_scratch[compute_id],
-                    &invstd_scratch[compute_id],
-                    &grad_bias_scratch[compute_id * C + compute_id],
-                    &grad_weight_scratch[compute_id * C + compute_id], C,
-                    num_points, num_channels_work_for_core, num_compute_cores,
-                    true, true);
+                    &invstd_scratch[compute_id], &grad_bias_scratch[compute_id],
+                    &grad_weight_scratch[compute_id], C, num_points,
+                    num_channels_work_for_core, num_compute_cores, true, true);
             }
         }
     }

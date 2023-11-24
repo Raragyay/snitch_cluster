@@ -253,16 +253,16 @@ static inline void batchnorm_training(batchnorm_training_layer_t *layer) {
 }
 
 static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
-    reset_and_start_perf_single_core(0, SNRT_PERF_CNT0,
-                                     SNRT_PERF_CNT_ICACHE_STALL);
-    reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
-                                     SNRT_PERF_CNT_ICACHE_HIT);
-    reset_and_start_perf_single_core(0, SNRT_PERF_CNT2,
-                                     SNRT_PERF_CNT_ICACHE_MISS);
-    reset_and_start_perf_single_core(0, SNRT_PERF_CNT3,
-                                     SNRT_PERF_CNT_ICACHE_DOUBLE_HIT);
-    reset_and_start_perf_single_core(0, SNRT_PERF_CNT4,
-                                     SNRT_PERF_CNT_ICACHE_PREFETCH);
+    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT0,
+    //                                  SNRT_PERF_CNT_ICACHE_STALL);
+    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
+    //                                  SNRT_PERF_CNT_ICACHE_HIT);
+    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT2,
+    //                                  SNRT_PERF_CNT_ICACHE_MISS);
+    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT3,
+    //                                  SNRT_PERF_CNT_ICACHE_DOUBLE_HIT);
+    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT4,
+    //                                  SNRT_PERF_CNT_ICACHE_PREFETCH);
     uint32_t start = snrt_mcycle();
     // data is in NHWC format
     const uint32_t num_clusters =
@@ -286,8 +286,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t channel_block_offset =
         get_offset_for_core_work_blocked(C, num_compute_cores, compute_id);
 
-    ptrdiff_t grad_bias_scratch_len = C * num_compute_cores,
-              grad_weight_scratch_len = C * num_compute_cores;
+    ptrdiff_t grad_bias_scratch_len = C, grad_weight_scratch_len = C;
 
     // dataflow:
     double *ptr = (double *)snrt_l1_start_addr();
@@ -350,6 +349,10 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load, grad_ifmap_write;
 
+    // if (compute_id == 0) {
+    //     DUMP(snrt_get_perf_counter(SNRT_PERF_CNT0));
+    // }
+
     uint32_t start_dma_load = snrt_mcycle();
     // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
@@ -361,7 +364,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     } else {
         // PRECONFIGURE: operations on arrays of size C, split by core.
         snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
-                         sizeof(double));
+                         num_compute_cores * sizeof(double));
     }
     uint32_t end_dma_load = snrt_mcycle();
     snrt_cluster_hw_barrier();
@@ -387,9 +390,9 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     } else {
         if (num_channels_work_for_core > 0) {
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
-                          &invstd_scratch[channel_block_offset]);
+                          &invstd_scratch[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
-                           &invstd_scratch[channel_block_offset]);
+                           &invstd_scratch[compute_id]);
             register double eps = l->eps;  // any value in dma'ing this? idk
             const register double ONE = 1;
             snrt_ssr_enable();
@@ -426,11 +429,11 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     } else {
         if (num_channels_work_for_core > 0) {
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
-                          &weight_scratch[channel_block_offset]);
+                          &weight_scratch[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
-                           &weight_scratch[channel_block_offset]);
+                           &weight_scratch[compute_id]);
             snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D,
-                          &invstd_scratch[channel_block_offset]);
+                          &invstd_scratch[compute_id]);
 
             snrt_ssr_enable();
             asm volatile(
@@ -441,11 +444,11 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2");
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
-                          &running_mean_scratch[channel_block_offset]);
+                          &running_mean_scratch[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
-                           &running_mean_scratch[channel_block_offset]);
+                           &running_mean_scratch[compute_id]);
             snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D,
-                          &invstd_scratch[channel_block_offset]);
+                          &invstd_scratch[compute_id]);
             asm volatile(
                 "frep.o %[n_frep], 1, 0, 0 \n"
                 "fmul.d ft1, ft0, ft2 \n"  // running_mean =
@@ -460,11 +463,12 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             snrt_ssr_disable();
         }
     }
+
     uint32_t end_running_var_weight_inplace_mul = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
-    // compute grad_weight first step, grad_bias first step, grad_ifmap
-    // this is where the tiling would come in place
+    // compute grad_weight, grad_bias, grad_ifmap. Tile only if we can't fit all
+    // the points in one tile.
 
     batchnorm_backward_main_loop(
         !(num_points == tile_size_in_points), C, num_points,
@@ -473,45 +477,8 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
         grad_weight_scratch, grad_bias_scratch, invstd_scratch,
         running_mean_scratch, weight_scratch, buf_flag);
 
-    // reduce from [num_threads, C] to [C] by splitting over C
-    // just reduce back into the first buffer.
     uint32_t start_grad_bias_weight_reduction_2 = snrt_mcycle();
-    if (snrt_is_dm_core()) {
-    } else {
-        if (num_channels_work_for_core > 0) {
-            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores,
-                             C * sizeof(double));
-            for (uint32_t channel = channel_block_offset,
-                          end = channel + num_channels_work_for_core;
-                 channel < end; ++channel) {
-                register volatile double grad_bias_sum = 0;
-                register volatile double grad_weight_sum = 0;
-                snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
-                              &grad_bias_scratch[channel]);
-                snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D,
-                              &grad_weight_scratch[channel]);
-
-                snrt_ssr_enable();
-                asm volatile(
-                    "frep.o %[n_frep], 2, 0, 0 \n"
-                    "fadd.d %[bias_sum], ft0, %[bias_sum] \n"
-                    "fadd.d %[weight_sum], ft1, %[weight_sum] \n"
-                    // NOTE: floating point addition is 3 cycles, causing stalls
-                    // here. But pretty small compared to the big loop.
-                    : [bias_sum] "+fr"(grad_bias_sum), [weight_sum] "+fr"(
-                                                           grad_weight_sum)
-                    : [n_frep] "r"(num_compute_cores -
-                                   1)  // we repeat n_frep+1 times
-                    : "ft0", "ft1", "ft2");
-                snrt_fpu_fence();
-                snrt_ssr_disable();
-                grad_bias_scratch[0 * C + channel] = grad_bias_sum;
-                grad_weight_scratch[0 * C + channel] = grad_weight_sum;
-            }
-        }
-    }
     uint32_t end_grad_bias_weight_reduction_2 = snrt_mcycle();
-    snrt_cluster_hw_barrier();
     // write back grad_bias and grad_weight. then wait for all transactions to
     // complete
     uint32_t start_dma_writeback = snrt_mcycle();
@@ -524,11 +491,11 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     }
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
-    end_perf_and_dump_single_core(0, SNRT_PERF_CNT0);
-    end_perf_and_dump_single_core(0, SNRT_PERF_CNT1);
-    end_perf_and_dump_single_core(0, SNRT_PERF_CNT2);
-    end_perf_and_dump_single_core(0, SNRT_PERF_CNT3);
-    end_perf_and_dump_single_core(0, SNRT_PERF_CNT4);
+    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    // end_perf_and_dump_single_core(0, SNRT_PERF_CNT1);
+    // end_perf_and_dump_single_core(0, SNRT_PERF_CNT2);
+    // end_perf_and_dump_single_core(0, SNRT_PERF_CNT3);
+    // end_perf_and_dump_single_core(0, SNRT_PERF_CNT4);
 }
 
 static inline void batchnorm_backward_training(

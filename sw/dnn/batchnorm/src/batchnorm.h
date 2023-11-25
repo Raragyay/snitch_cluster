@@ -5,10 +5,10 @@
 #include <math.h>
 
 #include <stdbool.h>
-#include "dnn.h"
 #include "batchnorm_data_structures.h"
 #include "batchnorm_reference.h"
 #include "batchnorm_utils.h"
+#include "dnn.h"
 #include "printf.h"
 #include "snrt.h"
 
@@ -276,21 +276,24 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // Calculate output dimensions
 
     // thought: this is so much contention
-    uint32_t N = 1;
-    uint32_t H = l->IH;
-    uint32_t W = l->IW;
-    uint32_t C = l->CI;
-    uint32_t num_points = N * H * W;
+    const uint32_t N = 1;
+    const uint32_t H = l->IH;
+    const uint32_t W = l->IW;
+    const uint32_t C = l->CI;
+    const uint32_t num_points = N * H * W;
 
-    uint32_t num_channels_work_for_core =
+    const uint32_t num_channels_work_for_core =
         get_core_num_work_items(C, num_compute_cores, compute_id);
-    uint32_t channel_block_offset =
+    const uint32_t channel_block_offset =
         get_offset_for_core_work_blocked(C, num_compute_cores, compute_id);
 
     ptrdiff_t grad_bias_scratch_len = C, grad_weight_scratch_len = C;
 
     // dataflow:
-    double *ptr = (double *)snrt_l1_start_addr();
+    void *raw_ptr = (void *)snrt_l1_start_addr();
+    dm_comm_t *dm_comm = (dm_comm_t *)raw_ptr;
+    raw_ptr += sizeof(dm_comm_t) * 2;
+    double *ptr = (double *)raw_ptr;
     double *weight_scratch = ptr;
     ptr += C;
     double *invstd_scratch = ptr;
@@ -325,17 +328,11 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     if (space_left >= num_points * C * 2 * 2) {
         tile_size_in_points = num_points;
     } else {
-        ptrdiff_t max_tile_size_in_points = (space_left / (2 * 2 * C));
         uint32_t min_loops = ceildiv(num_points, max_tile_size_in_points);
         tile_size_in_points = ceildiv(num_points, min_loops);
     }
     DUMP(tile_size_in_points);
-    ptrdiff_t grad_ofmap_len;
-    if (tile_size_in_points == num_points) {
-        grad_ofmap_len = tile_size_in_points * C;
-    } else {
-        grad_ofmap_len = tile_size_in_points * C * 2;
-    }
+    ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2;
     ptrdiff_t grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;
 
     double *grad_ofmap_scratch = ptr;
@@ -348,6 +345,19 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load, grad_ifmap_write;
+
+    // TODO: more intelligently determine this based on the number of channels
+    // of work
+    // Right now we just always at least load 512 bytes in
+    uint32_t work_in_tile = min(512 / sizeof(double), tile_size_in_points);
+    uint32_t work_left = num_points;
+    uint32_t work_mod_3 = work_in_tile % 3;
+    if (snrt_is_dm_core()) {
+        work_left -= work_in_tile;
+        dm_comm->num_points_work_in_tile = work_in_tile;
+        dm_comm->work_mod_3 = work_mod_3;
+        dm_comm->is_last_iteration = work_left == 0;
+    }
 
     // if (compute_id == 0) {
     //     DUMP(snrt_get_perf_counter(SNRT_PERF_CNT0));
@@ -377,12 +387,12 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
         snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
         snrt_dma_start_1d(running_mean_scratch, l->running_mean,
                           C * sizeof(double));
-        // load first tile in. We can do this here because sqrt/div are really
-        // slow.
+        // load first tile in but only as much as we can in parallel while sqrt
+        // runs
         snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                          tile_size_in_points * C * sizeof(double));
+                          work_in_tile * C * sizeof(double));
         snrt_dma_start_1d(ifmap_scratch, l->ifmap,
-                          tile_size_in_points * C * sizeof(double));
+                          work_in_tile * C * sizeof(double));
 
         buf_flag = !buf_flag;
     } else {
@@ -420,13 +430,38 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
     // compute grad_weight, grad_bias, grad_ifmap. Tile only if we can't fit all
     // the points in one tile.
+    if (work_in_tile == num_points) {
+        // no looping needed
+        if (snrt_is_dm_core()) {
+            // finish loads
+            snrt_dma_wait_all();
 
-    batchnorm_backward_main_loop(
-        !(num_points == tile_size_in_points), C, num_points,
-        tile_size_in_points, compute_id, num_compute_cores, l,
-        grad_ofmap_scratch, ifmap_scratch, grad_ifmap_scratch,
-        grad_weight_scratch, grad_bias_scratch, invstd_scratch,
-        running_mean_scratch, weight_scratch, buf_flag);
+            // notify ready
+            snrt_cluster_hw_barrier();
+            // wait for compute to be done
+            snrt_cluster_hw_barrier();
+            snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch,
+                              work_in_tile * C * sizeof(double));
+        } else {
+            snrt_cluster_hw_barrier();
+            // TODO; shift these all before hand
+            batchnorm_backward_tile_fp64(
+                &grad_ofmap_scratch[compute_id],
+                &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                &running_mean_scratch[compute_id], &weight_scratch[compute_id],
+                &invstd_scratch[compute_id], &grad_bias_scratch[compute_id],
+                &grad_weight_scratch[compute_id], C, work_in_tile, work_mod_3,
+                num_channels_work_for_core, num_compute_cores, true, false);
+
+            snrt_cluster_hw_barrier();
+        }
+    } else {
+        batchnorm_backward_main_loop(
+            C, work_left, work_in_tile, dm_comm, tile_size_in_points,
+            compute_id, num_compute_cores, l, grad_ofmap_scratch, ifmap_scratch,
+            grad_ifmap_scratch, grad_weight_scratch, grad_bias_scratch,
+            invstd_scratch, running_mean_scratch, weight_scratch, buf_flag);
+    }
 
     uint32_t start_grad_bias_weight_reduction_2 = SNRT_SECTIONED_MCYCLE();
     uint32_t end_grad_bias_weight_reduction_2 = SNRT_SECTIONED_MCYCLE();

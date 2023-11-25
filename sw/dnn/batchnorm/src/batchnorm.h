@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include <stdbool.h>
+#include "dnn.h"
 #include "batchnorm_data_structures.h"
 #include "batchnorm_reference.h"
 #include "batchnorm_utils.h"
@@ -300,43 +301,42 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     ptr += grad_bias_scratch_len;
     double *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
-    double *tile_size_in_points_scratch = ptr;
-    ptr += 8;  // Align?
     ptrdiff_t tile_size_in_points;
 
     // Dynamically compute tile sizes
-    if (compute_id == 0) {
-        double *used_tcdm_end_addr =
-            (double *)(snrt_l1_end_addr() -
-                       (snrt_l1_end_addr() - snrt_l1_start_addr()) /
-                           4);  // use 3/4 for now
-        ptrdiff_t space_left = used_tcdm_end_addr - ptr;
-        // C doubles per point (assume fp64)
-        // We want two halves to work with
-        // We need three buffers, one for grad_ofmap, one for grad_ifmap, one
-        // for ifmap Thought: tile CI instead of points. Reason is because we
-        // can't easily ssr the stuff related to CI
+    double *used_tcdm_end_addr =
+        (double *)(snrt_l1_end_addr() -
+                   (snrt_l1_end_addr() - snrt_l1_start_addr()) /
+                       4);  // use 3/4 for now
+    ptrdiff_t space_left = used_tcdm_end_addr - ptr;
+    // first 2: ofmap, ifmap (overlaid with grad_ifmap)
+    // second 2: double buffer
+    // C: there are C channels per point
+    ptrdiff_t max_tile_size_in_points = (space_left) / (2 * 2 * C);
 
-        // For now only tile based on points. Explore tiling by CI afterwards.
-        ptrdiff_t max_tile_size_in_points = (space_left / (2 * 2 * C));
-        if (max_tile_size_in_points > num_points) {
-            tile_size_in_points = num_points;
-        } else {
-            uint32_t min_loops = ceildiv(num_points, max_tile_size_in_points);
-            tile_size_in_points = ceildiv(num_points, min_loops);
-        }
+    // Incrementally increase tile size.
+    // Reason is because we want to minimize wait on the first iteration
 
-        // uint32_t num_loops = ceildiv(num_points, tile_size_in_points);
-        *tile_size_in_points_scratch = tile_size_in_points;
-        snrt_cluster_hw_barrier();
+    // We want two halves to work with
+    // We need three buffers, one for grad_ofmap, one for grad_ifmap, one
+    // for ifmap
+
+    // For now only tile based on points. Explore tiling by CI afterwards.
+    if (space_left >= num_points * C * 2 * 2) {
+        tile_size_in_points = num_points;
     } else {
-        snrt_cluster_hw_barrier();
-        tile_size_in_points = *tile_size_in_points_scratch;
+        ptrdiff_t max_tile_size_in_points = (space_left / (2 * 2 * C));
+        uint32_t min_loops = ceildiv(num_points, max_tile_size_in_points);
+        tile_size_in_points = ceildiv(num_points, min_loops);
     }
     DUMP(tile_size_in_points);
-
-    ptrdiff_t grad_ofmap_len = tile_size_in_points * C * 2,
-              grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;
+    ptrdiff_t grad_ofmap_len;
+    if (tile_size_in_points == num_points) {
+        grad_ofmap_len = tile_size_in_points * C;
+    } else {
+        grad_ofmap_len = tile_size_in_points * C * 2;
+    }
+    ptrdiff_t grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;
 
     double *grad_ofmap_scratch = ptr;
     ptr += grad_ofmap_len;

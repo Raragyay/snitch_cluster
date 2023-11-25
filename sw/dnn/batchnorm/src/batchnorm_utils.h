@@ -5,7 +5,7 @@
 #include "snrt.h"
 
 #define PERF_DEBUG 0
-#define PERF_WHOLE_BLOCK 0
+#define PERF_WHOLE_BLOCK 1
 
 #if PERF_WHOLE_BLOCK
 #define SNRT_SECTIONED_MCYCLE() 0xdeadbeef
@@ -82,7 +82,8 @@ static inline void __attribute__((always_inline)) batchnorm_backward_tile_fp64(
     const double* weight_times_invstd_scratch, const double* invstd_scratch,
     double* grad_bias_scratch, double* grad_weight_scratch, uint32_t C,
     uint32_t num_points_work_for_core_in_tile,  // requires: > 0
-    uint32_t num_channels_to_process,           //  requires: > 0
+    uint32_t work_mod,  // precompute to avoid icache branch misses
+    uint32_t num_channels_to_process,  //  requires: > 0
     uint32_t channel_stride, bool is_first_iteration, bool is_last_iteration) {
     // access pattern: iterate over the different channels, then over
     // the different points
@@ -206,49 +207,42 @@ static inline void __attribute__((always_inline)) batchnorm_backward_tile_fp64(
             : [channel_stride] "r"(channel_stride)
             : "ft0", "ft1", "ft2");
 
-        switch (num_points_work_for_core_in_tile % 3) {
-            case 2:
-                asm volatile(
-                    "fadd.d ft3, ft0, %[zero] \n"
-                    "fmsub.d ft4, ft2, %[invstd], "
-                    "%[running_mean_times_invstd]\n"
-                    "fadd.d ft5, ft0, %[zero] \n"
-                    "fmsub.d ft6, ft2, %[invstd], "
-                    "%[running_mean_times_invstd]\n"
-                    "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
-                    "fadd.d %[grad_bias_1], ft5, %[grad_bias_1]\n"
-                    "fmul.d ft1, ft3, %[weight_times_invstd]\n"
-                    "fmul.d ft1, ft5, %[weight_times_invstd]\n"
-                    "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
-                    "fmadd.d %[grad_weight_1], ft6, ft5, %[grad_weight_1]\n"
-                    : [grad_weight_0] "+fr"(grad_weight_0),
-                      [grad_weight_1] "+fr"(grad_weight_1),
-                      [grad_bias_0] "+fr"(grad_bias_0),
-                      [grad_bias_1] "+fr"(grad_bias_1)
-                    : [running_mean_times_invstd] "fr"(
-                          running_mean_times_invstd),
-                      [weight_times_invstd] "fr"(weight_times_invstd),
-                      [invstd] "fr"(invstd), [zero] "fr"(ZERO)
-                    : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
-                break;
+        uint32_t mod_temp;
+        asm volatile(
+            "beqz %[work_mod], 0f\n"  // mod is 0
+            "andi %[mod_temp], %[work_mod], 1\n" // is mod equal to 1?
+            "bnez %[mod_temp], 1f\n"  // mod is 1, jump. Otherwise handle 2 case
+            "2:\n"
+            "fadd.d ft3, ft0, %[zero] \n"
+            "fmsub.d ft4, ft2, %[invstd], "
+            "%[running_mean_times_invstd]\n"
+            "fadd.d ft5, ft0, %[zero] \n"
+            "fmsub.d ft6, ft2, %[invstd], "
+            "%[running_mean_times_invstd]\n"
+            "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
+            "fadd.d %[grad_bias_1], ft5, %[grad_bias_1]\n"
+            "fmul.d ft1, ft3, %[weight_times_invstd]\n"
+            "fmul.d ft1, ft5, %[weight_times_invstd]\n"
+            "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
+            "fmadd.d %[grad_weight_1], ft6, ft5, %[grad_weight_1]\n"
+            "j 0f\n"
+            "1:\n"
+            "fadd.d ft3, ft0, %[zero] \n"
+            "fmsub.d ft4, ft2, %[invstd], "
+            "%[running_mean_times_invstd]\n"
+            "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
+            "fmul.d ft1, ft3, %[weight_times_invstd]\n"
+            "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
+            "0:\n"
+            : [grad_weight_0] "+fr"(grad_weight_0),
+              [grad_weight_1] "+fr"(grad_weight_1),
+              [grad_bias_0] "+fr"(grad_bias_0),
+              [grad_bias_1] "+fr"(grad_bias_1), [mod_temp] "=r"(mod_temp)
+            : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
+              [weight_times_invstd] "fr"(weight_times_invstd),
+              [invstd] "fr"(invstd), [zero] "fr"(ZERO), [work_mod] "r"(work_mod)
+            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
 
-            case 1:
-                asm volatile(
-                    "fadd.d ft3, ft0, %[zero] \n"
-                    "fmsub.d ft4, ft2, %[invstd], "
-                    "%[running_mean_times_invstd]\n"
-                    "fadd.d %[grad_bias_0], ft3, %[grad_bias_0]\n"
-                    "fmul.d ft1, ft3, %[weight_times_invstd]\n"
-                    "fmadd.d %[grad_weight_0], ft4, ft3, %[grad_weight_0]\n"
-                    : [grad_weight_0] "+fr"(grad_weight_0), [grad_bias_0] "+fr"(
-                                                                grad_bias_0)
-                    : [running_mean_times_invstd] "fr"(
-                          running_mean_times_invstd),
-                      [weight_times_invstd] "fr"(weight_times_invstd),
-                      [invstd] "fr"(invstd), [zero] "fr"(ZERO)
-                    : "ft0", "ft1", "ft2", "ft3", "ft4");
-                break;
-        }
         // in plain C:
         // if (is_first_iteration) {
         //     grad_bias_scratch[channel] =
@@ -331,6 +325,7 @@ static inline void batchnorm_backward_main_loop(
         get_core_num_work_items(C, num_compute_cores, compute_id);
 
     uint32_t num_points_work_in_tile = tile_size_in_points;
+    uint32_t work_mod = num_points_work_in_tile % 3;
 
     // for DMA transfer-out
     uint32_t prev_point_start, num_points_work_in_prev_tile, prev_channel_start;
@@ -339,9 +334,12 @@ static inline void batchnorm_backward_main_loop(
         bool is_last_iteration = false;
         for (uint32_t point_start = 0; point_start < num_points;
              point_start += tile_size_in_points) {
-            if (point_start + tile_size_in_points >= num_points) {
+            // Don't indicate last iteration if just equality - tile size won't
+            // change
+            if (point_start + tile_size_in_points > num_points) {
                 is_last_iteration = true;
                 num_points_work_in_tile = num_points - point_start;
+                work_mod = num_points_work_in_tile % 3;
             }
 
             if (snrt_is_dm_core()) {
@@ -403,8 +401,9 @@ static inline void batchnorm_backward_main_loop(
                         &invstd_scratch[compute_id],
                         &grad_bias_scratch[compute_id],
                         &grad_weight_scratch[compute_id], C,
-                        num_points_work_in_tile, num_channels_work_for_core,
-                        num_compute_cores, point_start == 0, is_last_iteration);
+                        num_points_work_in_tile, work_mod,
+                        num_channels_work_for_core, num_compute_cores,
+                        point_start == 0, is_last_iteration);
                 }
                 buf_flag = !buf_flag;
             }
@@ -423,7 +422,7 @@ static inline void batchnorm_backward_main_loop(
                     &running_mean_times_invstd_scratch[compute_id],
                     &weight_times_invstd_scratch[compute_id],
                     &invstd_scratch[compute_id], &grad_bias_scratch[compute_id],
-                    &grad_weight_scratch[compute_id], C, num_points,
+                    &grad_weight_scratch[compute_id], C, num_points, work_mod,
                     num_channels_work_for_core, num_compute_cores, true, true);
             }
         }

@@ -197,11 +197,11 @@ static inline void batchnorm_backward_single_core_opt(
     // compute grad_weight, grad_bias, grad_ifmap
     if (snrt_is_dm_core()) {
     } else if (compute_id == 0) {
-        batchnorm_backward_tile_fp64(grad_ofmap_scratch, grad_ifmap_scratch,
-                                     ifmap_scratch, running_mean_scratch,
-                                     weight_scratch, invstd_scratch,
-                                     grad_bias_scratch, grad_weight_scratch, C,
-                                     num_points, C, 1, true, true);
+        batchnorm_backward_tile_fp64(
+            grad_ofmap_scratch, grad_ifmap_scratch, ifmap_scratch,
+            running_mean_scratch, weight_scratch, invstd_scratch,
+            grad_bias_scratch, grad_weight_scratch, C, num_points,
+            num_points % 3, C, 1, true, true);
     }
     uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
     // don't need second reduction

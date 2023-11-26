@@ -38,8 +38,17 @@ void ssr_asm_with_index(int* out_idx, int total_iter) {
 
 void ssr_asm_no_index(int);
 
-void ssr_asm_no_index(int total_iter) {
-  if (total_iter % 2 == 0) {
+void ssr_asm_no_index(int n_iter_minus_two) {
+  if (n_iter_minus_two == 0) {
+    asm volatile( 
+      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "fmax.d ft1, ft3, ft0\n"
+      :
+      : [zero] "f"(0.0)
+      : "ft0", "ft1", "ft2", "ft3", "memory"
+    );
+  }
+  else if (n_iter_minus_two % 2 == 0) {
     asm volatile(
       "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
       "fmax.d ft3, ft3, ft0\n"
@@ -48,7 +57,7 @@ void ssr_asm_no_index(int total_iter) {
       "fmax.d ft3, ft4, ft0\n"
       "fadd.d ft1, %[zero], ft3\n" /* store the final value */
       :
-      : [zero] "f"(0.0), [n_frep] "r"(total_iter / 2 - 1) /* loading initial val takes 1 read */
+      : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two / 2 - 1) /* loading initial val takes 1 read */
       : "ft0", "ft1", "ft2", "ft3", "ft4", "memory"
     );
   }
@@ -60,7 +69,7 @@ void ssr_asm_no_index(int total_iter) {
       "fmax.d ft3, ft4, ft0\n"
       "fadd.d ft1, %[zero], ft3\n" /* store the final value */
       :
-      : [zero] "f"(0.0), [n_frep] "r"(total_iter / 2) /* loading initial val takes 1 read */
+      : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two / 2) /* loading initial val takes 1 read */
       : "ft0", "ft1", "ft2", "ft3", "ft4", "memory"
     );
   }
@@ -154,6 +163,13 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     // }
 
     snrt_dma_start_1d(out, ptr, sizeof(double) * total_outs);
+    ptr += sizeof(double) * total_outs;
+    ptr += ((size_t) ptr) % 8;
+
+    #if DMA_INDICES
+    snrt_dma_wait_all();
+    snrt_dma_start_1d(idx, ptr, sizeof(int) * total_outs);
+    #endif
 
     snrt_dma_wait_all();
     snrt_cluster_hw_barrier();
@@ -181,14 +197,27 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     char* outputs_start = inputs_start + sizeof(double) * total_ins;
     outputs_start += ((size_t) outputs_start) % 8; // cursed again
 
+    #if DMA_INDICES
     #if MAXPOOL_DIM == 1
-    MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
+    #elif MAXPOOL_DIM == 2
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3];
+    #elif MAXPOOL_DIM == 3
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
+    #endif
+    int* idx_out = (int*) (outputs_start + sizeof(double) * total_outs);
+    #else
+    int* idx_out = idx;
+    #endif
+
+    #if MAXPOOL_DIM == 1
+    MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num);
     #elif MAXPOOL_DIM == 2
     snrt_mcycle();
-    MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
+    MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num);
     snrt_mcycle();
     #elif MAXPOOL_DIM == 3
-    MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx, compute_id, compute_num);
+    MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num);
     #endif
 
     // switch (attribs->n_dim) {
@@ -467,17 +496,88 @@ void MAXPOOL_FN_3D(maxpool_attributes* attr, double* in, double* out, int* idx, 
     int y_d = i * y_step;
 
     int hstart = ph * attr->strides[0] - attr->pads[0];
-    int hend = hstart + attr->kernel_shape[0] * attr->dilations[0];
+    int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
-    int wstart = pw * attr->strides[1] - attr->pads[1];
-    int wend = wstart + attr->kernel_shape[1] * attr->dilations[1];
+    if (hstart < 0) {
+      hstart = (hstart % attr->dilations[0]);
+      if (hstart < 0) hstart += attr->dilations[0];
+    }
+
+    int wstart = pw * attr->strides[1] - attr->pads[1];;
+    int wend = min(wstart + attr->kernel_shape[1] * attr->dilations[1], width);
+
+    if (wstart < 0) {
+      wstart = (wstart % attr->dilations[1]);
+      if (wstart < 0) wstart += attr->dilations[1];
+    }
 
     int dstart = pd * attr->strides[2] - attr->pads[2];
-    int dend = dstart + attr->kernel_shape[2] * attr->dilations[2];
+    int dend = min(dstart + attr->kernel_shape[2] * attr->dilations[2], depth);
+
+    if (dstart < 0) {
+      dstart = (dstart % attr->dilations[2]);
+      if (dstart < 0) dstart += attr->dilations[2];
+    }
 
     int pool_index = ph * pooled_width * pooled_depth + pw * pooled_depth + pd;
 
-    #if USE_SSR_FREP_2D || USE_SSR_FREP_ALL
+    #if USE_SSR_FREP_3D || USE_SSR_FREP_ALL
+
+      int max_index;
+
+      int n_iter_h = (hend - hstart + attr->dilations[0] - 1) / attr->dilations[0];
+      int n_iter_w = (wend - wstart + attr->dilations[1] - 1) / attr->dilations[1];
+      int n_iter_d = (dend - dstart + attr->dilations[2] - 1) / attr->dilations[2];
+      if (n_iter_h * n_iter_w * n_iter_d == 1) {
+        out[y_d + pool_index] = in[x_d + hstart * width * depth + wstart * depth + dstart];
+        #if defined(MAXPOOL_COL_MAJOR)
+          idx[y_d + pool_index] = hstart + wstart * height + dstart * height * width;
+        #elif defined(MAXPOOL_ROW_MAJOR)
+          idx[y_d + pool_index] = hstart * width * depth + wstart * depth + dstart;
+        #endif
+        continue;
+      }
+
+      snrt_ssr_loop_3d(
+        SNRT_SSR_DM0,
+        n_iter_d,
+        n_iter_w,
+        n_iter_h,
+        sizeof(double) * attr->dilations[2],
+        sizeof(double) * attr->dilations[1] * depth,
+        sizeof(double) * attr->dilations[0] * depth * width);
+      snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
+
+      snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, in + x_d + hstart * width * depth + wstart * depth + dstart);
+      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + y_d + pool_index);
+
+      snrt_ssr_enable();
+
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+
+      ssr_asm_with_index(&max_index, n_iter_d * n_iter_h * n_iter_w - 1);
+      snrt_ssr_disable();
+
+      // int h_index = max_index / (n_iter_w * n_iter_d) * attr->dilations[0] + hstart;
+      // max_index -= ph * pooled_width * pooled_depth;
+      // int w_index = (max_index / n_iter_d) * attr->dilations[1] + wstart;
+      // int d_index = (max_index % n_iter_d) * attr->dilations[2] + dstart;
+      int h_index = (max_index / (n_iter_w * n_iter_d)) * attr->dilations[0] + hstart;
+      int w_index = ((max_index / n_iter_d) % n_iter_w) * attr->dilations[1] + wstart;
+      int d_index = (max_index % n_iter_d) * attr->dilations[2] + dstart;
+
+      #ifdef MAXPOOL_COL_MAJOR
+      idx[y_d + pool_index] = h_index + w_index * height + d_index * height * width;
+      #else
+      idx[y_d + pool_index] = h_index * width * depth + w_index * depth + d_index;
+      #endif
+
+      #else
+        ssr_asm_no_index(n_iter_d * n_iter_h * n_iter_w - 2);
+        snrt_ssr_disable();
+
+      #endif
+
     #else
 
       #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)

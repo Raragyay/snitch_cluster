@@ -10,6 +10,8 @@ alias verify="python3 ../../sw/onnx/maxpool/verify.py bin/snitch_cluster.vlt sw/
 
 alias verify2="python3 ../../sw/onnx/maxpool/verify2d.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"
 
+alias verifyall="python3 ../../sw/onnx/maxpool/verifyall.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"
+
 alias generate="python3 ../../sw/onnx/maxpool/data/datagen.py --cfg ../../sw/onnx/maxpool/data/params.hjson ../../sw/onnx/maxpool/data/data.h"
 
 alias anal="node ../../sw/onnx/maxpool/data/analyze_benchmark.js"

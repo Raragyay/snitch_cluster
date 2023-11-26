@@ -7,7 +7,7 @@
 #define DMA_INDICES 1
 #define USE_SSR_FREP_1D 1
 #define USE_SSR_FREP_2D 1
-#define USE_SSR_FREP_3D 0
+#define USE_SSR_FREP_3D 1
 #define USE_SSR_FREP_ALL 0
 
 // TODO: Replace with better impls? Problems with using math.h...

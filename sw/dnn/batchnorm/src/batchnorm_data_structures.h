@@ -57,7 +57,7 @@ typedef struct {
 typedef struct {
     uint32_t num_points_work_in_tile;  // distinct from tile size
     uint32_t work_mod_3;
-    uint32_t is_last_iteration;
+    uint32_t work_div_3_sub_1;
 } __attribute__((aligned(sizeof(double)))) dm_comm_t;
 
 typedef struct {

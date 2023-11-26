@@ -260,7 +260,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     const uint32_t H = l->IH;
     const uint32_t W = l->IW;
     const uint32_t C = l->CI;
-     uint32_t num_points = N * H * W;
+    uint32_t num_points = N * H * W;
 
     const uint32_t num_channels_work_for_core = get_core_num_work_items(C, num_compute_cores, compute_id);
     const uint32_t channel_block_offset = get_offset_for_core_work_blocked(C, num_compute_cores, compute_id);
@@ -325,13 +325,14 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // num_points = num_points/2;
     uint32_t work_left = num_points;
     uint32_t work_mod_3 = work_in_tile % 3;
+    uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
     DUMP(work_in_tile);
     DUMP(tile_size_in_points);
     if (snrt_is_dm_core()) {
         work_left -= work_in_tile;
         dm_comm->num_points_work_in_tile = work_in_tile;
         dm_comm->work_mod_3 = work_mod_3;
-        dm_comm->is_last_iteration = work_left == 0;
+        dm_comm->work_div_3_sub_1 = work_div_3_sub_1;  // this is the frep value
     }
 
     // if (compute_id == 0) {
@@ -431,10 +432,10 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             snrt_cluster_hw_barrier();
         }
     } else {
-        batchnorm_backward_main_loop(C, work_left, work_in_tile, work_mod_3, dm_comm, tile_size_in_points, compute_id,
-                                     num_compute_cores, l, grad_ofmap_scratch, ifmap_scratch, grad_ifmap_scratch,
-                                     grad_weight_scratch, grad_bias_scratch, invstd_scratch, running_mean_scratch,
-                                     weight_scratch, buf_flag);
+        batchnorm_backward_main_loop(C, work_left, work_in_tile, work_mod_3, work_div_3_sub_1, dm_comm,
+                                     tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,
+                                     ifmap_scratch, grad_ifmap_scratch, grad_weight_scratch, grad_bias_scratch,
+                                     invstd_scratch, running_mean_scratch, weight_scratch, buf_flag);
     }
 
     uint32_t start_grad_bias_weight_reduction_2 = SNRT_SECTIONED_MCYCLE();

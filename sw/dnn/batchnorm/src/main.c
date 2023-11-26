@@ -14,7 +14,19 @@ int main() {
     } else if (is_forward && !is_training) {
         batchnorm_layer(&forward_eval_layer);
     } else if (!is_forward && is_training) {
-        batchnorm_backward_training(&backward_training_layer);
+        switch (impl_opt_level) {
+            case SINGLE_CORE:
+                batchnorm_backward_training_single_core(&backward_training_layer);
+                break;
+            case SINGLE_CORE_OPT:
+                batchnorm_backward_training_single_core_opt(&backward_training_layer);
+                break;
+            case MULTICORE_OPT:
+                batchnorm_backward_training(&backward_training_layer);
+                break;
+            default:
+                return 1;
+        }
     } else {
         switch (impl_opt_level) {
             case SINGLE_CORE:

@@ -560,7 +560,7 @@ static inline void batchnorm_backward_training(
     uint32_t end_dma_load = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
-    uint32_t start_compute_invstd_load = snrt_mcycle();
+    uint32_t start_invstd_computations = snrt_mcycle();
     if (snrt_is_dm_core()) {
         snrt_dma_wait(grad_ofmap_load);
         snrt_dma_wait(ifmap_load);
@@ -587,7 +587,7 @@ static inline void batchnorm_backward_training(
             snrt_ssr_disable();
         }
     }
-    uint32_t end_compute_invstd_load = snrt_mcycle();
+    uint32_t end_invstd_computations = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
     uint32_t start_compute_sum_dotp_reduction_1 = snrt_mcycle();
@@ -608,19 +608,18 @@ static inline void batchnorm_backward_training(
                 const register double ZERO = 0;
                 snrt_ssr_enable();
                 asm volatile(
-                    "frep.o %[n_frep], 3, 0, 0 \n"
-                    "fadd.d %[sum], ft0, %[zero] \n"
-                    "fsub.d ft3, ft1, %[curr_mean]\n"
-                    "fmul.d %[dotp], ft3, %[sum]\n"
+                    "frep.o %[n_frep], 5, 0, 0 \n"
+                    "fadd.d ft3, ft0, %[zero] \n"
+                    "fadd.d %[sum], ft3, %[sum] \n"
+                    "fsub.d ft4, ft1, %[curr_mean]\n"
+                    "fmul.d ft4, ft4, ft3\n"
+                    "fadd.d %[dotp], ft4, %[dotp]\n"
                     : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
                     : [curr_mean] "fr"(curr_mean_reg), [zero] "fr"(ZERO),
                       [n_frep] "r"(num_points_work_per_channel_for_core - 1)
-                    : "ft0", "ft1", "ft2", "ft3");
+                    : "ft0", "ft1", "ft2", "ft3", "ft4");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
-
-                sum[compute_id * C + channel] = sum_reg;
-                dotp[compute_id * C + channel] = dotp_reg;
             }
             __builtin_ssr_barrier(SNRT_SSR_DM1);
         }
@@ -667,7 +666,7 @@ static inline void batchnorm_backward_training(
             register double num_points_reg = num_points;
             const register double ZERO = 0;
             snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
-                             C * sizeof(double));
+                             num_compute_cores * sizeof(double));
 
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &grad_weight[compute_id]);

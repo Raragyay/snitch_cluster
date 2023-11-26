@@ -1,4 +1,6 @@
 #pragma once
+#include <stdint.h>
+#include "dnn.h"
 typedef struct {
     uint32_t CI;
     uint32_t IH;
@@ -51,6 +53,12 @@ typedef struct {
     float eps;
     precision_t dtype;
 } batchnorm_backward_layer_t;
+
+typedef struct {
+    uint32_t num_points_work_in_tile;  // distinct from tile size
+    uint32_t work_mod_3;
+    uint32_t work_div_3_sub_1;
+} __attribute__((aligned(sizeof(double)))) dm_comm_t;
 
 typedef struct {
     uint32_t CI;

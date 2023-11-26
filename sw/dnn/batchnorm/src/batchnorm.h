@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
-
 #include <stdbool.h>
+
+#include "dnn.h"
+
 #include "batchnorm_data_structures.h"
 #include "batchnorm_reference.h"
 #include "batchnorm_utils.h"
@@ -420,13 +422,39 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
     // compute grad_weight, grad_bias, grad_ifmap. Tile only if we can't fit all
     // the points in one tile.
+    if (work_in_tile == num_points) {
+        uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
+        // no looping needed
+        if (snrt_is_dm_core()) {
+            // finish loads
+            snrt_dma_wait_all();
 
-    batchnorm_backward_main_loop(
-        !(num_points == tile_size_in_points), C, num_points,
-        tile_size_in_points, compute_id, num_compute_cores, l,
-        grad_ofmap_scratch, ifmap_scratch, grad_ifmap_scratch,
-        grad_weight_scratch, grad_bias_scratch, invstd_scratch,
-        running_mean_scratch, weight_scratch, buf_flag);
+            // notify ready
+            snrt_cluster_hw_barrier();
+            // wait for compute to be done
+            snrt_cluster_hw_barrier();
+            snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch, work_in_tile * C * sizeof(double));
+        } else {
+            snrt_cluster_hw_barrier();
+            if (num_channels_work_for_core > 0) {
+                // TODO; shift these all before hand
+                batchnorm_backward_tile_fp64(
+                    &grad_ofmap_scratch[compute_id], &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                    &running_mean_scratch[compute_id], &weight_scratch[compute_id], &invstd_scratch[compute_id],
+                    &grad_bias_scratch[compute_id], &grad_weight_scratch[compute_id], C, work_in_tile, work_mod_3,
+                    num_channels_work_for_core, num_compute_cores, true, false);
+            }
+
+            snrt_cluster_hw_barrier();
+        }
+
+        uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
+    } else {
+        batchnorm_backward_main_loop(C, work_left, work_in_tile, work_mod_3, work_div_3_sub_1, dm_comm,
+                                     tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,
+                                     ifmap_scratch, grad_ifmap_scratch, grad_weight_scratch, grad_bias_scratch,
+                                     invstd_scratch, running_mean_scratch, weight_scratch, buf_flag);
+    }
 
     uint32_t start_grad_bias_weight_reduction_2 = SNRT_SECTIONED_MCYCLE();
     uint32_t end_grad_bias_weight_reduction_2 = SNRT_SECTIONED_MCYCLE();

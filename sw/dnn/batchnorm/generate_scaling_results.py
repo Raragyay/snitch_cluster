@@ -102,12 +102,12 @@ small_sizes = [
 # print(target_snitch_cluster_path.absolute())
 config_modifiers = {
     # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-    # "SINGLE_CORE_OPT": [
-    #     *small_sizes,
-    #     format_size(16, 8, 8),
-    #     format_size(16, 16, 8),
-    #     format_size(16, 16, 16),
-    # ],
+    "SINGLE_CORE_OPT": [
+        *small_sizes,
+        format_size(16, 8, 8),
+        format_size(16, 16, 8),
+        format_size(16, 16, 16),
+    ],
     "MULTICORE_OPT": [
         *small_sizes,
         format_size(16, 8, 8),

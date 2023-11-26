@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
-
 #include <stdbool.h>
+
+#include "dnn.h"
+
 #include "batchnorm_data_structures.h"
 #include "batchnorm_reference.h"
 #include "batchnorm_utils.h"
-#include "dnn.h"
 #include "printf.h"
 #include "snrt.h"
 
@@ -408,6 +409,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     // compute grad_weight, grad_bias, grad_ifmap. Tile only if we can't fit all
     // the points in one tile.
     if (work_in_tile == num_points) {
+        uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
         // no looping needed
         if (snrt_is_dm_core()) {
             // finish loads
@@ -431,6 +433,8 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
             snrt_cluster_hw_barrier();
         }
+
+        uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
     } else {
         batchnorm_backward_main_loop(C, work_left, work_in_tile, work_mod_3, work_div_3_sub_1, dm_comm,
                                      tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,

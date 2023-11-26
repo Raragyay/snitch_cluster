@@ -591,6 +591,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 snrt_fpu_fence();
                 snrt_ssr_disable();
+                sum[compute_id * C + channel] = sum_reg;
+                dotp[compute_id * C + channel] = dotp_reg;
             }
             __builtin_ssr_barrier(SNRT_SSR_DM1);
         }

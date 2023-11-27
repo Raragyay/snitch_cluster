@@ -5,12 +5,17 @@
 // Parameters for a GEMM
 
 {
-    M: 8,
-    N: 4,
+    M: 32,
+    N: 8,
     K: 8,
     beta: 0,
     ta: false,
     tb: false, // must be true for SIMD
     prec: 64,
-    expand: 0
+    expand: 0,
+    m_tiles: 2 // number of tiles in M dimension
+    k_tiles: 2 // number of tiles in K dimension
+    n_tiles: 2 // number of tiles in N dimension
+    parallelize_k: 0
+    parallelize_m: 1
 }

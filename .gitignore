@@ -2,6 +2,7 @@
 Bender.lock
 .vscode/
 __pycache__
+.idea/
 
 // Modelsim Fiels
 *.wlf

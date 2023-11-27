@@ -19,7 +19,7 @@ SUBDIRS += blas/gemm
 #SUBDIRS += dnn/maxpool
 # SUBDIRS += dnn/softmax
 #SUBDIRS += montecarlo/pi_estimation
-SUBDIRS += training/gradient
+#SUBDIRS += training/gradient
 
 .PHONY: all clean $(SUBDIRS)
 

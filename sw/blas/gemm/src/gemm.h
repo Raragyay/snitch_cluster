@@ -230,6 +230,85 @@ void gemm_fp32_baseline_unrolled(uint32_t M, uint32_t N, uint32_t K, float* A,
     }
 }
 
+
+void gemm_fp64_ssr(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
+                   uint32_t ta, double* B, uint32_t ldB, uint32_t tb, double* C,
+                   uint32_t ldC, const uint32_t* BETA, uint32_t setup_SSR) {
+
+
+        const double b = *BETA;
+
+        if (setup_SSR) {
+        // First matrix is stored in transposed format
+        if (ta) {
+            const uint32_t ssr0_b[3] = {K, N, M};
+            const uint32_t ssr0_i[3] = {8 * ldA, 0, 8};
+
+            snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[0], ssr0_b[1], ssr0_b[2],
+                             ssr0_i[0], ssr0_i[1], ssr0_i[2]);
+            //snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+        } else {
+            const uint32_t ssr0_b[3] = {K, N, M};
+            const uint32_t ssr0_i[3] = {8, 0, 8 * ldA};
+
+            // A[k + unroll * m * ldA]
+            snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[0], ssr0_b[1], ssr0_b[2],
+                             ssr0_i[0], ssr0_i[1], ssr0_i[2]);
+            //snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+        }
+
+        // Second matrix is stored in transposed format
+        if (tb) {
+            const uint32_t ssr1_b[3] = {K, N, M};
+            const uint32_t ssr1_i[3] = {8, 8 * ldB, 0};
+
+            snrt_ssr_loop_3d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_i[0], ssr1_i[1], ssr1_i[2]);
+        } else {
+            const uint32_t ssr1_b[3] = {K, N, M};
+            const uint32_t ssr1_i[3] = {8 * ldB, 8, 0};
+
+            snrt_ssr_loop_3d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_i[0], ssr1_i[1], ssr1_i[2]);
+        }
+    }
+
+    // SSR start address need to be configured each time
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, A);
+    snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_3D, B);
+    snrt_ssr_enable();
+
+
+
+    for (uint32_t m = 0; m < M; m++) {
+        for (uint32_t n = 0; n < N; n++) {
+            double* address = C + m * ldC + n;
+
+            
+            // Load intermediate result
+            asm volatile(
+                "fld ft3, 0(%[address])\n"
+                "fmul.d  ft3, ft3, %[beta]\n"
+                "frep.o %[n_frep], 1, 0, 0 \n"
+                "fmadd.d ft3, ft0, ft1, ft3 \n"
+                
+                "fsd ft3, 0(%[address])\n"  
+                : 
+                : [ n_frep ] "r"(K - 1), [ address ] "r" (address), [ beta ] "+f" (b)
+                : "ft0", "ft1", "ft2", "ft3", "memory");
+
+            // Store results back
+            snrt_fpu_fence();
+            
+        }
+
+    }
+
+    snrt_ssr_disable();
+}
+
+
+
 void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
                    uint32_t ta, double* B, uint32_t ldB, uint32_t tb, double* C,
                    uint32_t ldC, const uint32_t* BETA, uint32_t setup_SSR) {
@@ -1077,14 +1156,14 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
         switch (prec) {
             case FP64:
-                // gemm_fp64_opt(frac_m, n, k, (double*)a + offsetA,
-                // lda_strided,
-                //               transa, (double*)b, ldb, transb, (double*)c +
-                //               offsetC, ldc_strided, &beta, setup_ssr);
-                gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
-                                   lda_strided, transa, (double*)b, ldb, transb,
-                                   (double*)c + offsetC, ldc_strided,
-                                   (double)beta);
+                gemm_fp64_ssr(frac_m, n, k, (double*)a + offsetA,
+                lda_strided,
+                              transa, (double*)b, ldb, transb, (double*)c +
+                              offsetC, ldc_strided, &beta, setup_ssr);
+                // gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
+                //                    lda_strided, transa, (double*)b, ldb, transb,
+                //                    (double*)c + offsetC, ldc_strided,
+                //                    (double)beta);
                 break;
             case FP32:
                 gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,

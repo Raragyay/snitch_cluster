@@ -479,7 +479,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     uint32_t num_channels_work_for_core = get_core_num_work_items(C, num_compute_cores, compute_id);
     uint32_t num_points_work_per_channel_for_core = get_core_num_work_items(num_points, num_compute_cores, compute_id);
 
-    uint32_t grad_weight_len = C * num_compute_cores, sum_len = C * num_compute_cores, dotp_len = C * num_compute_cores;
+    uint32_t grad_weight_len = C * num_compute_cores, sum_len = C, dotp_len = C;
     uint32_t grad_ofmap_len = num_data, grad_ifmap_len = num_data, ifmap_len = num_data;
 
     // Using TCDM as scratchpad
@@ -494,15 +494,11 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     ptr += C;
     double *grad_mean = ptr;
     ptr += C;
-    double *dx = ptr;
-    ptr += C * num_points;
 
     // Input value
     double *weight = ptr;
     ptr += C;
     double *curr_mean = ptr;
-    ptr += C;
-    double *curr_var = ptr;
     ptr += C;
     double *grad_ofmap = ptr;
     ptr += num_data;
@@ -516,32 +512,80 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     ptr += grad_weight_len;
     double *sum = ptr;
     ptr += sum_len;
-    // grad_bias = sum
 
     // Load data
     snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load, grad_ofmap_load, ifmap_load;
 
     uint32_t start_dma_load = snrt_mcycle();
     if (snrt_is_dm_core()) {
-        curr_var_load = snrt_dma_start_1d(invstd, l->current_var, C * sizeof(double));
         grad_ofmap_load = snrt_dma_start_1d(grad_ofmap, l->grad_ofmap, grad_ofmap_len * sizeof(double));
         ifmap_load = snrt_dma_start_1d(ifmap, l->ifmap, ifmap_len * sizeof(double));
         curr_mean_load = snrt_dma_start_1d(curr_mean, l->current_mean, C * sizeof(double));
+        curr_var_load = snrt_dma_start_1d(invstd, l->current_var, C * sizeof(double));
         weight_load = snrt_dma_start_1d(weight, l->weight, C * sizeof(double));
-        snrt_dma_wait(curr_var_load);
+        snrt_dma_wait(grad_ofmap_load);
+        snrt_dma_wait(ifmap_load);
+        snrt_dma_wait(curr_mean_load);
     } else if (snrt_is_compute_core()) {
-        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core, num_compute_cores * sizeof(double));
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points, num_channels_work_for_core,
+                        C * sizeof(double), num_compute_cores * sizeof(double));
     }
     uint32_t end_dma_load = snrt_mcycle();
     snrt_cluster_hw_barrier();
 
     uint32_t start_invstd_computations = snrt_mcycle();
+    uint32_t end_invstd_computations = snrt_mcycle();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_compute_sum_dotp_reduction = snrt_mcycle();
     if (snrt_is_dm_core()) {
-        snrt_dma_wait(grad_ofmap_load);
-        snrt_dma_wait(ifmap_load);
-        snrt_dma_wait(curr_mean_load);
+        snrt_dma_wait(curr_var_load);
+    } else {
+        if (num_channels_work_for_core > 0) {
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &grad_ofmap[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, &ifmap[compute_id]);
+            for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
+                register volatile double sum_reg = 0;
+                register volatile double dotp_reg = 0;
+                register double curr_mean_reg = curr_mean[channel];
+                const register double ZERO = 0;
+                snrt_ssr_enable();
+                asm volatile(
+                    "frep.o %[n_frep], 5, 0, 0 \n"
+                    "fadd.d ft3, ft0, %[zero] \n"
+                    "fadd.d %[sum], ft3, %[sum] \n"
+                    "fsub.d ft4, ft1, %[curr_mean]\n"
+                    "fmul.d ft4, ft4, ft3\n"
+                    "fadd.d %[dotp], ft4, %[dotp]\n"
+                    : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
+                    : [curr_mean] "fr"(curr_mean_reg), [zero] "fr"(ZERO),
+                        [n_frep] "r"(num_points - 1)
+                    : "ft0", "ft1", "ft2", "ft3", "ft4");
+                snrt_fpu_fence();
+                snrt_ssr_disable();
+                sum[channel] = sum_reg;
+                dotp[channel] = dotp_reg;
+            }
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
+        }
+    }
+    uint32_t end_compute_sum_dotp_reduction = snrt_mcycle();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_compute_sum_dotp_reduction_2 = snrt_mcycle();
+    uint32_t end_compute_sum_dotp_reduction_2 = snrt_mcycle();
+
+    uint32_t start_compute_k_grad_mean = snrt_mcycle();
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_bias, sum, C * sizeof(double));
+        snrt_dma_wait(weight_load);
     } else if (snrt_is_compute_core()) {
         if (num_channels_work_for_core > 0) {
+            register double num_points_reg = num_points;
+            const register double ZERO = 0;
+            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
+                             num_compute_cores * sizeof(double));
+            
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &invstd[compute_id]);
             register double eps = l->eps;
@@ -559,85 +603,6 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
             snrt_fpu_fence();
             __builtin_ssr_barrier(SNRT_SSR_DM1);
             snrt_ssr_disable();
-        }
-    }
-    uint32_t end_invstd_computations = snrt_mcycle();
-    snrt_cluster_hw_barrier();
-
-    uint32_t start_compute_sum_dotp_reduction_1 = snrt_mcycle();
-    if (snrt_is_dm_core()) {
-    } else {
-        if (num_points_work_per_channel_for_core > 0) {
-            snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core, C,
-                             num_compute_cores * C * sizeof(double), sizeof(double));
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &grad_ofmap[compute_id * C + 0]);
-            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, &ifmap[compute_id * C + 0]);
-            for (uint32_t channel = 0; channel < C; ++channel) {
-                register volatile double sum_reg = 0;
-                register volatile double dotp_reg = 0;
-                register double curr_mean_reg = curr_mean[channel];
-                const register double ZERO = 0;
-                snrt_ssr_enable();
-                asm volatile(
-                    "frep.o %[n_frep], 5, 0, 0 \n"
-                    "fadd.d ft3, ft0, %[zero] \n"
-                    "fadd.d %[sum], ft3, %[sum] \n"
-                    "fsub.d ft4, ft1, %[curr_mean]\n"
-                    "fmul.d ft4, ft4, ft3\n"
-                    "fadd.d %[dotp], ft4, %[dotp]\n"
-                    : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
-                    : [curr_mean] "fr"(curr_mean_reg), [zero] "fr"(ZERO),
-                      [n_frep] "r"(num_points_work_per_channel_for_core - 1)
-                    : "ft0", "ft1", "ft2", "ft3", "ft4");
-                snrt_fpu_fence();
-                snrt_ssr_disable();
-                sum[compute_id * C + channel] = sum_reg;
-                dotp[compute_id * C + channel] = dotp_reg;
-            }
-            __builtin_ssr_barrier(SNRT_SSR_DM1);
-        }
-    }
-    uint32_t end_compute_sum_dotp_reduction_1 = snrt_mcycle();
-    snrt_cluster_hw_barrier();
-
-    uint32_t start_compute_sum_dotp_reduction_2 = snrt_mcycle();
-    if (snrt_is_dm_core()) {
-    } else if (snrt_is_compute_core()) {
-        if (num_compute_cores > 0) {
-            for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
-                register volatile double sum_reg = 0;
-                register volatile double dotp_reg = 0;
-                snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_compute_cores, C * sizeof(double));
-                snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &sum[channel]);
-                snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, &dotp[channel]);
-                snrt_ssr_enable();
-                asm volatile(
-                    "frep.o %[n_frep], 2, 0, 0 \n"
-                    "fadd.d %[sum], ft0, %[sum] \n"
-                    "fadd.d %[dotp], ft1, %[dotp] \n"
-                    : [sum] "+fr"(sum_reg), [dotp] "+fr"(dotp_reg)
-                    : [n_frep] "r"(num_compute_cores - 1)
-                    : "ft0", "ft1", "ft2");
-                snrt_fpu_fence();
-                snrt_ssr_disable();
-                sum[channel] = sum_reg;
-                dotp[channel] = dotp_reg;
-            }
-        }
-    }
-    uint32_t end_compute_sum_dotp_reduction_2 = snrt_mcycle();
-    snrt_cluster_hw_barrier();
-
-    uint32_t start_compute_k_grad_mean = snrt_mcycle();
-    if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(l->grad_bias, sum, C * sizeof(double));
-        snrt_dma_wait(weight_load);
-    } else if (snrt_is_compute_core()) {
-        if (num_channels_work_for_core > 0) {
-            register double num_points_reg = num_points;
-            const register double ZERO = 0;
-            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
-                             num_compute_cores * sizeof(double));
 
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &grad_weight[compute_id]);
@@ -689,13 +654,13 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_weight, grad_weight, C * sizeof(double));
     } else {
-        if (num_points_work_per_channel_for_core > 0) {
-            snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points_work_per_channel_for_core, C,
-                             num_compute_cores * C * sizeof(double), sizeof(double));
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &ifmap[compute_id * C + 0]);
-            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, &grad_ifmap[compute_id * C + 0]);
-            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, &grad_ofmap[compute_id * C + 0]);
-            for (uint32_t channel = 0; channel < C; ++channel) {
+        if (num_channels_work_for_core > 0) {
+            snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points, num_channels_work_for_core,
+                                C * sizeof(double), num_compute_cores * sizeof(double));
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &ifmap[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, &grad_ifmap[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, &grad_ofmap[compute_id]);
+            for (uint32_t channel = compute_id; channel < C; channel += num_compute_cores) {
                 register double curr_mean_reg = curr_mean[channel];
                 register double k_reg = k[channel];
                 register double grad_mean_reg = grad_mean[channel];
@@ -712,8 +677,8 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                     "fmul.d ft1, ft4, %[weight] \n"
                     :
                     : [curr_mean] "fr"(curr_mean_reg), [k] "fr"(k_reg), [grad_mean] "fr"(grad_mean_reg),
-                      [invstd] "fr"(invstd_reg), [weight] "fr"(weight_reg),
-                      [n_frep] "r"(num_points_work_per_channel_for_core - 1)
+                        [invstd] "fr"(invstd_reg), [weight] "fr"(weight_reg),
+                        [n_frep] "r"(num_points - 1)
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 snrt_fpu_fence();
                 snrt_ssr_disable();

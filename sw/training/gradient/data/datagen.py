@@ -46,19 +46,22 @@ FP8_FORMATS = {
 BURST_ALIGNMENT = 4096
 
 
-def golden_model(I,E):
-    return np.matmul(np.transpose(I), E)
+def golden_model(alpha,A,B,GRAD_C):
+    return alpha*np.matmul( GRAD_C,np.transpose(B)), alpha*np.matmul(np.transpose(A), GRAD_C)
 
 
 def emit_header(**kwargs):
     # Generate random input matrices
     dtype = NUMPY_TYPES[str(kwargs['prec'])]
 
-    I = np.random.rand(kwargs['M'], kwargs['K']).astype(dtype)
-    E = np.random.rand(kwargs['M'], kwargs['N']).astype(dtype)
-    old_grad_W = np.random.rand(kwargs['K'], kwargs['N']).astype(dtype)
+    alpha = np.random.rand((1)).astype(dtype) [0]
+    A = np.random.rand(kwargs['M'], kwargs['K']).astype(dtype)
+    B = np.random.rand(kwargs['K'], kwargs['N']).astype(dtype)
+    GRAD_C = np.random.rand(kwargs['M'], kwargs['N']).astype(dtype)
+    OLD_GRAD_A = np.random.rand(kwargs['M'], kwargs['K']).astype(dtype)
+    OLD_GRAD_B = np.random.rand(kwargs['K'], kwargs['N']).astype(dtype)
 
-    grad_W = golden_model(I,E)
+    GRAD_A, GRAD_B = golden_model(alpha,A,B,GRAD_C)
 
     data_str = [emit_license()]
     data_str += [format_scalar_definition('uint32_t', 'M', kwargs['M'])]
@@ -66,19 +69,37 @@ def emit_header(**kwargs):
     data_str += [format_scalar_definition('uint32_t', 'K', kwargs['K'])]
     data_str += [format_scalar_definition('uint32_t', 'dtype_size', kwargs['prec'] // 8)]
 
-    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'I', I.flatten(),
+    data_str += [format_scalar_definition(C_TYPES[str(kwargs['prec'])], 'alpha', alpha)]
+
+
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'A', A.flatten(),
                                          alignment=BURST_ALIGNMENT, section=kwargs['section'])]
-    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'E', E.flatten(),
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'B', B.flatten(),
                                          alignment=BURST_ALIGNMENT, section=kwargs['section'])]
 
-    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'grad_W', old_grad_W.flatten(),
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'GRAD_A', OLD_GRAD_A.flatten(),
                                          alignment=BURST_ALIGNMENT, section=kwargs['section'])]
 
-    grad_W = format_array_definition(C_TYPES[str(kwargs['prec'])],
-                                          'grad_W',
-                                          grad_W.flatten())
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'GRAD_B', OLD_GRAD_B.flatten(),
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
+    
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'GRAD_C', GRAD_C.flatten(),
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
 
-    data_str += [format_ifdef_wrapper('BIST', grad_W)]
+
+    GRAD_A = format_array_definition(C_TYPES[str(kwargs['prec'])],
+                                          'RES_GRAD_A',
+                                          GRAD_A.flatten())
+    
+
+    GRAD_B = format_array_definition(C_TYPES[str(kwargs['prec'])],
+                                          'RES_GRAD_B',
+                                          GRAD_B.flatten())
+
+    data_str += [format_ifdef_wrapper('BIST', GRAD_A)]
+
+    data_str += [format_ifdef_wrapper('BIST', GRAD_B)]
+
     data_str = '\n\n'.join(data_str)
 
     return data_str

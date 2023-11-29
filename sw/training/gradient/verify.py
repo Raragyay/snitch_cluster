@@ -29,36 +29,52 @@ def main():
                                         snitch_bin=args.snitch_bin,
                                         symbols_bin=args.symbols_bin,
                                         log=args.log,
-                                        output_uids=['grad_W'])
-    grad_W_actual = np.array(bytes_to_float(raw_results['grad_W'], prec=PREC))
+                                        output_uids=['GRAD_A', 'GRAD_B',"stalls_grad_A","stalls_grad_B"])
+    grad_A_actual = np.array(bytes_to_float(raw_results['GRAD_A'], prec=PREC))
+    grad_B_actual = np.array(bytes_to_float(raw_results['GRAD_B'], prec=PREC))
+    actuals = np.concatenate((grad_A_actual,grad_B_actual))
     
     # Extract input operands from ELF file
     if args.symbols_bin:
         elf = Elf(args.symbols_bin)
     else:
         elf = Elf(args.snitch_bin)
-    I = np.array(bytes_to_float(elf.get_symbol_contents('I'), prec=PREC))
-    E = np.array(bytes_to_float(elf.get_symbol_contents('E'), prec=PREC))
+    A = np.array(bytes_to_float(elf.get_symbol_contents('A'), prec=PREC))
+    B = np.array(bytes_to_float(elf.get_symbol_contents('B'), prec=PREC))
+    GRAD_C = np.array(bytes_to_float(elf.get_symbol_contents('GRAD_C'), prec=PREC))
+    alpha = bytes_to_float(elf.get_symbol_contents('alpha'), prec=PREC)
+
     M = bytes_to_int(elf.get_symbol_contents('M'), prec='32', signedness='unsigned')[0]
     N = bytes_to_int(elf.get_symbol_contents('N'), prec='32', signedness='unsigned')[0]
     K = bytes_to_int(elf.get_symbol_contents('K'), prec='32', signedness='unsigned')[0]
 
-    I = np.reshape(I, (M,K))
-    E = np.reshape(E, (M,N))
+    A = np.reshape(A, (M,K))
+    B = np.reshape(B, (K,N))
+    GRAD_C = np.reshape(GRAD_C, (M,N))
+
+    stalls_grad_A = np.array(bytes_to_int(raw_results['stalls_grad_A'], prec='32', signedness='unsigned'))
+    stalls_grad_B = np.array(bytes_to_int(raw_results['stalls_grad_B'], prec='32', signedness='unsigned'))
+
+   # print("GRAD_C:\n", GRAD_C)
+    #print("B:\n",np.transpose(B))
+    print("A\n",stalls_grad_A)    
+    print("B\n",stalls_grad_B)    
 
     # Verify results
-    grad_W_golden = golden_model(I,E)
+    grad_A_golden, grad_B_golden = golden_model(alpha, A,B,GRAD_C)
+    goldens = np.concatenate((grad_A_golden.flatten(),grad_B_golden.flatten()))
+
     
 
-    absolute_err = np.absolute( grad_W_actual - grad_W_golden.flatten() )
+    absolute_err = np.absolute(  actuals - goldens )
     fail = np.any(absolute_err > ERR_THRESHOLD)
     if (fail):
         print("FAIL\n")
-        verification.dump_results_to_csv([grad_W_actual, grad_W_golden, absolute_err],
+        verification.dump_results_to_csv([actuals, goldens, absolute_err],
                                          Path.cwd() / 'gradient_results.csv')
     else:
         print("SUCCESS\n")
-        verification.dump_results_to_csv([grad_W_actual, grad_W_golden, absolute_err],
+        verification.dump_results_to_csv([actuals, goldens, absolute_err],
                                          Path.cwd() / 'gradient_results.csv')
     return int(fail)
 

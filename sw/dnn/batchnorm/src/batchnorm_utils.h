@@ -690,3 +690,132 @@ static inline void batchnorm_backward_main_loop(uint32_t C, uint32_t work_left, 
 
     uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
 }
+
+static inline void __attribute__((always_inline))
+batchnorm_backward_training_tile_fp64(const double* grad_ofmap,
+                            double* grad_ifmap, const double* ifmap,
+                            const double* curr_mean, const double* weight,
+                            const double* invstd, const double* k,
+                            const double* grad_mean, uint32_t C,
+                            uint32_t num_points_work_for_core_in_tile,
+                            uint32_t work_mod,
+                            uint32_t num_channels_to_process,
+                            uint32_t channel_stride,
+                            bool is_first_iteration, bool force_configure) {
+    // access pattern: iterate over the different channels, then over
+    // the different points
+    // Split work over channels to maximize efficacy of frep.
+    // outside loop: channels
+    // inside loop: points
+    if (is_first_iteration || force_configure) {
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL,
+                         num_points_work_for_core_in_tile,  // dimension of inner loop
+                         num_channels_to_process,           // dimension of outer loop
+                         C * sizeof(double),                // stride per inner loop iteration: 1 point
+                         channel_stride * sizeof(double));  // stride per outer loop iteration
+    }
+
+    // thought: how could I minimize the # of reads to grad_ofmap?
+    // dy is used for: grad_bias (addition)
+    //                 grad_weight (dy * (x[i,C]-running_mean[C]) * invstd[C])
+    //                             (can it become a fused somehow? not really..
+    //                             can precompute invstd * running_mean though)
+    //                             then you get an fmsub(x[i,C], invstd[C],
+    //                             invstd[C]*running_mean[C])
+    //                 grad_ifmap (dy * invstd[C] * weight[C])
+    // from this I think that the best result is to tile dy and x.
+    // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
+    bool frep = num_points_work_for_core_in_tile >= 3;
+    uint32_t work_mod_3_sub_1 = num_points_work_for_core_in_tile / 3 - 1;  // can underflow, but then frep won't happen
+    register volatile uint32_t i = 0;                                      // updated during frep for pseudo-dual issue
+    register double ZERO asm("ft9");                                       // can consider fcvt instead
+    asm volatile("fcvt.d.w %[ZERO], zero\n" : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
+    register double curr_mean_reg = *curr_mean;
+    register double k_reg = *k;
+    register double grad_mean_reg = *grad_mean;
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap);
+    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap);
+    snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, grad_ofmap);
+    snrt_ssr_enable();
+    register double invstd_reg = *invstd;
+    register double weight_times_invstd_reg = *weight;
+    // register double running_mean_times_invstd = *running_mean_scratch;
+    // do 1 loop
+    do {  // while (i < num_channels_to_process)
+        // Can only manual unroll 3 times since the max for frep is 16
+        asm volatile(
+            "fmul.d "
+            "%[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
+            : [weight_times_invstd] "+fr"(weight_times_invstd_reg)
+            : [invstd] "fr"(invstd_reg)
+            : "ft0", "ft1", "ft2");
+        if (frep) {
+            asm volatile(
+                "frep.o %[n_frep], 12, 0, 0 \n"
+                "fsub.d ft3, ft0, %[curr_mean] \n"
+                "fsub.d ft5, ft0, %[curr_mean] \n"
+                "fsub.d ft7, ft0, %[curr_mean] \n"
+                "fnmsub.d ft4, ft3, %[k], ft2\n"
+                "fnmsub.d ft6, ft5, %[k], ft2\n"
+                "fnmsub.d ft8, ft7, %[k], ft2\n"
+                "fsub.d ft4, ft4, %[grad_mean] \n"
+                "fsub.d ft6, ft6, %[grad_mean] \n"
+                "fsub.d ft8, ft8, %[grad_mean] \n"
+                "fmul.d ft1, ft4, %[weight_times_invstd] \n"
+                "fmul.d ft1, ft6, %[weight_times_invstd] \n"
+                "fmul.d ft1, ft8, %[weight_times_invstd] \n"
+                :
+                : [curr_mean] "fr"(curr_mean_reg), [k] "fr"(k_reg), [grad_mean] "fr"(grad_mean_reg),
+                  [weight_times_invstd] "fr"(weight_times_invstd_reg), [n_frep] "r"(work_mod_3_sub_1)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8");
+        }
+
+        register uint32_t channel_stride_in_bytes;
+        asm volatile(
+            "slli %[channel_stride_in_bytes], %[channel_stride], 3\n"  // log_2(sizeof(double))
+            "addi %[i], %[i], 1\n"
+            "beq %[num_channels_to_process], %[i], 2f\n"  // shortcut when
+                                                          // only 1 channel
+            "add %[invstd], %[invstd], %[channel_stride_in_bytes]\n"
+            "add %[weight], %[weight], %[channel_stride_in_bytes]\n"
+            "add %[curr_mean], %[curr_mean], %[channel_stride_in_bytes]\n"
+            "add %[k], %[k], %[channel_stride_in_bytes]\n"
+            "add %[grad_mean], %[grad_mean], %[channel_stride_in_bytes]\n"
+            "2:\n"
+            : [invstd] "+r"(invstd), [weight] "+r"(weight), [curr_mean] "+r"(curr_mean),
+              [k] "+r"(k), [grad_mean] "+r"(grad_mean), [i] "+r"(i),
+              [channel_stride_in_bytes] "=r"(channel_stride_in_bytes)
+            : [channel_stride] "r"(channel_stride), [num_channels_to_process] "r"(num_channels_to_process)
+            : "ft0", "ft1", "ft2");
+
+        register uint32_t mod_temp;
+        asm volatile(
+            "beqz %[work_mod], 0f\n"              // mod is 0
+            "andi %[mod_temp], %[work_mod], 1\n"  // is mod equal to 1?
+            "bnez %[mod_temp], 1f\n"              // mod is 1, jump. Otherwise handle 2
+                                                  // case
+            "2:\n"
+            "fsub.d ft3, ft0, %[curr_mean] \n"
+            "fsub.d ft5, ft0, %[curr_mean] \n"
+            "fnmsub.d ft4, ft3, %[k], ft2\n"
+            "fnmsub.d ft6, ft5, %[k], ft2\n"
+            "fsub.d ft4, ft4, %[grad_mean] \n"
+            "fsub.d ft6, ft6, %[grad_mean] \n"
+            "fmul.d ft1, ft4, %[weight_times_invstd] \n"
+            "fmul.d ft1, ft6, %[weight_times_invstd] \n"
+            "j 0f\n"
+            "1:\n"
+            "fsub.d ft3, ft0, %[curr_mean] \n"
+            "fnmsub.d ft4, ft3, %[k], ft2\n"
+            "fsub.d ft4, ft4, %[grad_mean] \n"
+            "fmul.d ft1, ft4, %[weight_times_invstd] \n"
+            "0:\n"
+            : [mod_temp] "=r"(mod_temp)
+            : [curr_mean] "fr"(curr_mean_reg), [k] "fr"(k_reg), [grad_mean] "fr"(grad_mean_reg),
+              [weight_times_invstd] "fr"(weight_times_invstd_reg),
+              [work_mod] "r"(work_mod)
+            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
+    } while (i < num_channels_to_process);
+    __builtin_ssr_barrier(SNRT_SSR_DM1);
+    snrt_ssr_disable();
+}

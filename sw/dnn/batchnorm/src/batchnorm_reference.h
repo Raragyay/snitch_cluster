@@ -224,6 +224,165 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     uint32_t done = snrt_mcycle();
 }
 
+// uses DMA, SSR, FREP
+static inline void batchnorm_backward_single_core_opt_fp32(
+    batchnorm_backward_layer_t *l, double *temp) {
+    uint32_t kernel_start = snrt_mcycle();
+    // data is in NHWC format
+    const uint32_t num_clusters =
+        snrt_cluster_num();  // how many clusters are there in total? currently
+                             // 1 in the config i think
+    const uint32_t cluster_id = snrt_cluster_idx();  // which cluster are we?
+    const uint32_t num_compute_cores =
+        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
+    const uint32_t compute_id =
+        snrt_cluster_core_idx();  // which core are we in this cluster
+
+    // keep the dma core and one compute core
+
+    uint32_t N = 1;
+    uint32_t H = l->IH;
+    uint32_t W = l->IW;
+    uint32_t C = l->CI;
+    // assume C is a multiple of 2 for now
+    uint32_t num_points = N * H * W;
+    precision_t dtype_bytes = l->dtype;
+    uint32_t num_dtypes_per_double = (FP64 / dtype_bytes);
+    uint32_t num_doubles = num_points * C / num_dtypes_per_double;
+    uint32_t num_doubles_per_point = C / num_dtypes_per_double;
+    uint32_t num_bytes = num_points * C * dtype_bytes;
+    uint32_t num_bytes_per_point = C * dtype_bytes;
+
+    ptrdiff_t grad_bias_scratch_len = num_doubles_per_point, grad_weight_scratch_len = num_doubles_per_point;
+
+    // dataflow:
+    v2s *ptr = (v2s *)snrt_l1_start_addr();
+    v2s *weight_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *invstd_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *running_mean_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *grad_bias_scratch = ptr;
+    ptr += grad_bias_scratch_len;
+    v2s *grad_weight_scratch = ptr;
+    ptr += grad_weight_scratch_len;
+    DUMP(num_doubles_per_point);
+    DUMP(weight_scratch);
+    DUMP(grad_weight_scratch);
+    ptrdiff_t grad_ofmap_len = num_doubles, grad_ifmap_len = grad_ofmap_len,
+              ifmap_len = grad_ifmap_len;
+
+    v2s *grad_ofmap_scratch = ptr;
+    ptr += grad_ofmap_len;
+    v2s *ifmap_scratch = ptr;
+    ptr += ifmap_len;
+    v2s *grad_ifmap_scratch = ifmap_scratch;  // reuse the buffer
+    DUMP(grad_ofmap_scratch);
+    DUMP(grad_ifmap_scratch);
+
+    snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
+        grad_ofmap_load, ifmap_load, grad_ifmap_write;
+
+    uint32_t start_dma_load = snrt_mcycle();
+    // load running_var, initiate the rest
+    if (snrt_is_dm_core()) {
+        // Initiate loads for everything but only wait for the running var load.
+        // Q: is it better to wait then initiate the rest? we'll see
+        running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
+                                             num_bytes_per_point);
+        snrt_dma_wait(running_var_load);
+    } else if (compute_id == 0) {
+        // PRECONFIGURE: operations on arrays of size C, split by core.
+        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_doubles_per_point,
+                         sizeof(double));
+    }
+    uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    // compute invstd, load weight and running_mean in
+    uint32_t start_invstd_calc = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        weight_load =
+            snrt_dma_start_1d(weight_scratch, l->weight, num_bytes_per_point);
+        running_mean_load = snrt_dma_start_1d(
+            running_mean_scratch, l->running_mean, num_bytes_per_point);
+        // load first tile in. We can do this here because sqrt/div are really
+        // slow.
+        grad_ofmap_load =
+            snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap, num_bytes);
+        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap, num_bytes);
+
+        snrt_dma_wait_all();
+    } else if (compute_id == 0) {
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, invstd_scratch);
+        register float eps = l->eps;  // any value in dma'ing this? idk
+        const register float ONE = 1;
+        snrt_ssr_enable();
+        // might be worth unrolling to avoid dependencies? not sure
+        asm volatile(
+            "vfcpka.s.s %[ONE],%[ONE],%[ONE]\n"  // duplicate the 1
+            "frep.o %[n_frep], 3, 0, 0 \n"
+            "vfadd.r.s ft3, ft0, %[eps]\n"
+            "vfsqrt.s ft3, ft3\n"
+            "vfdiv.s ft1, %[ONE], ft3\n"
+            :
+            : [eps] "fr"(eps), [ONE] "fr"(ONE),
+              [n_frep] "r"(num_doubles_per_point -
+                           1)  // we repeat n_frep+1 times
+            : "ft0", "ft1", "ft2", "ft3");
+
+        snrt_fpu_fence();                     // thought: do we need this?
+        __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
+        snrt_ssr_disable();
+    }
+    uint32_t end_invstd_calc = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    // compute weight*invstd and running_mean*invstd
+
+    // computing invstd scratch and using it for weight: can we do it in 1 frep?
+    // load running var: 1 ssr
+    // write running var: 1 ssr
+    // load weight: 1 ssr
+    // write weight: 1 ssr
+    // answer: not really. Still worth precomputing I think
+    uint32_t start_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
+    // compute grad_weight, grad_bias, grad_ifmap
+    if (snrt_is_dm_core()) {
+    } else if (compute_id == 0) {
+        batchnorm_backward_fp32_no_loop(
+            grad_ofmap_scratch, grad_ifmap_scratch, ifmap_scratch,
+            running_mean_scratch, weight_scratch, invstd_scratch,
+            grad_bias_scratch, grad_weight_scratch, num_bytes_per_point,
+            num_points, num_points % 2, num_doubles_per_point, 1);
+    }
+    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
+    // don't need second reduction
+    snrt_cluster_hw_barrier();
+    uint32_t start_grad_bias_weight_reduction = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_grad_bias_weight_reduction = SNRT_SECTIONED_MCYCLE();
+    // write back grad_bias and grad_weight. then wait for all transactions to
+    // complete
+    uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(temp, grad_weight_scratch, num_bytes_per_point);
+        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, num_bytes_per_point);
+        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
+                          num_bytes_per_point);
+        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch, num_bytes);
+        snrt_dma_wait_all();
+    } else if (compute_id == 0) {
+    }
+    uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+    uint32_t done = snrt_mcycle();
+}
+
 // No DMA, SSR, or FREP. Still uses TCDM.
 static inline void batchnorm_backward_training_single_core(
     batchnorm_backward_training_layer_t *l) {

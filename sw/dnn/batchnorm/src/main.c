@@ -33,7 +33,7 @@ int main() {
                 batchnorm_backward_single_core(&backward_eval_layer);
                 break;
             case SINGLE_CORE_OPT:
-                batchnorm_backward_single_core_opt(&backward_eval_layer);
+                batchnorm_backward_single_core_opt_fp64(&backward_eval_layer);
                 break;
             case MULTICORE_OPT:
                 batchnorm_backward(&backward_eval_layer);

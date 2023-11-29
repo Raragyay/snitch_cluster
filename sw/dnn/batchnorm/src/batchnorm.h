@@ -664,21 +664,17 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
                 register double curr_mean_reg = curr_mean[channel];
                 register double k_reg = k[channel];
                 register double grad_mean_reg = grad_mean[channel];
-                register double invstd_reg = invstd[channel];
-                register double weight_reg = weight[channel];
+                register double weight_times_invstd_reg = weight[channel] * invstd[channel];
                 snrt_ssr_enable();
                 asm volatile(
-                    "frep.o %[n_frep], 6, 0, 0 \n"
+                    "frep.o %[n_frep], 4, 0, 0 \n"
                     "fsub.d ft3, ft0, %[curr_mean] \n"
-                    "fmul.d ft4, ft3, %[k] \n"
-                    "fsub.d ft4, ft2, ft4 \n"
+                    "fnmsub.d ft4, ft3, %[k], ft2\n"
                     "fsub.d ft4, ft4, %[grad_mean] \n"
-                    "fmul.d ft4, ft4, %[invstd] \n"
-                    "fmul.d ft1, ft4, %[weight] \n"
+                    "fmul.d ft1, ft4, %[weight_times_invstd] \n"
                     :
                     : [curr_mean] "fr"(curr_mean_reg), [k] "fr"(k_reg), [grad_mean] "fr"(grad_mean_reg),
-                        [invstd] "fr"(invstd_reg), [weight] "fr"(weight_reg),
-                        [n_frep] "r"(num_points - 1)
+                      [weight_times_invstd] "fr"(weight_times_invstd_reg), [n_frep] "r"(num_points - 1)
                     : "ft0", "ft1", "ft2", "ft3", "ft4");
                 snrt_fpu_fence();
                 snrt_ssr_disable();

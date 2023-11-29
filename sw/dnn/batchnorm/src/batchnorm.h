@@ -239,8 +239,13 @@ static inline void batchnorm_training(batchnorm_training_layer_t *layer) {
 }
 
 static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT0,
-    //                                  SNRT_PERF_CNT_ICACHE_STALL);
+    uint32_t start = snrt_mcycle();
+    // data is in NHWC format
+    const uint32_t num_clusters = snrt_cluster_num();                    // how many clusters are there in total?
+    const uint32_t cluster_id = snrt_cluster_idx();                      // which cluster are we?
+    const uint32_t num_compute_cores = snrt_cluster_compute_core_num();  // how many compute cores per cluster?
+    const uint32_t compute_id = snrt_cluster_core_idx();                 // which core are we in this cluster
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL);
     // reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
     //                                  SNRT_PERF_CNT_ICACHE_HIT);
     // reset_and_start_perf_single_core(0, SNRT_PERF_CNT2,
@@ -249,12 +254,6 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     //                                  SNRT_PERF_CNT_ICACHE_DOUBLE_HIT);
     // reset_and_start_perf_single_core(0, SNRT_PERF_CNT4,
     //                                  SNRT_PERF_CNT_ICACHE_PREFETCH);
-    uint32_t start = snrt_mcycle();
-    // data is in NHWC format
-    const uint32_t num_clusters = snrt_cluster_num();                    // how many clusters are there in total?
-    const uint32_t cluster_id = snrt_cluster_idx();                      // which cluster are we?
-    const uint32_t num_compute_cores = snrt_cluster_compute_core_num();  // how many compute cores per cluster?
-    const uint32_t compute_id = snrt_cluster_core_idx();                 // which core are we in this cluster
     // Calculate output dimensions
 
     // thought: this is so much contention
@@ -326,15 +325,15 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     uint32_t work_in_tile = min(min(points_loadable, tile_size_in_points), num_points);
     // num_points = num_points/2;
     uint32_t work_left = num_points;
-    uint32_t work_mod_3 = work_in_tile % 3;
-    uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
+    uint32_t work_mod_2 = work_in_tile % 2;
+    uint32_t work_div_2_sub_1 = work_in_tile / 2 - 1;
     DUMP(work_in_tile);
     DUMP(tile_size_in_points);
     if (snrt_is_dm_core()) {
         work_left -= work_in_tile;
         dm_comm->num_points_work_in_tile = work_in_tile;
-        dm_comm->work_mod_3 = work_mod_3;
-        dm_comm->work_div_3_sub_1 = work_div_3_sub_1;  // this is the frep value
+        dm_comm->work_mod_2 = work_mod_2;
+        dm_comm->work_div_2_sub_1 = work_div_2_sub_1;  // this is the frep value
     }
 
     // if (compute_id == 0) {
@@ -425,10 +424,10 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
             snrt_cluster_hw_barrier();
             if (num_channels_work_for_core > 0) {
                 // TODO; shift these all before hand
-                batchnorm_backward_tile_fp64(
+                batchnorm_backward_fp64_no_loop(
                     &grad_ofmap_scratch[compute_id], &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &running_mean_scratch[compute_id], &weight_scratch[compute_id], &invstd_scratch[compute_id],
-                    &grad_bias_scratch[compute_id], &grad_weight_scratch[compute_id], C, work_in_tile, work_mod_3,
+                    &grad_bias_scratch[compute_id], &grad_weight_scratch[compute_id], C, work_in_tile, work_mod_2,
                     num_channels_work_for_core, num_compute_cores, true, false);
             }
 
@@ -437,7 +436,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
 
         uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
     } else {
-        batchnorm_backward_main_loop(C, work_left, work_in_tile, work_mod_3, work_div_3_sub_1, dm_comm,
+        batchnorm_backward_main_loop(C, work_left, work_in_tile, work_mod_2, work_div_2_sub_1, dm_comm,
                                      tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,
                                      ifmap_scratch, grad_ifmap_scratch, grad_weight_scratch, grad_bias_scratch,
                                      invstd_scratch, running_mean_scratch, weight_scratch, buf_flag);
@@ -456,7 +455,7 @@ static inline void batchnorm_backward(batchnorm_backward_layer_t *l) {
     }
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
-    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
     // end_perf_and_dump_single_core(0, SNRT_PERF_CNT1);
     // end_perf_and_dump_single_core(0, SNRT_PERF_CNT2);
     // end_perf_and_dump_single_core(0, SNRT_PERF_CNT3);
@@ -636,8 +635,7 @@ static inline void batchnorm_backward_training(batchnorm_backward_training_layer
         if (num_channels_work_for_core > 0) {
             register double num_points_reg = num_points;
             const register double ZERO = 0;
-            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core,
-                             num_compute_cores * sizeof(double));
+            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_work_for_core, num_compute_cores * sizeof(double));
 
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &invstd[compute_id]);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &grad_weight[compute_id]);

@@ -54,7 +54,7 @@ index = ["impl", "C", "H", "W", "TILE_CI"]
 def get_layout_path(is_whole_block):
     return "backwards_mcycle_layout_whole_block.csv" if is_whole_block else "backwards_mcycle_layout_sectioned.csv"
 
-def get_all_configs(config_modifiers):
+def flatten_config_list(config_modifiers):
     return [
         (impl, config)
         for impl, configs in config_modifiers.items()
@@ -113,9 +113,12 @@ config_modifiers = {
         format_size(16, 8, 8),
         format_size(16, 16, 8),
         format_size(16, 16, 16),
+        format_size(16, 64, 64),
         format_size(32, 16, 16),
         format_size(32, 32, 16),
         format_size(32, 32, 32),
+        format_size(32, 64, 32),
+        format_size(32, 64, 64),
     ],
 }
 
@@ -137,7 +140,7 @@ def main():
     scaling_results_df = read_existing_results(is_whole_block)
     data = []
     try:
-        for impl, config in progressbar.progressbar(get_all_configs(config_modifiers)):
+        for impl, config in progressbar.progressbar(flatten_config_list(config_modifiers)):
             merged_config = {**base_config, **config, "impl_opt_level": impl}
             C = merged_config["input_dim"]["channels"]
             H = merged_config["input_dim"]["height"]

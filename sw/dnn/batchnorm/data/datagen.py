@@ -13,7 +13,6 @@ import hjson
 import sys
 import os
 import torch
-from enum import Enum
 
 from typing import Dict
 
@@ -21,6 +20,28 @@ from golden_models import (
     golden_model_backward,
     golden_model_backward_training,
     golden_model_forward_eval,
+)
+from datagen_constants import (
+    impl_opt_level_uid,
+    ifmap_uid,
+    current_mean_uid,
+    current_var_uid,
+    running_mean_uid,
+    running_var_uid,
+    weight_uid,
+    bias_uid,
+    grad_ofmap_uid,
+    beta_uid,
+    gamma_uid,
+    ofmap_uid,
+    grad_ifmap_uid,
+    grad_weight_uid,
+    grad_bias_uid,
+    grad_ifmap_training_uid,
+    grad_weight_training_uid,
+    grad_bias_training_uid,
+    BatchNormMode,
+    struct_decls,
 )
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../util/sim/"))
@@ -40,55 +61,6 @@ torch.manual_seed(42)
 BURST_ALIGNMENT = 4096
 
 PRECISION_T = {"64": "FP64", "32": "FP32", "16": "FP16", "8": "FP8"}
-
-# base
-impl_opt_level_uid = "impl_opt_level"
-ifmap_uid = "ifmap"
-current_mean_uid = "current_mean"
-current_var_uid = "current_var"
-running_mean_uid = "running_mean"
-running_var_uid = "running_var"
-weight_uid = "weight"
-bias_uid = "bias"
-
-# backward input
-grad_ofmap_uid = "grad_ofmap"
-
-# forward eval output
-ofmap_uid = "ofmap"
-beta_uid = "beta"
-gamma_uid = "gamma"
-
-# backward eval output
-grad_ifmap_uid = "grad_ifmap"
-grad_weight_uid = "grad_weight"
-grad_bias_uid = "grad_bias"
-
-# backward training output
-grad_ifmap_training_uid = "grad_ifmap_training"
-grad_weight_training_uid = "grad_weight_training"
-grad_bias_training_uid = "grad_bias_training"
-
-
-class BatchNormMode(Enum):
-    FORWARD_EVAL = 0
-    FORWARD_TRAINING = 1
-    BACKWARD_EVAL = 2
-    BACKWARD_TRAINING = 3
-
-
-struct_decls = {
-    BatchNormMode.FORWARD_EVAL: ("batchnorm_layer_t", "forward_eval_layer"),
-    BatchNormMode.FORWARD_TRAINING: (
-        "batchnorm_training_layer_t",
-        "forward_training_layer",
-    ),
-    BatchNormMode.BACKWARD_EVAL: ("batchnorm_backward_layer_t", "backward_eval_layer"),
-    BatchNormMode.BACKWARD_TRAINING: (
-        "batchnorm_backward_training_layer_t",
-        "backward_training_layer",
-    ),
-}
 
 
 def build_base_kwargs(
@@ -384,13 +356,16 @@ def emit_header(**kwargs):
             struct_def,
         ) = get_backward_eval_tensors(**base_tensors, **config_params)
 
-    ## BUILD HEADER
+    # BUILD HEADER
     data_str.append(
         format_scalar_definition("impl_opt_level_t", impl_opt_level_uid, impl_opt_level)
     )
     data_str.append(format_scalar_definition("int", "is_forward", int(is_forward)))
     data_str.append(format_scalar_definition("int", "is_training", int(is_training)))
+    
     data_str.extend(get_declarations(**base_tensors, **mode_specific_inputs))
+
+    # .data section is not zero'ed on runtime startup, which avoids an initial DMA overhead
     data_str.extend(
         get_declarations(
             ctype=base_tensors["ctype"], **mode_specific_outputs, section=".data"
@@ -414,6 +389,7 @@ def main():
         required=True,
         help="Select param config file kernel",
     )
+    # unused
     parser.add_argument("--section", type=str, help="Section to store matrices in")
     parser.add_argument(
         "output", type=pathlib.Path, help="Path of the output header file"

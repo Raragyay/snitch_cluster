@@ -61,6 +61,7 @@ def check_correctness(test, golden, actual):
 
 def main():
     global elf
+    errors_filepath.mkdir(parents=True, exist_ok=True)
     for f in errors_filepath.glob("*.csv"):
         f.unlink()
     # Run simulation and get outputs

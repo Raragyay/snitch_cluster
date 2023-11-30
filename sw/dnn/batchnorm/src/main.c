@@ -24,7 +24,7 @@ int main() {
                     &backward_training_layer);
                 break;
             case MULTICORE_OPT:
-                batchnorm_backward_training(&backward_training_layer);
+                batchnorm_backward_training_tiling(&backward_training_layer);
                 break;
             default:
                 return 1;

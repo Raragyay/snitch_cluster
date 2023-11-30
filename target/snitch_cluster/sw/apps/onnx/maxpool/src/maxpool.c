@@ -1,11 +1,11 @@
 #include "maxpool.h"
 #include "snrt.h"
 
-#include "data_all.h"
+#include "data1.h"
 
-#define ENABLE_1D 1
-#define ENABLE_2D 1
-#define ENABLE_3D 1
+#define ENABLE_1D 0
+#define ENABLE_2D 0
+#define ENABLE_3D 0
 
 #define ENABLE_YES_INDICES 0
 #define ENABLE_NO_INDICES 1
@@ -37,10 +37,10 @@ int main() {
   //               ifmap1,
   //               output_loc1);
 
-  // compute_output_shape(&attr2, attr2.output_shape);
-  // maxpool_f64_2d_no_index(&attr2,
-  //               ifmap2,
-  //               output_loc2);
+  compute_output_shape(&attr2, attr2.output_shape);
+  maxpool_f64_2d_no_index(&attr2,
+                ifmap2,
+                output_loc2);
 
   // compute_output_shape(&attr3, attr3.output_shape);
   // maxpool_f64_3d_no_index(&attr3,

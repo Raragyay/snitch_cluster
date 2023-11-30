@@ -13,6 +13,25 @@
 
 #ifndef ___MAXPOOL_C
 #define ___MAXPOOL_C
+
+// number of usable bytes in l1
+#define USABLE_CACHE 65536
+
+#ifdef DMA_ATTRIBS
+  #define _USABLE_CACHE_TEMP USABLE_CACHE
+  #undef USABLE_CACHE
+  #define USABLE_CACHE _USABLE_CACHE_TEMP - sizeof(maxpool_attributes)
+#endif
+
+#if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+  // bytes reserved for storing in/out values
+  #define USABLE_VALUE_CACHE USABLE_CACHE * 4 / 5
+  // bytes reserved for storing out indices
+  #define USABLE_INDEX_CACHE USABLE_CACHE - USABLE_VALUE_CACHE
+#else
+  #define USABLE_VALUE_CACHE USABLE_CACHE
+#endif
+
 static inline void ssr_asm_with_index(int*, int);
 
 void ssr_asm_with_index(int* out_idx, int total_iter) {
@@ -111,20 +130,25 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   #endif
 
   if (snrt_is_dm_core()) {
+
+    #if DMA_ATTRIBS
     // load the attribs into l1
     snrt_dma_start_1d(ptr, attribs_raw, sizeof(maxpool_attributes));
 
     ptr += ATTRIBS_SIZE;
-    #if DMA_ATTRIBS
+    
     snrt_dma_wait_all();
     #endif
 
     #if MAXPOOL_DIM == 1
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
     #elif MAXPOOL_DIM == 2
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3];
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3];
     #elif MAXPOOL_DIM == 3
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
+    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
     #endif
 
     // int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
@@ -146,13 +170,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     snrt_cluster_hw_barrier();
     snrt_cluster_hw_barrier();
 
-    #if MAXPOOL_DIM == 1
-    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
-    #elif MAXPOOL_DIM == 2
-    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3];
-    #elif MAXPOOL_DIM == 3
-    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
-    #endif
     // int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
     // if (attribs->n_dim > 1) {
     //   total_outs *= attribs->output_shape[3];

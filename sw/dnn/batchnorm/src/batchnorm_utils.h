@@ -592,9 +592,6 @@ batchnorm_backward_fp32_no_loop(
     // Split work over channels to maximize efficacy of frep.
     // outside loop: channels
     // inside loop: points
-    DUMP(num_points_work_for_core);
-    DUMP(num_doubles_to_process);
-    DUMP(num_bytes_per_point);
     snrt_ssr_loop_2d(
         SNRT_SSR_DM_ALL,
         num_points_work_for_core,  // dimension of inner loop
@@ -647,7 +644,6 @@ batchnorm_backward_fp32_no_loop(
     running_mean.f64 = running_mean_scratch->f64;
     // do 1 loop
     do {  // while (i < num_channels_to_process)
-        // Can only manual unroll 3 times since the max for frep is 16
         asm volatile(
             "vfmul.s %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
             : [weight_times_invstd] "+fr"(weight_times_invstd.f64)

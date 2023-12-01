@@ -567,7 +567,6 @@ static inline void batchnorm_backward_training_tiling(
     uint32_t doubles_loadable = ceildiv(C, num_compute_cores) * 50 * 7;
     uint32_t points_loadable = doubles_loadable / C;
     uint32_t work_in_tile = min(min(points_loadable, tile_size_in_points), num_points);
-    // uint32_t work_in_tile = 10;
     uint32_t work_left = num_points;
     uint32_t work_mod_3 = work_in_tile % 3;
     uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
@@ -658,7 +657,6 @@ static inline void batchnorm_backward_training_tiling(
         dm_comm->work_div_4_sub_1 = work_div_4_sub_1;
         snrt_dma_wait(weight_load);
         buf_flag = !buf_flag;
-        DUMP(13);
     } else if (snrt_is_compute_core()) {
         if (num_channels_work_for_core > 0) {
             register double num_points_reg = num_points;
@@ -757,7 +755,6 @@ static inline void batchnorm_backward_training_tiling(
         snrt_dma_wait_all();
     }
     snrt_cluster_hw_barrier();
-    DUMP(4);
     uint32_t done = snrt_mcycle();
 }
 

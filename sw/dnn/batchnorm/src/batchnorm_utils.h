@@ -932,16 +932,25 @@ batchnorm_backward_training_tile_fp64_no_loop(
         register double grad_mean_times_weight_times_invstd = *grad_mean_scratch * weight_times_invstd;
         snrt_ssr_enable();
         asm volatile(
-            "frep.o %[n_frep], 3, 0, 0 \n"
+            "frep.o %[n_frep], 12, 0, 0 \n"
             "fsub.d ft3, ft0, %[current_mean] \n"
-            "fnmsub.d ft4, ft3, %[k], ft2\n"
+            "fsub.d ft4, ft0, %[current_mean] \n"
+            "fsub.d ft5, ft0, %[current_mean] \n"
+            "fsub.d ft6, ft0, %[current_mean] \n"
+            "fnmsub.d ft3, ft3, %[k], ft2\n"
+            "fnmsub.d ft4, ft4, %[k], ft2\n"
+            "fnmsub.d ft5, ft5, %[k], ft2\n"
+            "fnmsub.d ft6, ft6, %[k], ft2\n"
+            "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
             "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+            "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+            "fmsub.d ft1, ft6, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
             :
             : [current_mean] "fr"(current_mean), [k] "fr"(k),
             [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
             [weight_times_invstd] "fr"(weight_times_invstd),
-            [n_frep] "r"(num_points_work_for_core_in_tile - work_mod_4 - 1)
-            : "ft0", "ft1", "ft2", "ft3", "ft4");
+            [n_frep] "r"(work_div_4_sub_1)
+            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
 
         register uint32_t channel_stride_in_bytes;
         asm volatile(
@@ -960,7 +969,7 @@ batchnorm_backward_training_tile_fp64_no_loop(
             [channel_stride_in_bytes] "=r"(channel_stride_in_bytes)
             : [channel_stride] "r"(channel_stride),
             [num_channels_to_process] "r"(num_channels_to_process)
-            : "ft0", "ft1", "ft2", "memory");
+            : "ft0", "ft1", "ft2");
         
         register uint32_t mod_temp;
         asm volatile(
@@ -1001,7 +1010,7 @@ batchnorm_backward_training_tile_fp64_no_loop(
                 [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
                 [weight_times_invstd] "fr"(weight_times_invstd),
                 [work_mod_4] "r"(work_mod_4)
-            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "memory");
+            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
         snrt_fpu_fence();
         snrt_ssr_disable();
     } while (i < num_channels_to_process);
@@ -1037,7 +1046,6 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
     const uint32_t channel_array_reset_dist = channel_stride * num_channels_to_process * sizeof(double);
     const uint32_t inner_loop_stride = C * sizeof(double);
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
-    DUMP(33);
     snrt_ssr_loop_2d(SNRT_SSR_DM_ALL,
                      work_in_tile,             // dimension of inner loop
                      num_channels_to_process,  // dimension of outer loop
@@ -1045,52 +1053,39 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
                      outer_loop_stride);       // stride per outer loop iteration
     // TODO: fix num_channels_work_for_core == 0.
     do {
-        // DUMP(1);
-        // DUMP(111);
-        // DUMP(work_in_tile);
-        // DUMP(num_channels_to_process);
-        // DUMP(work_mod_3);
-        // inputs have been loaded in, notify previous tile done if not on 1st
-        // loop
-        // if (prev_work != work_in_tile) {
-        //     prev_work = work_in_tile;
-        // }
-
         register volatile uint32_t i = 0;  // updated during frep for pseudo-dual issue
         snrt_cluster_hw_barrier();
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
         snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, grad_ofmap_scratch);
-        snrt_ssr_enable();
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             // Can only manual unroll 5 times since the max for frep is 16
             register double current_mean = *current_mean_scratch;
             register double k = *k_scratch;
-            register double grad_mean = *grad_mean_scratch;
             register double weight_times_invstd = *weight_scratch * *invstd_scratch;
             register double grad_mean_times_weight_times_invstd = *grad_mean_scratch * weight_times_invstd;
-            // if (frep) {
-            //     asm volatile(
-            //         "frep.o %[n_frep], 12, 0, 0 \n"
-            //         "fsub.d ft3, ft0, %[current_mean] \n"
-            //         "fsub.d ft4, ft0, %[current_mean] \n"
-            //         "fsub.d ft5, ft0, %[current_mean] \n"
-            //         "fsub.d ft6, ft0, %[current_mean] \n"
-            //         "fnmsub.d ft3, ft3, %[k], ft2\n"
-            //         "fnmsub.d ft4, ft4, %[k], ft2\n"
-            //         "fnmsub.d ft5, ft5, %[k], ft2\n"
-            //         "fnmsub.d ft6, f6, %[k], ft2\n"
-            //         "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            //         "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            //         "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            //         "fmsub.d ft1, ft6, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            //         :
-            //         : [current_mean] "fr"(current_mean), [k] "fr"(k),
-            //           [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
-            //           [weight_times_invstd] "fr"(weight_times_invstd), [n_frep] "r"(work_div_4_sub_1)
-            //         : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
-            // }
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 12, 0, 0 \n"
+                "fsub.d ft3, ft0, %[current_mean] \n"
+                "fsub.d ft4, ft0, %[current_mean] \n"
+                "fsub.d ft5, ft0, %[current_mean] \n"
+                "fsub.d ft6, ft0, %[current_mean] \n"
+                "fnmsub.d ft3, ft3, %[k], ft2\n"
+                "fnmsub.d ft4, ft4, %[k], ft2\n"
+                "fnmsub.d ft5, ft5, %[k], ft2\n"
+                "fnmsub.d ft6, ft6, %[k], ft2\n"
+                "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                "fmsub.d ft1, ft6, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                :
+                : [current_mean] "fr"(current_mean), [k] "fr"(k),
+                [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
+                [weight_times_invstd] "fr"(weight_times_invstd),
+                [n_frep] "r"(work_div_4_sub_1)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
 
             register uint32_t channel_stride_in_bytes;
             asm volatile(
@@ -1102,37 +1097,13 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
                 "add %[k_scratch], %[k_scratch], %[channel_stride_in_bytes]\n"
                 "add %[grad_mean_scratch], %[grad_mean_scratch], %[channel_stride_in_bytes]\n"
                 "2:\n"
-                : [invstd_scratch] "+r"(invstd_scratch), [weight_scratch] "+r"(weight_scratch), [current_mean_scratch] "+r"(current_mean_scratch),
-                  [k_scratch] "+r"(k_scratch), [grad_mean_scratch] "+r"(grad_mean_scratch), [i] "+r"(i),
-                  [channel_stride_in_bytes] "=r"(channel_stride_in_bytes)
-                : [channel_stride] "r"(channel_stride), [num_channels_to_process] "r"(num_channels_to_process)
+                : [invstd_scratch] "+r"(invstd_scratch), [weight_scratch] "+r"(weight_scratch),
+                [current_mean_scratch] "+r"(current_mean_scratch), [k_scratch] "+r"(k_scratch),
+                [grad_mean_scratch] "+r"(grad_mean_scratch), [i] "+r"(i),
+                [channel_stride_in_bytes] "=r"(channel_stride_in_bytes)
+                : [channel_stride] "r"(channel_stride),
+                [num_channels_to_process] "r"(num_channels_to_process)
                 : "ft0", "ft1", "ft2");
-
-            // TODO
-            // if (is_last_channel) {
-            //     invstd_scratch -= channel_stride * num_channels_to_process;
-            //     running_mean_scratch -= channel_stride * num_channels_to_process;
-            //     weight_scratch -= channel_stride * num_channels_to_process;
-            //     buf_flag = !buf_flag;
-            //     snrt_cluster_hw_barrier();
-            //     work_in_tile = (dm_comm)->num_points_work_in_tile;
-            //     work_mod_3 = (dm_comm)->work_mod_3;
-            //     work_div_3_sub_1 = (dm_comm)->work_div_3_sub_1;
-            //     frep = work_in_tile >= 3;
-            //     if (buf_flag) {
-            //         grad_ofmap_scratch += buf_flag_offset / sizeof(double);
-            //         grad_ifmap_scratch += buf_flag_offset / sizeof(double);
-            //         ifmap_scratch += buf_flag_offset / sizeof(double);
-            //     } else {
-            //         grad_ofmap_scratch -= buf_flag_offset / sizeof(double);
-            //         grad_ifmap_scratch -= buf_flag_offset / sizeof(double);
-            //         ifmap_scratch -= buf_flag_offset / sizeof(double);
-            //     }
-            //     if (prev_work != work_in_tile) {
-            //         prev_work = work_in_tile;
-            //         // do ssr 2d
-            //     }
-            // }
 
             register uint32_t temp;
             asm volatile(
@@ -1191,15 +1162,14 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
                   [buf_flag_offset] "r"(buf_flag_offset)
                 : "ft0", "ft1", "ft2", "x0", "memory");
 
-            DUMP(work_mod_4);
             asm volatile(
                 "beqz %[work_mod_4], 0f\n"              // mod is 0
                 "andi %[mod_temp], %[work_mod_4], 1\n"  // is last bit 1? if no, then mod is 2
                 "beqz %[mod_temp], 2f\n"                // jump to 2 if no
-                // "srli %[work_mod_4], %[work_mod_4], 1\n"// right shit 1, 3->1, 1->0
                 "andi %[mod_temp], %[work_mod_4], 2\n"  // is last bit 1? if no, then mod is 1
                 "beqz %[mod_temp], 1f\n"                // jump to 1 if no
                 "3:\n"
+                "csrwi 0x7C3, 3\n"
                 "fsub.d ft3, ft0, %[current_mean] \n"
                 "fsub.d ft4, ft0, %[current_mean] \n"
                 "fsub.d ft5, ft0, %[current_mean] \n"
@@ -1211,6 +1181,7 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
                 "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
                 "j 0f\n"
                 "2:\n"
+                "csrwi 0x7C3, 2\n"
                 "fsub.d ft3, ft0, %[current_mean] \n"
                 "fsub.d ft4, ft0, %[current_mean] \n"
                 "fnmsub.d ft3, ft3, %[k], ft2\n"
@@ -1219,20 +1190,22 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
                 "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
                 "j 0f\n"
                 "1:\n"
+                "csrwi 0x7C3, 1\n"
                 "fsub.d ft3, ft0, %[current_mean] \n"
                 "fnmsub.d ft3, ft3, %[k], ft2\n"
                 "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
                 "0:\n"
                 : [mod_temp] "=r"(temp)
                 : [current_mean] "fr"(current_mean), [k] "fr"(k),
-                  [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
-                  [weight_times_invstd] "fr"(weight_times_invstd),
-                  [work_mod_4] "r"(work_mod_4)
+                    [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
+                    [weight_times_invstd] "fr"(weight_times_invstd),
+                    [work_mod_4] "r"(work_mod_4)
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
+            snrt_fpu_fence();
+            snrt_ssr_disable();
         } while (i < num_channels_to_process);
         // don't need to fpu_fence since last 3 instructions are inconsequential
         __builtin_ssr_barrier(SNRT_SSR_DM1);
-        snrt_ssr_disable();
         work_mod_4 = next_work_mod_4;
     } while (work_in_tile != 0);
     // notify last tile done
@@ -1276,8 +1249,6 @@ static inline void batchnorm_backward_training_main_loop(uint32_t C, uint32_t wo
             //  NUM_DOUBLES_LOADED_PER_CYCLE) /
             // (3 * C);
             work_in_tile = min(ideal_work_in_tile, work_left);
-            // DUMP(work_left);
-            DUMP(work_in_tile);
             work_left -= work_in_tile;
             // update comms
             dm_comm->num_points_work_in_tile = work_in_tile;
@@ -1291,11 +1262,9 @@ static inline void batchnorm_backward_training_main_loop(uint32_t C, uint32_t wo
             snrt_dma_start_1d(&ifmap_scratch[tile_size_in_points * C * buf_flag], &l->ifmap[point_start * C],
                               work_in_tile * C * sizeof(double));
             snrt_cluster_hw_barrier();
-            DUMP(65);
             snrt_dma_wait_all();
             // signal to core that current tile is ready to be computed on
             snrt_cluster_hw_barrier();
-            DUMP(66);
             snrt_dma_start_1d(&l->grad_ifmap[prev_point_start * C],
                               &grad_ifmap_scratch[tile_size_in_points * C * (!buf_flag)],  // take !buf_flag dma
                                                                                            // core is one

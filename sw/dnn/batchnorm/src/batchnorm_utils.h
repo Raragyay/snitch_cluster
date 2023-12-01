@@ -1160,14 +1160,14 @@ static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
         initiate_dma_1d_or_2d(
             &grad_ofmap_scratch[tile_size_in_points *
                                 num_doubles_per_aligned_point * buf_flag],
-            &l->grad_ofmap[point_start * num_doubles_per_aligned_point],
+            &((char*)l->grad_ofmap)[point_start * num_bytes_per_packed_point],
             num_bytes_per_packed_point, num_bytes_per_aligned_point,
             num_bytes_per_packed_point, work_in_tile,
             is_point_aligned_to_8_byte_boundary);
         initiate_dma_1d_or_2d(
             &ifmap_scratch[tile_size_in_points * num_doubles_per_aligned_point *
                            buf_flag],
-            &l->ifmap[point_start * num_doubles_per_aligned_point],
+            &((char*)l->ifmap)[point_start * num_bytes_per_packed_point],
             num_bytes_per_packed_point, num_bytes_per_aligned_point,
             num_bytes_per_packed_point, work_in_tile,
             is_point_aligned_to_8_byte_boundary);
@@ -1184,7 +1184,8 @@ static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
             // DUMP(prev_point_start);
 
         initiate_dma_1d_or_2d(
-            &l->grad_ifmap[prev_point_start * num_doubles_per_aligned_point],
+            &((char*)
+                  l->grad_ifmap)[prev_point_start * num_bytes_per_packed_point],
             &grad_ifmap_scratch[tile_size_in_points *
                                 num_doubles_per_aligned_point * (!buf_flag)],
             num_bytes_per_packed_point, num_bytes_per_packed_point,
@@ -1214,7 +1215,7 @@ static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
         snrt_cluster_hw_barrier();
 
     initiate_dma_1d_or_2d(
-        &l->grad_ifmap[prev_point_start * num_doubles_per_aligned_point],
+        &((char*)l->grad_ifmap)[prev_point_start * num_bytes_per_packed_point],
         &grad_ifmap_scratch[tile_size_in_points *
                             num_doubles_per_aligned_point * (!buf_flag)],
         num_bytes_per_packed_point, num_bytes_per_packed_point,

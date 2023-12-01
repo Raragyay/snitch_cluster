@@ -6,7 +6,6 @@
 #include "dnn.h"
 
 #include "data.h"
-
 int main() {
     if (is_forward && is_training) {
         printf("Forward eval training not supported yet");
@@ -41,7 +40,7 @@ int main() {
                             &backward_eval_layer);
                         break;
                     case MULTICORE_OPT:
-                        batchnorm_backward(&backward_eval_layer);
+                        batchnorm_backward_multicore_fp64(&backward_eval_layer);
                         break;
                     default:
                         return 1;
@@ -52,6 +51,10 @@ int main() {
                     case SINGLE_CORE_OPT:
                         batchnorm_backward_single_core_opt_fp32(
                             &backward_eval_layer, temp);
+                        break;
+                    case MULTICORE_OPT:
+                        batchnorm_backward_multicore_fp32(
+                            &backward_eval_layer);
                         break;
                     default:
                         return 1;

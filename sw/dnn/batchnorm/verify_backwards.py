@@ -24,7 +24,8 @@ from data_utils import (  # noqa: E402
 )
 import pickle
 
-ERR_THRESHOLD = 1e-7
+# TODO: rtol/atol for different floating point precisions
+ERR_THRESHOLD = 1e-3
 
 PRECISION_T = {8: "64", 4: "32", 2: "16", 1: "8"}
 

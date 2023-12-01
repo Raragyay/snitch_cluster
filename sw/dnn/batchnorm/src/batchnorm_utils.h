@@ -5,7 +5,7 @@
 #include "snrt.h"
 
 #define PERF_DEBUG 1
-#define PERF_WHOLE_BLOCK 0
+#define PERF_WHOLE_BLOCK 1
 
 #if PERF_WHOLE_BLOCK
 #define SNRT_SECTIONED_MCYCLE() 0xdeadbeef
@@ -69,8 +69,8 @@ static inline void end_perf_and_dump_single_core(
 #endif
 }
 
-static inline snrt_dma_txid_t initiate_dma_1d_or_2d(uint64_t dst, uint64_t src,
-                                                    size_t size,
+static inline snrt_dma_txid_t initiate_dma_1d_or_2d(uintptr_t dst,
+                                                    uintptr_t src, size_t size,
                                                     size_t dst_stride,
                                                     size_t src_stride,
                                                     size_t repeat, bool is_1d) {
@@ -289,8 +289,8 @@ batchnorm_backward_tile_fp64_looped(
     // outside loop: channels
     // inside loop: points
     uint32_t prev_work = work_in_tile;
-    register uint32_t next_work_mod_3;
-    register bool frep = work_in_tile >= 3;
+    register uint32_t next_work_mod_2;
+    register bool frep = work_in_tile >= 2;
     register double ZERO asm("ft9");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
@@ -383,7 +383,6 @@ batchnorm_backward_tile_fp64_looped(
                   [num_channels_to_process] "r"(num_channels_to_process)
                 : "ft0", "ft1", "ft2", "memory");
 
-            // TODO
             // if (is_last_channel) {
             //     invstd_scratch -= channel_stride * num_channels_to_process;
             //     running_mean_scratch -= channel_stride *
@@ -419,9 +418,9 @@ batchnorm_backward_tile_fp64_looped(
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
                 "lw %[work_in_tile], %[work_in_tile_offset](%[dm_comm])\n"
-                "lw %[next_work_mod_3], %[work_mod_2_offset](%[dm_comm])\n"
+                "lw %[next_work_mod_2], %[work_mod_2_offset](%[dm_comm])\n"
                 "lw %[work_div_2_sub_1], %[work_div_2_sub_1_offset](%[dm_comm])\n"
-                "slti %[frep], %[work_in_tile], 3\n"  // cmp frep < 3, then
+                "slti %[frep], %[work_in_tile], 2\n"  // cmp frep < 2, then
                                                       // negate in next
                                                       // instruction
                 "xori %[frep], %[frep], 1\n"
@@ -465,7 +464,7 @@ batchnorm_backward_tile_fp64_looped(
                   [weight_scratch] "+r"(weight_scratch),
                   [running_mean_scratch] "+r"(running_mean_scratch),
                   [work_in_tile] "=r"(work_in_tile),
-                  [next_work_mod_3] "=r"(next_work_mod_3),
+                  [next_work_mod_2] "=r"(next_work_mod_2),
                   [prev_work] "+r"(prev_work), [frep] "+r"(frep),
                   [work_div_2_sub_1] "=r"(work_div_2_sub_1),
                   [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
@@ -564,7 +563,7 @@ batchnorm_backward_tile_fp64_looped(
         __builtin_ssr_barrier(SNRT_SSR_DM1);
         // snrt_ssr_disable();
         // notify that computations for this tile are done
-        work_mod_2 = next_work_mod_3;
+        work_mod_2 = next_work_mod_2;
         grad_weight_scratch -= channel_stride * (num_channels_to_process - 1);
         grad_bias_scratch -= channel_stride * (num_channels_to_process - 1);
         // DUMP(222);
@@ -740,7 +739,6 @@ batchnorm_backward_fp32_no_loop(
         // weight = *weight_scratch;
         // running_mean = *running_mean_scratch;
         // grad_bias_0 = grad_bias_1 = grad_weight_0 = grad_weight_1 = 0;
-        register double temp_grad_bias, temp_grad_weight;
         asm volatile(
             // interleave 0 resetting and loading between fadd latency
             // don't need to synchronize here because the integer core can't
@@ -776,65 +774,404 @@ batchnorm_backward_fp32_no_loop(
     snrt_ssr_disable();
 }
 
-static inline void batchnorm_backward_main_loop(
-    uint32_t C, uint32_t work_left,  // only present for dma
-    uint32_t initial_work_in_tile, uint32_t initial_work_mod_3,
-    uint32_t initial_work_div_3_sub_1, dm_comm_t* dm_comm,
-    uint32_t tile_size_in_points, uint32_t compute_id,
-    uint32_t num_compute_cores, batchnorm_backward_layer_t* l,
-    double* grad_ofmap_scratch, double* ifmap_scratch,
-    double* grad_ifmap_scratch, double* grad_weight_scratch,
-    double* grad_bias_scratch, double* invstd_scratch,
-    double* running_mean_scratch, double* weight_scratch, bool buf_flag) {
-    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
+static inline void __attribute__((always_inline))
+batchnorm_backward_tile_fp32_looped(
+    const v2s* grad_ofmap_scratch,
+    v2s* grad_ifmap_scratch,  // no restrict because grad_ifmap and ifmap used
+    const v2s* ifmap_scratch, const v2s* running_mean_scratch,
+    const v2s* weight_scratch, const v2s* invstd_scratch,
+    v2s* grad_bias_scratch, v2s* grad_weight_scratch,
+    uint32_t num_doubles_per_aligned_point,
+    uint32_t work_in_tile,  // requires: > 0
+    uint32_t work_mod_2,    // precompute to avoid icache branch misses
+    uint32_t work_div_2_sub_1, uint32_t tile_size_in_aligned_points,
+    uint32_t num_doubles_work_for_core_per_point,  //  requires: > 0
+    uint32_t channel_stride, dm_comm_t* dm_comm) {
+    // access pattern: iterate over the different channels, then over
+    // the different points
+    // Split work over channels to maximize efficacy of frep.
+    // outside loop: channels
+    // inside loop: points
+    uint32_t prev_work = work_in_tile;
+    register uint32_t next_work_mod_2;
+    register bool frep = work_in_tile >= 2;
+    register v2s ZERO asm("ft9");  // can consider fcvt instead
+    asm volatile("fcvt.d.w %[ZERO], zero\n"
+                 : [ZERO] "=fr"(ZERO.f64)::"ft0", "ft1", "ft2");
 
-    uint32_t num_channels_work_for_core =
-        get_core_num_work_items(C, num_compute_cores, compute_id);
+    bool buf_flag = 0;
+    // consider: inlining these as well later
+    const uint32_t buf_flag_offset = tile_size_in_aligned_points *
+                                     num_doubles_per_aligned_point *
+                                     sizeof(double);
+    const uint32_t channel_array_reset_dist =
+        channel_stride * num_doubles_work_for_core_per_point * sizeof(double);
+    const uint32_t inner_loop_stride =
+        num_doubles_per_aligned_point * sizeof(double);
+    const uint32_t outer_loop_stride = channel_stride * sizeof(double);
 
-    if (snrt_is_dm_core()) {
-        snrt_dma_wait_all();
+    DUMP(33);
+    DUMP(num_doubles_work_for_core_per_point);
+    snrt_ssr_loop_2d(
+        SNRT_SSR_DM_ALL,
+        work_in_tile,                         // dimension of inner loop
+        num_doubles_work_for_core_per_point,  // dimension of outer loop
+        inner_loop_stride,   // stride per inner loop iteration: 1 point
+        outer_loop_stride);  // stride per outer loop iteration
+    snrt_ssr_repeat(SNRT_SSR_DM0, 3);
 
+    snrt_ssr_enable();
+    // thought: how to minimize # flops?
+    // dy is used for: grad_bias: grad_bias[C] += dy
+    //                 grad_ifmap: grad_ifmap[C] =
+    //                    (dy * invstd[C] * weight[C])
+    //                 grad_weight: grad_weight[C] +=
+    //                    (dy * (x[i,C]-running_mean[C]) * invstd[C])
+    // for grad_bias: vfadd is sufficient (grad_bias <- dy + grad_bias)
+    // for grad_ifmap: vfmul is sufficient (grad_ifmap <- dy * (invstd*weight))
+    // for grad_weight: previously i did an fmsub. but there is no vfmsub right
+    // now.
+    //              Intermediate steps harder though:
+    //              (dy * (x[i,C]-running_mean[C]) * invstd[C])
+    //              = (dy * (x[i,C]*invstd[C]-(running_mean[C] * invstd[C])))
+    // Option 1: sub x-mu, mul (x-mu)*invstd, mul by dy. 3 instr
+    // Option 2: mul invstd*dy, sub (x-mu), mul previous two results. 3 instr.
+    //   Option 2 is better because we can do the first 2 in parallel without
+    //   dependencies
+    // Conclusion: I think you have to do 3 instructions without fmadd/fmsub
+
+    do {  //
+        register volatile uint32_t i =
+            0;  // updated during frep for pseudo-dual issue
+        register v2s grad_weight_0 = ZERO;
+        register v2s grad_weight_1 = ZERO;
+        register v2s grad_weight_2 = ZERO;
+        register v2s grad_bias_0 = ZERO;
+        register v2s grad_bias_1 = ZERO;
+        register v2s grad_bias_2 = ZERO;
+        register v2s invstd;
+        invstd.f64 = invstd_scratch->f64;
+        snrt_cluster_hw_barrier();
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
+        register v2s weight_times_invstd;
+        weight_times_invstd.f64 = weight_scratch->f64;
+        register v2s running_mean;
+        running_mean.f64 = running_mean_scratch->f64;
+        DUMP(work_in_tile);
         DUMP(ifmap_scratch);
-        // DUMP(ifmap_scratch[0]);
+        // do 1 loop
+        do {  // while (i < num_channels_to_process)
+            asm volatile(
+                "vfmul.s %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
+                : [weight_times_invstd] "+fr"(weight_times_invstd.f64)
+                : [invstd] "fr"(invstd.f64)
+                : "ft0", "ft1", "ft2");
+
+            if (frep) {
+                asm volatile(
+                    "frep.o %[n_frep], 10, 0, 0 \n"
+                    // for grad_ifmap: x - running_mean
+                    "vfsub.s ft3, ft2, %[running_mean]\n"
+                    "vfsub.s ft5, ft2, %[running_mean]\n"
+                    // for grad_ifmap: dy * invstd
+                    "vfmul.s ft4, %[invstd], ft0\n"
+                    "vfadd.s %[grad_bias_0], ft0, %[grad_bias_0]\n"
+                    "vfmul.s ft1, %[weight_times_invstd], ft0\n"
+                    "vfmul.s ft6, %[invstd], ft0\n"
+                    "vfadd.s %[grad_bias_1], ft0, %[grad_bias_1]\n"
+                    "vfmul.s ft1, %[weight_times_invstd], ft0\n"
+                    // for grad_ifmap: (x - running_mean) * (dy * invstd)
+                    "vfmac.s %[grad_weight_0], ft3, ft4\n"
+                    "vfmac.s %[grad_weight_1], ft5, ft6\n"
+                    // use .f64 instead of .vec because .vec causes everything
+                    // to be fld/fsd each asm statement
+                    : [grad_weight_0] "+fr"(grad_weight_0.f64),
+                      [grad_weight_1] "+fr"(grad_weight_1.f64),
+                      [grad_bias_0] "+fr"(grad_bias_0.f64),
+                      [grad_bias_1] "+fr"(grad_bias_1.f64)
+                    : [running_mean] "fr"(running_mean.f64),
+                      [weight_times_invstd] "fr"(weight_times_invstd.f64),
+                      [invstd] "fr"(invstd.f64), [zero] "fr"(ZERO.f64),
+                      [n_frep] "r"(
+                          work_div_2_sub_1)  // we repeat n_frep+1 times
+                    : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
+            }
+
+            register uint32_t channel_stride_in_bytes;
+            asm volatile(
+                "slli %[channel_stride_in_bytes], %[channel_stride], 3\n"  // log_2(sizeof(double))
+                "beqz %[i], 1f\n"
+                "add %[grad_bias_scratch], %[grad_bias_scratch],%[channel_stride_in_bytes]\n"
+                "add %[grad_weight_scratch], %[grad_weight_scratch], %[channel_stride_in_bytes]\n"
+                "1:\n"
+                "addi %[i], %[i], 1\n"
+                "add %[invstd_scratch], %[invstd_scratch], %[channel_stride_in_bytes]\n"
+                "add %[weight_scratch], %[weight_scratch],%[channel_stride_in_bytes]\n"
+                "add %[running_mean_scratch],%[running_mean_scratch],%[channel_stride_in_bytes]\n"
+                "2:\n"
+                : [invstd_scratch] "+r"(invstd_scratch),
+                  [weight_scratch] "+r"(weight_scratch),
+                  [running_mean_scratch] "+r"(running_mean_scratch),
+                  [grad_bias_scratch] "+r"(grad_bias_scratch),
+                  [grad_weight_scratch] "+r"(grad_weight_scratch), [i] "+r"(i),
+                  [channel_stride_in_bytes] "=r"(channel_stride_in_bytes)
+                : [channel_stride] "r"(channel_stride),
+                  [num_doubles_work_for_core_per_point] "r"(
+                      num_doubles_work_for_core_per_point)
+                : "ft0", "ft1", "ft2");
+
+            // if (is_last_channel) {
+            //     invstd_scratch -= channel_stride * num_channels_to_process;
+            //     running_mean_scratch -= channel_stride *
+            //     num_channels_to_process; weight_scratch -= channel_stride *
+            //     num_channels_to_process; buf_flag = !buf_flag;
+            //     snrt_cluster_hw_barrier();
+            //     work_in_tile = (dm_comm)->num_points_work_in_tile;
+            //     work_mod_2 = (dm_comm)->work_mod_2;
+            //     work_div_2_sub_1 = (dm_comm)->work_div_2_sub_1;
+            //     frep = work_in_tile >= 3;
+            //     if (prev_work != work_in_tile) {
+            //         prev_work = work_in_tile;
+            //         update b0 for 2d ssr
+            //     }
+            //     if (buf_flag) {
+            //         grad_ofmap_scratch += buf_flag_offset / sizeof(double);
+            //         grad_ifmap_scratch += buf_flag_offset / sizeof(double);
+            //         ifmap_scratch += buf_flag_offset / sizeof(double);
+            //     } else {
+            //         grad_ofmap_scratch -= buf_flag_offset / sizeof(double);
+            //         grad_ifmap_scratch -= buf_flag_offset / sizeof(double);
+            //         ifmap_scratch -= buf_flag_offset / sizeof(double);
+            //     }
+            // }
+
+            register uint32_t temp;
+            asm volatile(
+                "bne %[i], %[num_doubles_work_for_core_per_point], 2f\n"
+                "sub %[invstd_scratch], %[invstd_scratch], %[channel_array_reset_dist]\n"
+                "sub %[weight_scratch], %[weight_scratch],%[channel_array_reset_dist]\n"
+                "sub %[running_mean_scratch],%[running_mean_scratch],%[channel_array_reset_dist]\n "
+                "xori %[buf_flag], %[buf_flag], 1\n"
+                "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
+                                    // because I don't want to do math here
+                "lw %[work_in_tile], %[work_in_tile_offset](%[dm_comm])\n"
+                "lw %[next_work_mod_2], %[work_mod_2_offset](%[dm_comm])\n"
+                "lw %[work_div_2_sub_1], %[work_div_2_sub_1_offset](%[dm_comm])\n"
+                "slti %[frep], %[work_in_tile], 2\n"  // cmp frep < 2, then
+                                                      // negate in next
+                                                      // instruction
+                "xori %[frep], %[frep], 1\n"
+                "beq %[work_in_tile], %[prev_work], 4f\n"   // check if we need
+                                                            // to update ssr. If
+                                                            // so, just update
+                                                            // the bounds
+                "addi %[prev_work], %[work_in_tile], -1\n"  // a = --b0
+                "scfgwi %[prev_work], %[DM_ALL] | %[REG_BOUNDS_PLUS_0]<<5\n"  // write_ssr_config
+                "mul %[prev_work], %[prev_work], %[inner_loop_stride]\n"
+                "sub %[prev_work], %[outer_loop_stride], %[prev_work]\n"
+                "scfgwi %[prev_work], %[DM_ALL] | %[REG_STRIDES_PLUS_1]<<5\n"
+                // first stride still the same
+                // a = b0 * s0
+                // a = s1 - a
+                // scfgwi %[REG_STRIDES_PLUS_1], %[DM_ALL] | %[a]<<5\n
+                "mv %[prev_work], %[work_in_tile]\n"  // now use prev_work as
+                                                      // prev_work instead of a
+                                                      // temporary
+                "4:\n"
+                "beqz %[buf_flag], 3f\n"
+                // buf_flag is 1, add to the scratches
+                "add %[grad_ofmap_scratch], %[grad_ofmap_scratch], %[buf_flag_offset]\n"
+                "add %[grad_ifmap_scratch], %[grad_ifmap_scratch], %[buf_flag_offset]\n"
+                "add %[ifmap_scratch], %[ifmap_scratch], %[buf_flag_offset]\n"
+                "j 2f\n"
+                "3:\n"
+                // buf_flag is 0, subtract back to original
+                "sub %[grad_ofmap_scratch], %[grad_ofmap_scratch], %[buf_flag_offset]\n"
+                "sub %[grad_ifmap_scratch], %[grad_ifmap_scratch], %[buf_flag_offset]\n"
+                "sub %[ifmap_scratch], %[ifmap_scratch], %[buf_flag_offset]\n"
+                "2:\n"
+                // // write ssr config if this is not the last iteration
+                // "beqz %[work_in_tile], 5f\n"
+                // "scfgwi %[grad_ofmap_scratch],%[DM_0] | %[REG_RPTR_2D]<<5\n"
+                // "scfgwi %[grad_ifmap_scratch],%[DM_1] | %[REG_WPTR_2D]<<5\n"
+                // "scfgwi %[ifmap_scratch],%[DM_2] | %[REG_RPTR_2D]<<5\n"
+                // "5:\n"
+                : [buf_flag] "+r"(buf_flag),
+                  [invstd_scratch] "+r"(invstd_scratch),
+                  [weight_scratch] "+r"(weight_scratch),
+                  [running_mean_scratch] "+r"(running_mean_scratch),
+                  [work_in_tile] "=r"(work_in_tile),
+                  [next_work_mod_2] "=r"(next_work_mod_2),
+                  [prev_work] "+r"(prev_work), [frep] "+r"(frep),
+                  [work_div_2_sub_1] "=r"(work_div_2_sub_1),
+                  [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
+                  [grad_ifmap_scratch] "+r"(grad_ifmap_scratch),
+                  [ifmap_scratch] "+r"(ifmap_scratch)
+                : [i] "r"(i),
+                  [num_doubles_work_for_core_per_point] "r"(
+                      num_doubles_work_for_core_per_point),
+                  [channel_array_reset_dist] "r"(channel_array_reset_dist),
+                  [work_in_tile_offset] "i"(
+                      offsetof(dm_comm_t, num_points_work_in_tile)),
+                  [work_mod_2_offset] "i"(offsetof(dm_comm_t, work_mod_2)),
+                  [work_div_2_sub_1_offset] "i"(
+                      offsetof(dm_comm_t, work_div_2_sub_1)),
+                  [REG_BOUNDS_PLUS_0] "i"(REG_BOUNDS),
+                  [REG_WPTR_2D] "i"(REG_WPTR + 2),
+                  [REG_RPTR_2D] "i"(REG_RPTR + 2),
+                  [DM_ALL] "i"(SNRT_SSR_DM_ALL), [DM_0] "i"(SNRT_SSR_DM0),
+                  [DM_1] "i"(SNRT_SSR_DM1), [DM_2] "i"(SNRT_SSR_DM2),
+                  [REG_STRIDES_PLUS_1] "i"(REG_STRIDES + 1),
+                  [inner_loop_stride] "r"(inner_loop_stride),
+                  [outer_loop_stride] "r"(outer_loop_stride),
+                  [dm_comm] "r"(dm_comm), [buf_flag_offset] "r"(buf_flag_offset)
+                : "ft0", "ft1", "ft2", "x0", "memory");
+
+            asm volatile(
+                "beqz %[work_mod_2], 0f\n"  // mod is 0
+                "1:\n"
+                // for grad_ifmap: x - running_mean
+                "vfsub.s ft3, ft2, %[running_mean]\n"
+                // for grad_ifmap: dy * invstd
+                "vfmul.s ft4, %[invstd], ft0\n"
+                "vfadd.s %[grad_bias_0], ft0, %[grad_bias_0]\n"
+                "vfmul.s ft1, %[weight_times_invstd], ft0\n"
+                // for grad_ifmap: (x - running_mean) * (dy * invstd)
+                "vfmac.s %[grad_weight_0], ft3, ft4\n"
+                "0:\n"
+                : [grad_weight_0] "+fr"(grad_weight_0.f64), [grad_bias_0] "+fr"(
+                                                                grad_bias_0.f64)
+                : [running_mean] "fr"(running_mean.f64),
+                  [weight_times_invstd] "fr"(weight_times_invstd.f64),
+                  [invstd] "fr"(invstd.f64), [zero] "fr"(ZERO.f64),
+                  [work_mod_2] "r"(work_mod_2)
+                : "ft0", "ft1", "ft2", "ft3", "ft4");
+
+            // in plain C:
+            // if (is_first_iteration) {
+            //     grad_bias_scratch[channel] =
+            //         grad_bias_0 + grad_bias_1;
+            //     grad_weight_scratch[channel] =
+            //         grad_weight_0 + grad_weight_1;
+
+            // } else {
+            //     grad_bias_scratch[channel] +=
+            //         grad_bias_0 + grad_bias_1;
+            //     grad_weight_scratch[channel] +=
+            //         grad_weight_0 + grad_weight_1;
+            // }
+            // invstd = *invstd_scratch;
+            // weight = *weight_scratch;
+            // running_mean = *running_mean_scratch;
+            // grad_bias_0 = grad_bias_1 = grad_weight_0 = grad_weight_1 = 0;
+            register double temp_grad_bias, temp_grad_weight;
+            asm volatile(
+                "fld %[temp_grad_bias], 0(%[grad_bias_scratch])\n"
+                "fld %[temp_grad_weight], 0(%[grad_weight_scratch])\n"
+                "vfadd.s %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
+                "vfadd.s %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
+                // interleave 0 resetting and loading between fadd latency
+                // don't need to synchronize here because the integer core can't
+                // issue these instructions until the previous increments have
+                // happened
+                "fld %[invstd],0(%[invstd_scratch])\n"
+                "fld %[weight_times_invstd],0(%[weight_scratch])\n"
+                "vfadd.s %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
+                "vfadd.s %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
+                "fld %[running_mean],0(%[running_mean_scratch])\n"
+                "vfsgnj.s %[grad_bias_1],%[ZERO],%[ZERO]\n"
+                "vfsgnj.s %[grad_weight_1],%[ZERO],%[ZERO]\n"
+                "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
+                "fsd %[grad_weight_0], 0(%[grad_weight_scratch])\n"
+                "vfsgnj.s %[grad_bias_0],%[ZERO],%[ZERO]\n"
+                "vfsgnj.s %[grad_weight_0],%[ZERO],%[ZERO]\n"
+                : [temp_grad_bias] "+fr"(temp_grad_bias),
+                  [temp_grad_weight] "+fr"(temp_grad_weight),
+                  [grad_weight_0] "+fr"(grad_weight_0.f64),
+                  [grad_weight_1] "+fr"(grad_weight_1.f64),
+                  [grad_bias_0] "+fr"(grad_bias_0.f64),
+                  [grad_bias_1] "+fr"(grad_bias_1.f64),
+                  [running_mean] "=fr"(running_mean.f64),
+                  [weight_times_invstd] "=fr"(weight_times_invstd.f64),
+                  [invstd] "=fr"(invstd.f64)
+                : [ZERO] "fr"(ZERO.f64), [invstd_scratch] "r"(invstd_scratch),
+                  [weight_scratch] "r"(weight_scratch),
+                  [running_mean_scratch] "r"(running_mean_scratch),
+                  [grad_bias_scratch] "r"(grad_bias_scratch),
+                  [grad_weight_scratch] "r"(grad_weight_scratch)
+                : "ft0", "ft1", "ft2");
+        } while (i < num_doubles_work_for_core_per_point);
+        // don't need to fpu_fence since last 3 instructions are inconsequential
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+
+        work_mod_2 = next_work_mod_2;
+        grad_weight_scratch -=
+            channel_stride * (num_doubles_work_for_core_per_point - 1);
+        grad_bias_scratch -=
+            channel_stride * (num_doubles_work_for_core_per_point - 1);
+    } while (work_in_tile != 0);
+}
+
+static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
+    batchnorm_backward_layer_t* l, uint32_t num_doubles_per_aligned_point,
+    uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,
+    bool is_point_aligned_to_8_byte_boundary,
+    uint32_t work_left,  // only present for dma
+    uint32_t initial_work_in_tile, dm_comm_t* dm_comm,
+    uint32_t tile_size_in_points, double* grad_ofmap_scratch,
+    double* ifmap_scratch, double* grad_ifmap_scratch, bool buf_flag) {
+    snrt_dma_wait_all();
+
         // signal first iteration
         // compute cores don't have to read dm comm the first time
         snrt_cluster_hw_barrier();
+
         // skip the first iteration in looping
         uint32_t point_start = initial_work_in_tile;
         uint32_t work_in_tile = initial_work_in_tile;
-        bool is_last_iteration = false;
         uint32_t prev_point_start = 0;
         uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
         // split the remaining work "nicely"
         uint32_t min_loops = ceildiv(work_left, tile_size_in_points);
         // align up to multiple of 2 because that avoids stalling in fpu the
         // best
-        uint32_t ideal_work_in_tile = min(
-            ALIGN_UP(ceildiv(work_left, min_loops), 2), tile_size_in_points);
-        // uint32_t ideal_work_in_tile = 96;  // TODO CHANGE BACK
+    uint32_t ideal_work_in_tile =
+        min(ALIGN_UP(ceildiv(work_left, min_loops), 2), tile_size_in_points);
+
         while (work_left > 0) {
             // uint32_t estimated_max_tileable_work = tile_size_in_points;
             // (work_in_tile * ceildiv(C, num_compute_cores) * 5 *
             //  NUM_DOUBLES_LOADED_PER_CYCLE) /
             // (3 * C);
             work_in_tile = min(ideal_work_in_tile, work_left);
-            // DUMP(work_left);
             DUMP(work_in_tile);
             work_left -= work_in_tile;
+
             // update comms
             dm_comm->num_points_work_in_tile = work_in_tile;
             dm_comm->work_mod_2 = work_in_tile % 2;
             dm_comm->work_div_2_sub_1 = work_in_tile / 2 - 1;
             // comm what the next iteration will be
-            // wait for potential previous gradifmap write out?
+        // wait for potential previous grad_ifmap write out?
             snrt_dma_wait_all();
-            snrt_dma_start_1d(
-                &grad_ofmap_scratch[tile_size_in_points * C * buf_flag],
-                &l->grad_ofmap[point_start * C],
-                work_in_tile * C * sizeof(double));
-            snrt_dma_start_1d(
-                &ifmap_scratch[tile_size_in_points * C * buf_flag],
-                &l->ifmap[point_start * C], work_in_tile * C * sizeof(double));
+
+        initiate_dma_1d_or_2d(
+            &grad_ofmap_scratch[tile_size_in_points *
+                                num_doubles_per_aligned_point * buf_flag],
+            &l->grad_ofmap[point_start * num_doubles_per_aligned_point],
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
+            num_bytes_per_packed_point, work_in_tile,
+            is_point_aligned_to_8_byte_boundary);
+        initiate_dma_1d_or_2d(
+            &ifmap_scratch[tile_size_in_points * num_doubles_per_aligned_point *
+                           buf_flag],
+            &l->ifmap[point_start * num_doubles_per_aligned_point],
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
+            num_bytes_per_packed_point, work_in_tile,
+            is_point_aligned_to_8_byte_boundary);
+
             // signal to core that current tile has information ready
             snrt_cluster_hw_barrier();
             DUMP(55);
@@ -846,14 +1183,23 @@ static inline void batchnorm_backward_main_loop(
 
             // DUMP(prev_point_start);
 
-            snrt_dma_start_1d(
-                &l->grad_ifmap[prev_point_start * C],
-                &grad_ifmap_scratch[tile_size_in_points * C *
-                                    (!buf_flag)],  // take !buf_flag dma
-                                                   // core is one
-                                                   // iteration ahead of
-                                                   // compute core
-                num_points_work_in_prev_tile * C * sizeof(double));
+        initiate_dma_1d_or_2d(
+            &l->grad_ifmap[prev_point_start * num_doubles_per_aligned_point],
+            &grad_ifmap_scratch[tile_size_in_points *
+                                num_doubles_per_aligned_point * (!buf_flag)],
+            num_bytes_per_packed_point, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_points_work_in_prev_tile,
+            is_point_aligned_to_8_byte_boundary);
+        // snrt_dma_start_1d(
+        //     &l->grad_ifmap[prev_point_start * num_doubles_per_aligned_point],
+        //     &grad_ifmap_scratch[tile_size_in_points *
+        //                         num_doubles_per_aligned_point *
+        //                         (!buf_flag)],  // take !buf_flag
+        //                                        // dma core is one
+        //                                        // iteration ahead
+        //                                        // of compute core
+        //     num_points_work_in_prev_tile * num_doubles_per_aligned_point *
+        //         sizeof(double));
             prev_point_start = point_start;
             num_points_work_in_prev_tile = work_in_tile;
             point_start += work_in_tile;
@@ -866,38 +1212,15 @@ static inline void batchnorm_backward_main_loop(
         snrt_cluster_hw_barrier();
         // wait for last tile to finish
         snrt_cluster_hw_barrier();
-        snrt_dma_start_1d(
-            &l->grad_ifmap[prev_point_start * C],
-            &grad_ifmap_scratch[tile_size_in_points * C *
-                                (!buf_flag)],  // take !buf_flag dma
-                                               // core is one iteration
-                                               // ahead of compute core
-            num_points_work_in_prev_tile * C * sizeof(double));
-    } else {
-        if (num_channels_work_for_core == 0) {
-            // start up first tile
-            snrt_cluster_hw_barrier();
-            while (initial_work_in_tile != 0) {
-                // wait for dma to compute result and signify work is done
-                snrt_cluster_hw_barrier();
-                initial_work_in_tile = dm_comm->num_points_work_in_tile;
-                // "signal" work is done
-                snrt_cluster_hw_barrier();
-            }
-        } else {
-            batchnorm_backward_tile_fp64_looped(
-                &grad_ofmap_scratch[compute_id],
-                &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
-                &running_mean_scratch[compute_id], &weight_scratch[compute_id],
-                &invstd_scratch[compute_id], &grad_bias_scratch[compute_id],
-                &grad_weight_scratch[compute_id], C, initial_work_in_tile,
-                initial_work_mod_3, initial_work_div_3_sub_1,
-                tile_size_in_points, num_channels_work_for_core,
-                num_compute_cores, dm_comm);
-        }
-    }
 
-    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
+    initiate_dma_1d_or_2d(
+        &l->grad_ifmap[prev_point_start * num_doubles_per_aligned_point],
+        &grad_ifmap_scratch[tile_size_in_points *
+                            num_doubles_per_aligned_point * (!buf_flag)],
+        num_bytes_per_packed_point, num_bytes_per_packed_point,
+        num_bytes_per_aligned_point, num_points_work_in_prev_tile,
+        is_point_aligned_to_8_byte_boundary);
+    snrt_dma_wait_all();
 }
 
 static inline void __attribute__((always_inline))

@@ -39,6 +39,7 @@ target_snitch_cluster_path = (
 print(target_snitch_cluster_path)
 
 columns = [
+    "prec",
     "impl",
     "C",
     "H",
@@ -49,15 +50,22 @@ columns = [
     "fpu_occupancy",
     "total_ipc",
 ]
-index = ["impl", "C", "H", "W", "TILE_CI"]
+index = ["prec", "impl", "C", "H", "W"]
+
 
 def get_layout_path(is_whole_block):
-    return "backwards_mcycle_layout_whole_block.csv" if is_whole_block else "backwards_mcycle_layout_sectioned.csv"
+    return (
+        "backwards_mcycle_layout_whole_block.csv"
+        if is_whole_block
+        else "backwards_mcycle_layout_sectioned.csv"
+    )
+
 
 def flatten_config_list(config_modifiers):
     return [
-        (impl, config)
-        for impl, configs in config_modifiers.items()
+        (prec, impl, config)
+        for prec, prec_configs in config_modifiers.items()
+        for impl, configs in prec_configs.items()
         for config in configs
     ]
 
@@ -83,7 +91,7 @@ def write_results(data, existing_df: pd.DataFrame, is_whole_block=False):
     df = pd.DataFrame(data, columns=columns)
     df.set_index(index, drop=True, inplace=True)
     existing_df = pd.concat([existing_df, df], axis=0)
-    existing_df.sort_index(inplace=True)
+    existing_df.sort_values(by=["prec", "impl", "num_data_points", "C"], inplace=True)
     existing_df.to_csv(get_scaling_results_path(is_whole_block))
 
 
@@ -99,27 +107,63 @@ small_sizes = [
         (8, 8, 8),
     ]
 ]
+
+non_aligned_sizes = [
+    format_size(*dims)
+    for dims in [
+        (3, 2, 2),
+        (5, 6, 6),
+        (7, 5, 5),
+        (9, 6, 5),
+        (10, 8, 4),
+        (11, 4, 4),
+        (13, 5, 5),
+    ]
+]
 # print(target_snitch_cluster_path.absolute())
 config_modifiers = {
-    # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-    "SINGLE_CORE_OPT": [
-        *small_sizes,
-        format_size(16, 8, 8),
-        format_size(16, 16, 8),
-        format_size(16, 16, 16),
-    ],
-    "MULTICORE_OPT": [
-        *small_sizes,
-        format_size(16, 8, 8),
-        format_size(16, 16, 8),
-        format_size(16, 16, 16),
-        format_size(16, 64, 64),
-        format_size(32, 16, 16),
-        format_size(32, 32, 16),
-        format_size(32, 32, 32),
-        format_size(32, 64, 32),
-        format_size(32, 64, 64),
-    ],
+    64: {
+        # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
+        "SINGLE_CORE_OPT": [
+            *small_sizes,
+            format_size(16, 8, 8),
+            format_size(16, 16, 8),
+            format_size(16, 16, 16),
+        ],
+        "MULTICORE_OPT": [
+            *small_sizes,
+            format_size(16, 8, 8),
+            format_size(16, 16, 8),
+            format_size(16, 16, 16),
+            format_size(16, 64, 64),
+            format_size(32, 16, 16),
+            format_size(32, 32, 16),
+            format_size(32, 32, 32),
+            format_size(32, 64, 32),
+            format_size(32, 64, 64),
+        ],
+    },
+    32: {
+        "SINGLE_CORE_OPT": [
+            *small_sizes,
+            *non_aligned_sizes,
+            format_size(16, 8, 8),
+            format_size(16, 16, 8),
+            format_size(16, 16, 16),
+        ],
+        "MULTICORE_OPT": [
+            *small_sizes,
+            format_size(16, 8, 8),
+            format_size(16, 16, 8),
+            format_size(16, 16, 16),
+            format_size(16, 64, 64),
+            format_size(32, 16, 16),
+            format_size(32, 32, 16),
+            format_size(32, 32, 32),
+            format_size(32, 64, 32),
+            format_size(32, 64, 64),
+        ],
+    },
 }
 
 
@@ -140,13 +184,20 @@ def main():
     scaling_results_df = read_existing_results(is_whole_block)
     data = []
     try:
-        for impl, config in progressbar.progressbar(flatten_config_list(config_modifiers)):
-            merged_config = {**base_config, **config, "impl_opt_level": impl}
+        for prec, impl, config in progressbar.progressbar(
+            flatten_config_list(config_modifiers)
+        ):
+            merged_config = {
+                **base_config,
+                **config,
+                "impl_opt_level": impl,
+                "prec": prec,
+            }
             C = merged_config["input_dim"]["channels"]
             H = merged_config["input_dim"]["height"]
             W = merged_config["input_dim"]["width"]
             TILE_CI = merged_config["tile_ci"]
-            if (impl, C, H, W, TILE_CI) in scaling_results_df.index:
+            if (prec, impl, C, H, W) in scaling_results_df.index:
                 continue
             total_size = C * H * W
             with open(config_path, "w") as config_file:
@@ -180,10 +231,15 @@ def main():
                 raw_perf_df = pd.read_csv(raw_perf_results)
 
             main_loop_mcycle_section = 8 if not is_whole_block else 2
-            main_loop_fpu_occupancy = raw_perf_df.loc[0, f"{main_loop_mcycle_section}_fpss_fpu_occupancy"]
-            main_loop_total_ipc = raw_perf_df.loc[0, f"{main_loop_mcycle_section}_total_ipc"]
+            main_loop_fpu_occupancy = raw_perf_df.loc[
+                0, f"{main_loop_mcycle_section}_fpss_fpu_occupancy"
+            ]
+            main_loop_total_ipc = raw_perf_df.loc[
+                0, f"{main_loop_mcycle_section}_total_ipc"
+            ]
             data.append(
                 (
+                    prec,
                     impl,
                     C,
                     H,
@@ -196,14 +252,14 @@ def main():
                 )
             )
             subprocess.run(
-                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results/{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
+                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,
             ).check_returncode()
             subprocess.run(
-                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results/{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
+                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,

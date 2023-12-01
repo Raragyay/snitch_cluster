@@ -903,7 +903,154 @@ static inline void batchnorm_backward_main_loop(
 }
 
 static inline void __attribute__((always_inline))
-batchnorm_backward_training_tile_fp64_no_loop(
+batchnorm_backward_training_tile_fp64_no_loop_1(
+    const double* grad_ofmap_scratch, const double* ifmap_scratch,
+    const double* current_mean_scratch, double* sum_scratch, double* dotp_scratch,
+    uint32_t C, uint32_t num_points_work_for_core_in_tile, uint32_t work_mod_3,
+    uint32_t work_div_3_sub_1, uint32_t num_channels_to_process,
+    uint32_t channel_stride, bool is_first_iteration, bool force_configure) {
+    DUMP(22);
+    if (is_first_iteration || force_configure) {
+        snrt_ssr_loop_2d(
+            SNRT_SSR_DM_ALL,
+            num_points_work_for_core_in_tile,  // dimension of inner loop
+            num_channels_to_process,           // dimension of outer loop
+            C * sizeof(double),  // stride per inner loop iteration: 1 point
+            channel_stride *
+                sizeof(double));  // stride per outer loop iteration
+    }
+    bool frep = num_points_work_for_core_in_tile >= 3;
+    register volatile uint32_t i = 0;
+    register double ZERO asm("ft9");  // can consider fcvt instead
+    asm volatile("fcvt.d.w %[ZERO], zero\n"
+                 : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
+    register double sum_0 = ZERO;
+    register double sum_1 = ZERO;
+    register double sum_2 = ZERO;
+    register double dotp_0 = ZERO;
+    register double dotp_1 = ZERO;
+    register double dotp_2 = ZERO;
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
+    snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, ifmap_scratch);
+    do {
+        register double current_mean = *current_mean_scratch;
+        snrt_ssr_enable();
+        if (frep) {
+            asm volatile(
+                "frep.o %[n_frep], 15, 0, 0 \n"
+                "fadd.d ft3, ft0, %[zero] \n"
+                "fadd.d ft5, ft0, %[zero] \n"
+                "fadd.d ft7, ft0, %[zero] \n"
+                "fsub.d ft4, ft1, %[current_mean]\n"
+                "fsub.d ft6, ft1, %[current_mean]\n"
+                "fsub.d ft8, ft1, %[current_mean]\n"
+                "fmul.d ft4, ft4, ft3\n"
+                "fmul.d ft6, ft6, ft5\n"
+                "fmul.d ft8, ft8, ft7\n"
+                "fadd.d %[sum_0], ft3, %[sum_0] \n"
+                "fadd.d %[sum_1], ft5, %[sum_1] \n"
+                "fadd.d %[sum_2], ft7, %[sum_2] \n"
+                "fadd.d %[dotp_0], ft4, %[dotp_0]\n"
+                "fadd.d %[dotp_1], ft6, %[dotp_1]\n"
+                "fadd.d %[dotp_2], ft8, %[dotp_2]\n"
+                : [sum_0] "+fr"(sum_0), [sum_1] "+fr"(sum_1), [sum_2] "+fr"(sum_2),
+                [dotp_0] "+fr"(dotp_0), [dotp_1] "+fr"(dotp_1), [dotp_2] "+fr"(dotp_2)
+                : [current_mean] "fr"(current_mean), [zero] "fr"(ZERO),
+                [n_frep] "r"(work_div_3_sub_1)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8");
+        }
+
+        register uint32_t channel_stride_in_bytes;
+        asm volatile(
+            "slli %[channel_stride_in_bytes], %[channel_stride], 3\n"  // log_2(sizeof(double))
+            "beqz %[i], 1f\n"
+            "add %[sum_scratch], %[sum_scratch],%[channel_stride_in_bytes]\n"
+            "add %[dotp_scratch], %[dotp_scratch], %[channel_stride_in_bytes]\n"
+            "1:\n"
+            "addi %[i], %[i], 1\n"
+            "beq %[num_channels_to_process], %[i], 2f\n"  // shortcut when only 1 channel
+            "add %[current_mean_scratch], %[current_mean_scratch], %[channel_stride_in_bytes]\n"
+            "2:\n"
+            : [current_mean_scratch] "+r"(current_mean_scratch),
+              [sum_scratch] "+r"(sum_scratch),
+              [dotp_scratch] "+r"(dotp_scratch), [i] "+r"(i),
+              [channel_stride_in_bytes] "=r"(channel_stride_in_bytes)
+            : [channel_stride] "r"(channel_stride),
+              [num_channels_to_process] "r"(num_channels_to_process)
+            : "ft0", "ft1", "ft2");
+        
+        register uint32_t mod_temp;
+        asm volatile(
+            "beqz %[work_mod_3], 0f\n"              // mod is 0
+            "andi %[mod_temp], %[work_mod_3], 1\n"  // is last bit 1? if no, then mod is 2
+            "bnez %[mod_temp], 1f\n"                // jump to 1 if yes
+            "2:\n"
+            "fadd.d ft3, ft0, %[zero] \n"
+            "fadd.d ft5, ft0, %[zero] \n"
+            "fsub.d ft4, ft1, %[current_mean]\n"
+            "fsub.d ft6, ft1, %[current_mean]\n"
+            "fmul.d ft4, ft4, ft3\n"
+            "fmul.d ft6, ft6, ft5\n"
+            "fadd.d %[sum_0], ft3, %[sum_0] \n"
+            "fadd.d %[sum_1], ft5, %[sum_1] \n"
+            "fadd.d %[dotp_0], ft4, %[dotp_0]\n"
+            "fadd.d %[dotp_1], ft6, %[dotp_1]\n"
+            "j 0f\n"
+            "1:\n"
+            "fadd.d ft3, ft0, %[zero] \n"
+            "fsub.d ft4, ft1, %[current_mean]\n"
+            "fmul.d ft4, ft4, ft3\n"
+            "fadd.d %[sum_0], ft3, %[sum_0] \n"
+            "fadd.d %[dotp_0], ft4, %[dotp_0]\n"
+            "0:\n"
+            : [sum_0] "+fr"(sum_0), [sum_1] "+fr"(sum_1), [sum_2] "+fr"(sum_2),
+              [dotp_0] "+fr"(dotp_0), [dotp_1] "+fr"(dotp_1), [dotp_2] "+fr"(dotp_2),
+              [mod_temp] "=r"(mod_temp)
+            : [current_mean] "fr"(current_mean), [zero] "fr"(ZERO),
+              [work_mod_3] "r"(work_mod_3),
+              [n_frep] "r"(work_div_3_sub_1)
+            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
+
+        register double temp_sum, temp_dotp;
+        asm volatile(
+            "fld %[temp_sum], 0(%[sum_scratch])\n"
+            "fld %[temp_dotp], 0(%[dotp_scratch])\n"
+            "fadd.d %[sum_0], %[temp_sum], %[sum_0]\n"
+            "fadd.d %[dotp_0], %[temp_dotp], %[dotp_0]\n"
+            "fadd.d %[sum_0], %[sum_1], %[sum_0]\n"
+            "fadd.d %[dotp_0], %[dotp_1], %[dotp_0]\n"
+            "fsgnj.d %[sum_1],%[ZERO],%[ZERO]\n"
+            "fsgnj.d %[dotp_1],%[ZERO],%[ZERO]\n"
+            "fadd.d %[sum_0], %[sum_2], %[sum_0]\n"
+            "fadd.d %[dotp_0], %[dotp_2], %[dotp_0]\n"
+            "fsgnj.d %[sum_2],%[ZERO],%[ZERO]\n"
+            "fsgnj.d %[dotp_2],%[ZERO],%[ZERO]\n"
+            "fsd %[sum_0], 0(%[sum_scratch])\n"
+            "fsd %[dotp_0], 0(%[dotp_scratch])\n"
+            "fsgnj.d %[sum_0],%[ZERO],%[ZERO]\n"
+            "fsgnj.d %[dotp_0],%[ZERO],%[ZERO]\n"
+            : [temp_sum] "+fr"(temp_sum),
+              [temp_dotp] "+fr"(temp_dotp),
+              [sum_0] "+fr"(sum_0),
+              [sum_1] "+fr"(sum_1),
+              [sum_2] "+fr"(sum_2),
+              [dotp_0] "+fr"(dotp_0),
+              [dotp_1] "+fr"(dotp_1),
+              [dotp_2] "+fr"(dotp_2)
+            : [ZERO] "fr"(ZERO),
+              [sum_scratch] "r"(sum_scratch),
+              [dotp_scratch] "r"(dotp_scratch)
+            : "ft0", "ft1", "ft2");
+        snrt_fpu_fence();
+        snrt_ssr_disable();
+    } while (i < num_channels_to_process);
+    __builtin_ssr_barrier(SNRT_SSR_DM1);
+    DUMP(33);
+}
+
+
+static inline void __attribute__((always_inline))
+batchnorm_backward_training_tile_fp64_no_loop_2(
     const double* grad_ofmap_scratch, double* grad_ifmap_scratch, const double* ifmap_scratch,
     const double* current_mean_scratch, const double* weight_scratch, const double* invstd_scratch,
     const double* k_scratch, const double* grad_mean_scratch, uint32_t C,
@@ -931,26 +1078,28 @@ batchnorm_backward_training_tile_fp64_no_loop(
         register double weight_times_invstd = *weight_scratch * *invstd_scratch;
         register double grad_mean_times_weight_times_invstd = *grad_mean_scratch * weight_times_invstd;
         snrt_ssr_enable();
-        asm volatile(
-            "frep.o %[n_frep], 12, 0, 0 \n"
-            "fsub.d ft3, ft0, %[current_mean] \n"
-            "fsub.d ft4, ft0, %[current_mean] \n"
-            "fsub.d ft5, ft0, %[current_mean] \n"
-            "fsub.d ft6, ft0, %[current_mean] \n"
-            "fnmsub.d ft3, ft3, %[k], ft2\n"
-            "fnmsub.d ft4, ft4, %[k], ft2\n"
-            "fnmsub.d ft5, ft5, %[k], ft2\n"
-            "fnmsub.d ft6, ft6, %[k], ft2\n"
-            "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            "fmsub.d ft1, ft6, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
-            :
-            : [current_mean] "fr"(current_mean), [k] "fr"(k),
-            [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
-            [weight_times_invstd] "fr"(weight_times_invstd),
-            [n_frep] "r"(work_div_4_sub_1)
-            : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
+        if (frep) {
+            asm volatile(
+                "frep.o %[n_frep], 12, 0, 0 \n"
+                "fsub.d ft3, ft0, %[current_mean] \n"
+                "fsub.d ft4, ft0, %[current_mean] \n"
+                "fsub.d ft5, ft0, %[current_mean] \n"
+                "fsub.d ft6, ft0, %[current_mean] \n"
+                "fnmsub.d ft3, ft3, %[k], ft2\n"
+                "fnmsub.d ft4, ft4, %[k], ft2\n"
+                "fnmsub.d ft5, ft5, %[k], ft2\n"
+                "fnmsub.d ft6, ft6, %[k], ft2\n"
+                "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                "fmsub.d ft1, ft6, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
+                :
+                : [current_mean] "fr"(current_mean), [k] "fr"(k),
+                [grad_mean_times_weight_times_invstd] "fr"(grad_mean_times_weight_times_invstd),
+                [weight_times_invstd] "fr"(weight_times_invstd),
+                [n_frep] "r"(work_div_4_sub_1)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
+        }
 
         register uint32_t channel_stride_in_bytes;
         asm volatile(
@@ -979,7 +1128,6 @@ batchnorm_backward_training_tile_fp64_no_loop(
             "andi %[mod_temp], %[work_mod_4], 2\n"  // is last bit 1? if no, then mod is 1
             "beqz %[mod_temp], 1f\n"                // jump to 1 if no
             "3:\n"
-            "csrwi 0x7C3, 3\n"
             "fsub.d ft3, ft0, %[current_mean] \n"
             "fsub.d ft4, ft0, %[current_mean] \n"
             "fsub.d ft5, ft0, %[current_mean] \n"
@@ -991,7 +1139,6 @@ batchnorm_backward_training_tile_fp64_no_loop(
             "fmsub.d ft1, ft5, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
             "j 0f\n"
             "2:\n"
-            "csrwi 0x7C3, 2\n"
             "fsub.d ft3, ft0, %[current_mean] \n"
             "fsub.d ft4, ft0, %[current_mean] \n"
             "fnmsub.d ft3, ft3, %[k], ft2\n"
@@ -1000,7 +1147,6 @@ batchnorm_backward_training_tile_fp64_no_loop(
             "fmsub.d ft1, ft4, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
             "j 0f\n"
             "1:\n"
-            "csrwi 0x7C3, 1\n"
             "fsub.d ft3, ft0, %[current_mean] \n"
             "fnmsub.d ft3, ft3, %[k], ft2\n"
             "fmsub.d ft1, ft3, %[weight_times_invstd], %[grad_mean_times_weight_times_invstd] \n"
@@ -1018,7 +1164,7 @@ batchnorm_backward_training_tile_fp64_no_loop(
 }
 
 static inline void __attribute__((always_inline))
-batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
+batchnorm_backward_training_tile_fp64_looped_2(const double* grad_ofmap_scratch,
                                     double* grad_ifmap_scratch,  // no restrict because grad_ifmap and ifmap used
                                     const double* ifmap_scratch, const double* current_mean_scratch,
                                     const double* weight_scratch, const double* invstd_scratch,
@@ -1212,7 +1358,7 @@ batchnorm_backward_training_tile_fp64_looped(const double* grad_ofmap_scratch,
     snrt_cluster_hw_barrier();
 }
 
-static inline void batchnorm_backward_training_main_loop(uint32_t C, uint32_t work_left,  // only present for dma
+static inline void batchnorm_backward_training_main_loop_2(uint32_t C, uint32_t work_left,  // only present for dma
                                                 uint32_t initial_work_in_tile, uint32_t initial_work_mod_4,
                                                 uint32_t initial_work_div_4_sub_1, dm_comm_t* dm_comm,
                                                 uint32_t tile_size_in_points, uint32_t compute_id,
@@ -1227,7 +1373,6 @@ static inline void batchnorm_backward_training_main_loop(uint32_t C, uint32_t wo
     if (snrt_is_dm_core()) {
         snrt_dma_wait_all();
         // buf_flag should be 1 here.
-        // DUMP(ifmap_scratch[0]);
         // signal first iteration
         // compute cores don't have to read dm comm the first time
         snrt_cluster_hw_barrier();
@@ -1299,7 +1444,7 @@ static inline void batchnorm_backward_training_main_loop(uint32_t C, uint32_t wo
                 snrt_cluster_hw_barrier();
             }
         } else {
-            batchnorm_backward_training_tile_fp64_looped(
+            batchnorm_backward_training_tile_fp64_looped_2(
                 &grad_ofmap_scratch[compute_id], &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id], &current_mean_scratch[compute_id],
                 &weight_scratch[compute_id], &invstd_scratch[compute_id], &k_scratch[compute_id], &grad_mean_scratch[compute_id], C,
                 initial_work_in_tile, initial_work_mod_4, initial_work_div_4_sub_1, tile_size_in_points,

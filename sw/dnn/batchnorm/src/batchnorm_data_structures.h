@@ -59,10 +59,12 @@ typedef struct {
     union {
         uint32_t work_mod_2;
         uint32_t work_mod_3;
+        uint32_t work_mod_4;
     };
     union {
         uint32_t work_div_2_sub_1;
         uint32_t work_div_3_sub_1;
+        uint32_t work_div_4_sub_1;
     };
 } __attribute__((aligned(sizeof(double)))) dm_comm_t;
 

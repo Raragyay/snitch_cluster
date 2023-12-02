@@ -55,10 +55,9 @@ def main():
     stalls_grad_A = np.array(bytes_to_int(raw_results['stalls_grad_A'], prec='32', signedness='unsigned'))
     stalls_grad_B = np.array(bytes_to_int(raw_results['stalls_grad_B'], prec='32', signedness='unsigned'))
 
-   # print("GRAD_C:\n", GRAD_C)
+    print("A\n",np.transpose(A))    
+    print("GRAD_C:\n", GRAD_C)
     #print("B:\n",np.transpose(B))
-    print("A\n",stalls_grad_A)    
-    print("B\n",stalls_grad_B)    
 
     # Verify results
     grad_A_golden, grad_B_golden = golden_model(alpha, A,B,GRAD_C)

@@ -566,8 +566,8 @@ static inline void batchnorm_backward_training_tiling(
 
     uint32_t doubles_loadable = ceildiv(C, num_compute_cores) * 50 * 7;
     uint32_t points_loadable = doubles_loadable / C;
-    uint32_t work_in_tile = min(min(points_loadable, tile_size_in_points), num_points);
-    // uint32_t work_in_tile = 10;
+    // uint32_t work_in_tile = min(min(points_loadable, tile_size_in_points), num_points);
+    uint32_t work_in_tile = 4;
     uint32_t work_left = num_points;
     uint32_t work_mod_3 = work_in_tile % 3;
     uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
@@ -578,6 +578,7 @@ static inline void batchnorm_backward_training_tiling(
         dm_comm->num_points_work_in_tile = work_in_tile;
         dm_comm->work_mod_3 = work_mod_3;
         dm_comm->work_div_3_sub_1 = work_div_3_sub_1;  // this is the frep value
+        buf_flag = !buf_flag;
     }
 
     uint32_t start_dma_load = snrt_mcycle();
@@ -621,52 +622,14 @@ static inline void batchnorm_backward_training_tiling(
         }
         uint32_t end_main_loop_1 = SNRT_SECTIONED_MCYCLE();
     } else {
-        DUMP(0);
-        // batchnorm_backward_training_main_loop_1(C, work_left, work_in_tile, work_mod_3, work_div_3_sub_1, dm_comm,
-        //                              tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,
-        //                              ifmap_scratch, current_mean_scratch, sum_scratch, dotp_scratch, buf_flag);
+        batchnorm_backward_training_main_loop_1(C, work_left, work_in_tile, work_mod_3, work_div_3_sub_1, dm_comm,
+                                     tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,
+                                     ifmap_scratch, current_mean_scratch, sum_scratch, dotp_scratch, buf_flag);
     }
     if (snrt_is_dm_core()) {
         snrt_dma_wait(curr_var_load);
     }
     snrt_cluster_hw_barrier();
-
-    // uint32_t start_compute_sum_dotp_reduction = SNRT_SECTIONED_MCYCLE();
-    // if (snrt_is_dm_core()) {
-    //     snrt_dma_wait(curr_var_load);
-    // } else {
-    //     if (num_channels_work_for_core > 0) {
-    //         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, &grad_ofmap_scratch[compute_id]);
-    //         snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, &ifmap_scratch[compute_id]);
-    //         for (uint32_t channel = compute_id; channel < C;
-    //              channel += num_compute_cores) {
-    //             register volatile double sum = 0;
-    //             register volatile double dotp = 0;
-    //             register double current_mean = current_mean_scratch[channel];
-    //             const register double ZERO = 0;
-    //             snrt_ssr_enable();
-    //             // TODO use ssr_repeat instead of fadd.d , , %[zero]
-    //             asm volatile(
-    //                 "frep.o %[n_frep], 5, 0, 0 \n"
-    //                 "fadd.d ft3, ft0, %[zero] \n"
-    //                 "fadd.d %[sum], ft3, %[sum] \n"
-    //                 "fsub.d ft4, ft1, %[current_mean]\n"
-    //                 "fmul.d ft4, ft4, ft3\n"
-    //                 "fadd.d %[dotp], ft4, %[dotp]\n"
-    //                 : [sum] "+fr"(sum), [dotp] "+fr"(dotp)
-    //                 : [current_mean] "fr"(current_mean), [zero] "fr"(ZERO),
-    //                   [n_frep] "r"(num_points - 1)
-    //                 : "ft0", "ft1", "ft2", "ft3", "ft4");
-    //             snrt_fpu_fence();
-    //             snrt_ssr_disable();
-    //             sum_scratch[channel] = sum;
-    //             dotp_scratch[channel] = dotp;
-    //         }
-    //         __builtin_ssr_barrier(SNRT_SSR_DM1);
-    //     }
-    // }
-    // uint32_t end_compute_sum_dotp_reduction = SNRT_SECTIONED_MCYCLE();
-    // snrt_cluster_hw_barrier();
 
     uint32_t start_compute_sum_dotp_reduction_2 = SNRT_SECTIONED_MCYCLE();
     uint32_t end_compute_sum_dotp_reduction_2 = SNRT_SECTIONED_MCYCLE();
@@ -678,7 +641,14 @@ static inline void batchnorm_backward_training_tiling(
         dm_comm->num_points_work_in_tile = work_in_tile;
         dm_comm->work_mod_4 = work_mod_4;
         dm_comm->work_div_4_sub_1 = work_div_4_sub_1;
+        buf_flag = 0;
+        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                                            grad_ofmap_len * sizeof(double));
+        ifmap_load =
+            snrt_dma_start_1d(ifmap_scratch, l->ifmap, ifmap_len * sizeof(double));
         snrt_dma_wait(weight_load);
+        snrt_dma_wait(grad_ofmap_load);
+        snrt_dma_wait(ifmap_load);
         buf_flag = !buf_flag;
     } else if (snrt_is_compute_core()) {
         if (num_channels_work_for_core > 0) {
@@ -743,7 +713,6 @@ static inline void batchnorm_backward_training_tiling(
     uint32_t end_compute_invstd_k_grad_mean_grad_weight =
         SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
-
     if (work_in_tile == num_points) {
         uint32_t start_main_loop_2 = SNRT_SECTIONED_MCYCLE();
         if (snrt_is_dm_core()) {
@@ -764,7 +733,6 @@ static inline void batchnorm_backward_training_tiling(
         }
         uint32_t end_main_loop_2 = SNRT_SECTIONED_MCYCLE();
     } else {
-        DUMP(0);
         batchnorm_backward_training_main_loop_2(C, work_left, work_in_tile, work_mod_4, work_div_4_sub_1, dm_comm,
                                      tile_size_in_points, compute_id, num_compute_cores, l, grad_ofmap_scratch,
                                      ifmap_scratch, grad_ifmap_scratch, k_scratch, grad_mean_scratch, invstd_scratch,

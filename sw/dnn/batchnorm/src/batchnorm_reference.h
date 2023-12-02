@@ -248,12 +248,17 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     uint32_t num_points = N * H * W;
     precision_t dtype_bytes = l->dtype;
     uint32_t num_dtypes_per_double = (FP64 / dtype_bytes);
-    uint32_t num_doubles = num_points * C / num_dtypes_per_double;
-    uint32_t num_doubles_per_point = C / num_dtypes_per_double;
-    uint32_t num_bytes = num_points * C * dtype_bytes;
-    uint32_t num_bytes_per_point = C * dtype_bytes;
+    // including padding for non-aligned points
+    uint32_t num_doubles_per_point = ceildiv(C, num_dtypes_per_double);
+    uint32_t num_doubles = num_points * num_doubles_per_point;
 
-    ptrdiff_t grad_bias_scratch_len = num_doubles_per_point, grad_weight_scratch_len = num_doubles_per_point;
+    bool is_point_aligned_to_8_byte_boundary = C % num_dtypes_per_double == 0;
+    uint32_t num_bytes_per_aligned_point =
+        num_doubles_per_point * sizeof(double);
+    uint32_t num_bytes = num_doubles * sizeof(double);
+
+    ptrdiff_t grad_bias_scratch_len = num_doubles_per_point,
+              grad_weight_scratch_len = num_doubles_per_point;
 
     // dataflow:
     v2s *ptr = (v2s *)snrt_l1_start_addr();
@@ -267,9 +272,8 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     ptr += grad_bias_scratch_len;
     v2s *grad_weight_scratch = ptr;
     ptr += grad_weight_scratch_len;
-    DUMP(num_doubles_per_point);
-    DUMP(weight_scratch);
-    DUMP(grad_weight_scratch);
+
+
     ptrdiff_t grad_ofmap_len = num_doubles, grad_ifmap_len = grad_ofmap_len,
               ifmap_len = grad_ifmap_len;
 
@@ -278,8 +282,6 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     v2s *ifmap_scratch = ptr;
     ptr += ifmap_len;
     v2s *grad_ifmap_scratch = ifmap_scratch;  // reuse the buffer
-    DUMP(grad_ofmap_scratch);
-    DUMP(grad_ifmap_scratch);
 
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load, grad_ifmap_write;
@@ -290,7 +292,7 @@ static inline void batchnorm_backward_single_core_opt_fp32(
         // Initiate loads for everything but only wait for the running var load.
         // Q: is it better to wait then initiate the rest? we'll see
         running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
-                                             num_bytes_per_point);
+                                             num_bytes_per_aligned_point);
         snrt_dma_wait(running_var_load);
     } else if (compute_id == 0) {
         // PRECONFIGURE: operations on arrays of size C, split by core.
@@ -303,15 +305,20 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     // compute invstd, load weight and running_mean in
     uint32_t start_invstd_calc = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        weight_load =
-            snrt_dma_start_1d(weight_scratch, l->weight, num_bytes_per_point);
+        weight_load = snrt_dma_start_1d(weight_scratch, l->weight,
+                                        num_bytes_per_aligned_point);
         running_mean_load = snrt_dma_start_1d(
-            running_mean_scratch, l->running_mean, num_bytes_per_point);
+            running_mean_scratch, l->running_mean, num_bytes_per_aligned_point);
         // load first tile in. We can do this here because sqrt/div are really
         // slow.
-        grad_ofmap_load =
-            snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap, num_bytes);
-        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap, num_bytes);
+        grad_ofmap_load = initiate_dma_1d_or_2d(
+            grad_ofmap_scratch, l->grad_ofmap, dtype_bytes * C,
+            num_bytes_per_aligned_point, dtype_bytes * C, num_points,
+            is_point_aligned_to_8_byte_boundary);
+        ifmap_load = initiate_dma_1d_or_2d(
+            ifmap_scratch, l->ifmap, dtype_bytes * C,
+            num_bytes_per_aligned_point, dtype_bytes * C, num_points,
+            is_point_aligned_to_8_byte_boundary);
 
         snrt_dma_wait_all();
     } else if (compute_id == 0) {
@@ -358,7 +365,7 @@ static inline void batchnorm_backward_single_core_opt_fp32(
         batchnorm_backward_fp32_no_loop(
             grad_ofmap_scratch, grad_ifmap_scratch, ifmap_scratch,
             running_mean_scratch, weight_scratch, invstd_scratch,
-            grad_bias_scratch, grad_weight_scratch, num_bytes_per_point,
+            grad_bias_scratch, grad_weight_scratch, num_bytes_per_aligned_point,
             num_points, num_points % 2, num_doubles_per_point, 1);
     }
     uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
@@ -370,11 +377,14 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     // complete
     uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(temp, grad_weight_scratch, num_bytes_per_point);
-        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, num_bytes_per_point);
+        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch,
+                          C * dtype_bytes);
         snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
-                          num_bytes_per_point);
-        snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch, num_bytes);
+                          C * dtype_bytes);
+        initiate_dma_1d_or_2d(l->grad_ifmap, grad_ifmap_scratch,
+                              dtype_bytes * C, dtype_bytes * C,
+                              num_bytes_per_aligned_point, num_points,
+                              is_point_aligned_to_8_byte_boundary);
         snrt_dma_wait_all();
     } else if (compute_id == 0) {
     }

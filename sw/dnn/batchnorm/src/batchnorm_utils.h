@@ -332,11 +332,8 @@ batchnorm_backward_tile_fp64_looped(
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             asm volatile(
-                "fmul.d "
-                "%[running_mean_times_invstd],%[running_mean_times_invstd],%["
-                "invstd]\n"
-                "fmul.d "
-                "%[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
+                "fmul.d %[running_mean_times_invstd],%[running_mean_times_invstd],%[invstd]\n"
+                "fmul.d %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
                 : [running_mean_times_invstd] "+fr"(running_mean_times_invstd),
                   [weight_times_invstd] "+fr"(weight_times_invstd)
                 : [invstd] "fr"(invstd)
@@ -595,9 +592,6 @@ batchnorm_backward_fp32_no_loop(
     // Split work over channels to maximize efficacy of frep.
     // outside loop: channels
     // inside loop: points
-    DUMP(num_points_work_for_core);
-    DUMP(num_doubles_to_process);
-    DUMP(num_bytes_per_point);
     snrt_ssr_loop_2d(
         SNRT_SSR_DM_ALL,
         num_points_work_for_core,  // dimension of inner loop
@@ -619,8 +613,10 @@ batchnorm_backward_fp32_no_loop(
     //              Intermediate steps harder though:
     //              (dy * (x[i,C]-running_mean[C]) * invstd[C])
     //              = (dy * (x[i,C]*invstd[C]-(running_mean[C] * invstd[C])))
-    // Option 1: sub, mul, mul. 3 instr
-    // Option 2: mul, sub, mul. 3 instr
+    // Option 1: sub x-mu, mul (x-mu)*invstd, mul by dy. 3 instr
+    // Option 2: mul invstd*dy, sub (x-mu), mul previous two results. 3 instr.
+    //   Option 2 is better because we can do the first 2 in parallel without
+    //   dependencies
     // Conclusion: I think you have to do 3 instructions without fmadd/fmsub
 
     bool frep = num_points_work_for_core >= 2;
@@ -648,12 +644,12 @@ batchnorm_backward_fp32_no_loop(
     running_mean.f64 = running_mean_scratch->f64;
     // do 1 loop
     do {  // while (i < num_channels_to_process)
-        // Can only manual unroll 3 times since the max for frep is 16
         asm volatile(
             "vfmul.s %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
             : [weight_times_invstd] "+fr"(weight_times_invstd.f64)
             : [invstd] "fr"(invstd.f64)
             : "ft0", "ft1", "ft2");
+
         if (frep) {
             asm volatile(
                 "frep.o %[n_frep], 10, 0, 0 \n"
@@ -670,6 +666,8 @@ batchnorm_backward_fp32_no_loop(
                 // for grad_ifmap: (x - running_mean) * (dy * invstd)
                 "vfmac.s %[grad_weight_0], ft3, ft4\n"
                 "vfmac.s %[grad_weight_1], ft5, ft6\n"
+                // use .f64 instead of .vec because .vec causes everything to be
+                // fld/fsd each asm statement
                 : [grad_weight_0] "+fr"(grad_weight_0.f64),
                   [grad_weight_1] "+fr"(grad_weight_1.f64),
                   [grad_bias_0] "+fr"(grad_bias_0.f64),

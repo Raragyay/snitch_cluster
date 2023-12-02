@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import progressbar
 import argparse
+import traceback
 
 base_config = {
     "input_dim": {
@@ -36,7 +37,15 @@ config_path = base_path.parent / "data" / "params.hjson"
 target_snitch_cluster_path = (
     base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 )
-print(target_snitch_cluster_path)
+grad_ifmap_errors_path = (
+    base_path.parent / "batchnorm_backward_test_errors" / "grad_ifmap.csv"
+)
+grad_weight_errors_path = (
+    base_path.parent / "batchnorm_backward_test_errors" / "grad_weight.csv"
+)
+grad_bias_errors_path = (
+    base_path.parent / "batchnorm_backward_test_errors" / "grad_bias.csv"
+)
 
 columns = [
     "prec",
@@ -47,8 +56,15 @@ columns = [
     "TILE_CI",
     "num_data_points",
     "kernel_cycles",
-    "fpu_occupancy",
+    "fpss_fpu_occupancy",
     "total_ipc",
+    "main_loop_snitch_occupancy",
+    "grad_ifmap_max_abs_err",
+    "grad_ifmap_max_rel_err",
+    "grad_weight_max_abs_err",
+    "grad_weight_max_rel_err",
+    "grad_bias_max_abs_err",
+    "grad_bias_max_rel_err",
 ]
 index = ["prec", "impl", "C", "H", "W"]
 
@@ -153,6 +169,8 @@ config_modifiers = {
         ],
         "MULTICORE_OPT": [
             *small_sizes,
+            format_size(15, 16, 16),
+            format_size(15, 23, 23),
             format_size(16, 8, 8),
             format_size(16, 16, 8),
             format_size(16, 16, 16),
@@ -166,6 +184,7 @@ config_modifiers = {
     },
 }
 
+# config_modifiers = {32: {"SINGLE_CORE_OPT": [format_size(16, 16, 16)]}}
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -174,6 +193,9 @@ def parse_args():
     )
 
     parser.add_argument("--whole-block", action="store_true")
+    parser.add_argument(
+        "--perf-counter-label", action="append", dest="perf_counter_labels"
+    )
 
     return parser.parse_args()
 
@@ -181,12 +203,13 @@ def parse_args():
 def main():
     args = parse_args()
     is_whole_block = args.whole_block
+    perf_counter_labels = args.perf_counter_labels
+    # yes this is mutation of a global variable but this is a script
+    columns.extend(perf_counter_labels)
     scaling_results_df = read_existing_results(is_whole_block)
     data = []
     try:
-        for prec, impl, config in progressbar.progressbar(
-            flatten_config_list(config_modifiers)
-        ):
+        for prec, impl, config in progressbar.progressbar(flatten_config_list(config_modifiers)):
             merged_config = {
                 **base_config,
                 **config,
@@ -203,6 +226,8 @@ def main():
             with open(config_path, "w") as config_file:
                 hjson.dump(merged_config, config_file)
             layout_path = get_layout_path(is_whole_block)
+
+            # Simulate
             p = subprocess.run(
                 f"""make DEBUG=ON sw \
                     && make verify-batchnorm \
@@ -215,6 +240,8 @@ def main():
                 stderr=subprocess.DEVNULL,
             )
             p.check_returncode()
+
+            # Extract cycle count
             # what information do I want to get? overall cycles obviously. Maybe utilization of the main loop?
             with open(
                 target_snitch_cluster_path / "logs" / "trace.csv"
@@ -224,19 +251,50 @@ def main():
             cycles = (trace_df["done"] - trace_df["start_main"]).iloc[0]
 
             # currently section 8 is main loop
-
             with open(
                 target_snitch_cluster_path / "logs" / "perf.csv"
             ) as raw_perf_results:
                 raw_perf_df = pd.read_csv(raw_perf_results)
 
-            main_loop_mcycle_section = 8 if not is_whole_block else 2
+            main_loop_mcycle_section = 2 if is_whole_block else 8
             main_loop_fpu_occupancy = raw_perf_df.loc[
                 0, f"{main_loop_mcycle_section}_fpss_fpu_occupancy"
             ]
             main_loop_total_ipc = raw_perf_df.loc[
                 0, f"{main_loop_mcycle_section}_total_ipc"
             ]
+            main_loop_snitch_occupancy = raw_perf_df.loc[
+                0, f"{main_loop_mcycle_section}_snitch_occupancy"
+            ]
+
+            grad_ifmap_max_abs_err, grad_ifmap_max_rel_err = pd.read_csv(
+                grad_ifmap_errors_path
+            ).max()[2:]
+            grad_weight_max_abs_err, grad_weight_max_rel_err = pd.read_csv(
+                grad_weight_errors_path
+            ).max()[2:]
+            grad_bias_max_abs_err, grad_bias_max_rel_err = pd.read_csv(
+                grad_bias_errors_path
+            ).max()[2:]
+            try:
+                perf_counters_raw = subprocess.check_output(
+                    r"grep -oPh 'unknown_7c4.*#; .* = \K[0-9x]+' logs/trace_hart_00000000.txt",
+                    text=True,
+                    shell=True,
+                    cwd=target_snitch_cluster_path,
+                )
+            except subprocess.CalledProcessError as e:
+                assert e.returncode == 1  # no results
+                perf_counters_raw = e.output
+
+            perf_counters_int = [
+                int(counter_val, 0) for counter_val in perf_counters_raw.strip().split()
+            ][: len(perf_counter_labels)]
+            # pad for counters not present
+            perf_counters_int.extend(
+                [None] * (len(perf_counter_labels) - len(perf_counters_int))
+            )
+
             data.append(
                 (
                     prec,
@@ -249,6 +307,14 @@ def main():
                     cycles,
                     main_loop_fpu_occupancy,
                     main_loop_total_ipc,
+                    main_loop_snitch_occupancy,
+                    grad_ifmap_max_abs_err,
+                    grad_ifmap_max_rel_err,
+                    grad_weight_max_abs_err,
+                    grad_weight_max_rel_err,
+                    grad_bias_max_abs_err,
+                    grad_bias_max_rel_err,
+                    *perf_counters_int,
                 )
             )
             subprocess.run(
@@ -266,7 +332,7 @@ def main():
                 stderr=subprocess.STDOUT,
             ).check_returncode()
     except Exception as e:
-        print(e)
+        traceback.print_exc()
     except KeyboardInterrupt:
         write_results(data, scaling_results_df, args.whole_block)
         exit(130)

@@ -129,6 +129,10 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load, grad_ifmap_write;
 
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
     uint32_t start_dma_load = snrt_mcycle();
     // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
@@ -222,6 +226,8 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 }
 
 // uses DMA, SSR, FREP
@@ -291,6 +297,10 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     snrt_dma_txid_t running_var_load, weight_load, running_mean_load,
         grad_ofmap_load, ifmap_load, grad_ifmap_write;
 
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
     uint32_t start_dma_load = snrt_mcycle();
     // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
@@ -396,6 +406,8 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 }
 
 // No DMA, SSR, or FREP. Still uses TCDM.

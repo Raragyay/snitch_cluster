@@ -48,15 +48,16 @@ def check_correctness(test, golden, actual):
     golden = golden.detach().numpy().flatten()
     actual = actual.detach().numpy().flatten()
     absolute_err = np.absolute(golden - actual)
+    relative_err = absolute_err / np.absolute(golden)
     fail = np.any(absolute_err > ERR_THRESHOLD) or not np.isfinite(actual).all()
     if fail:
         print(f"FAIL: {test} verification failed.")
-        verification.dump_results_to_csv(
-            [golden, actual, absolute_err],
-            errors_filepath / f"{test}.csv",
-        )
     else:
         print(f"{test} verification passed.")
+    verification.dump_results_to_csv(
+        [golden, actual, absolute_err, relative_err],
+        errors_filepath / f"{test}.csv",
+    )
     return int(fail)
 
 

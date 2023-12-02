@@ -266,18 +266,7 @@ static inline void batchnorm_backward_multicore_fp64(
         snrt_cluster_compute_core_num();  // how many compute cores per cluster?
     const uint32_t compute_id =
         snrt_cluster_core_idx();  // which core are we in this cluster
-    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
-                                     SNRT_PERF_CNT_ICACHE_STALL);
-    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
-                                     SNRT_PERF_CNT_TCDM_CONGESTED);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
-    //                                  SNRT_PERF_CNT_ICACHE_HIT);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT2,
-    //                                  SNRT_PERF_CNT_ICACHE_MISS);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT3,
-    //                                  SNRT_PERF_CNT_ICACHE_DOUBLE_HIT);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT4,
-    //                                  SNRT_PERF_CNT_ICACHE_PREFETCH);
+
     // Calculate output dimensions
 
     // thought: this is so much contention
@@ -354,6 +343,10 @@ static inline void batchnorm_backward_multicore_fp64(
         dm_comm->work_div_2_sub_1 = work_div_2_sub_1;  // this is the frep value
     }
 
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
     uint32_t start_dma_load = snrt_mcycle();
     // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
@@ -524,14 +517,6 @@ static inline void batchnorm_backward_multicore_fp32(
         snrt_cluster_compute_core_num();  // how many compute cores per cluster?
     const uint32_t compute_id =
         snrt_cluster_core_idx();  // which core are we in this cluster
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
-    //                                  SNRT_PERF_CNT_ICACHE_HIT);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT2,
-    //                                  SNRT_PERF_CNT_ICACHE_MISS);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT3,
-    //                                  SNRT_PERF_CNT_ICACHE_DOUBLE_HIT);
-    // reset_and_start_perf_single_core(0, SNRT_PERF_CNT4,
-    //                                  SNRT_PERF_CNT_ICACHE_PREFETCH);
     // Calculate output dimensions
 
     // thought: this is so much contention

@@ -1,4 +1,4 @@
-batchnorm_backward_test_errors
+batchnorm_verify_results
 scaling_raw_results
 *.csv
 plots

@@ -38,13 +38,13 @@ target_snitch_cluster_path = (
     base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 )
 grad_ifmap_errors_path = (
-    base_path.parent / "batchnorm_backward_test_errors" / "grad_ifmap.csv"
+    base_path.parent / "batchnorm_verify_results" / "grad_ifmap.csv"
 )
 grad_weight_errors_path = (
-    base_path.parent / "batchnorm_backward_test_errors" / "grad_weight.csv"
+    base_path.parent / "batchnorm_verify_results" / "grad_weight.csv"
 )
 grad_bias_errors_path = (
-    base_path.parent / "batchnorm_backward_test_errors" / "grad_bias.csv"
+    base_path.parent / "batchnorm_verify_results" / "grad_bias.csv"
 )
 
 columns = [

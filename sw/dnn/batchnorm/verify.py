@@ -54,7 +54,7 @@ PRECISION_T = {8: "64", 4: "32", 2: "16", 1: "8"}
 NUMPY_T = {"64": np.float64, "32": np.float32, "16": np.float16}
 
 
-errors_filepath = Path(__file__).resolve().parent / "batchnorm_backward_test_errors"
+errors_filepath = Path(__file__).resolve().parent / "batchnorm_verify_results"
 
 
 def extract_torch_tensor_from_elf(elf, symbol, prec, shape: tuple):

@@ -288,17 +288,14 @@ def emit_header(**kwargs):
             dtype=torch_dtype,
         )
     )
-    weight = torch.nn.Parameter(
-        torch.randn(
-            C,
-            dtype=torch_dtype,
-        )
+    weight = torch.randn(
+        C,
+        dtype=torch_dtype,
     )
-    bias = torch.nn.Parameter(
-        torch.randn(
-            C,
-            dtype=torch_dtype,
-        )
+
+    bias = torch.randn(
+        C,
+        dtype=torch_dtype,
     )
 
     ifmap = torch.randn(

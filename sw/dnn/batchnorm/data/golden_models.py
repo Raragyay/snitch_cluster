@@ -6,8 +6,8 @@ def golden_model_forward_eval(
 ) -> torch.Tensor:
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps, dtype=dtype)
-    bn.weight = weight
-    bn.bias = bias
+    bn.weight = torch.nn.Parameter(weight)
+    bn.bias = torch.nn.Parameter(bias)
     bn.running_mean = running_mean
     bn.running_var = running_var
     bn.eval()
@@ -19,8 +19,8 @@ def golden_model_backward(
 ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
-    bn.weight = weight
-    bn.bias = bias
+    bn.weight = torch.nn.Parameter(weight)
+    bn.bias = torch.nn.Parameter(bias)
     bn.running_mean = running_mean.clone()
     bn.running_var = running_var.clone()
     bn.eval()
@@ -35,8 +35,8 @@ def golden_model_backward_training(
 ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
-    bn.weight = weight
-    bn.bias = bias
+    bn.weight = torch.nn.Parameter(weight)
+    bn.bias = torch.nn.Parameter(bias)
     ofmap = bn(ifmap)
     ofmap.retain_grad()
     ofmap.flatten().dot(grad_ofmap.flatten()).backward()

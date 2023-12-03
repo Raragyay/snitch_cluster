@@ -34,7 +34,7 @@ from data.datagen_constants import (
     struct_decls,
 )
 import functools
-from datetime import datetime
+
 from typing import Optional, Tuple, Iterable, Dict
 
 sys.path.append(str(Path(__file__).parent / "../../../util/sim/"))
@@ -47,7 +47,8 @@ from data_utils import (  # noqa: E402
     floating_point_torch_type,
 )
 
-ERR_THRESHOLD = 1e-3
+# Adapted from https://github.com/numpy/numpy/issues/10161#issuecomment-852783433
+RTOL_FOR_PREC = {"64": 1e-9, "32": 1e-5, "16": 1e-3}
 
 PRECISION_T = {8: "64", 4: "32", 2: "16", 1: "8"}
 
@@ -91,17 +92,20 @@ def extract_torch_tensors_from_elf(
     return extracted_tensors
 
 
-def check_correctness(test, golden, actual):
+def check_correctness(test, golden, actual, prec):
     golden = golden.detach().numpy().flatten()
     actual = actual.detach().numpy().flatten()
+    fail = not np.allclose(
+        actual, golden, rtol=RTOL_FOR_PREC[prec], atol=0, equal_nan=False
+    )
     absolute_err = np.absolute(golden - actual)
-    fail = np.any(absolute_err > ERR_THRESHOLD) or not np.isfinite(actual).all()
+    relative_err = absolute_err / np.absolute(golden)
     if fail:
         print(f"FAIL: {test} verification failed.")
     else:
         print(f"{test} verification passed.")
     verification.dump_results_to_csv(
-        [golden, actual, absolute_err],
+        [golden, actual, absolute_err, relative_err],
         errors_filepath / f"{test}.csv",
     )
     return int(fail)
@@ -150,7 +154,10 @@ def verify_forward_eval(elf):
         "eps": "f",
         "dtype": "I",
     }
-    layer = bytes_to_struct(elf.get_symbol_contents(struct_decls[BatchNormMode.FORWARD_EVAL][1]), layer_struct)
+    layer = bytes_to_struct(
+        elf.get_symbol_contents(struct_decls[BatchNormMode.FORWARD_EVAL][1]),
+        layer_struct,
+    )
 
     C, H, W, eps, dtype = itemgetter("CI", "IH", "IW", "eps", "dtype")(layer)
     prec = PRECISION_T[dtype]
@@ -331,7 +338,7 @@ def main():
 
     return sum(
         check_correctness(
-            simulation_output_defs[i][0], golden_results[i], simulation_results[i]
+            simulation_output_defs[i][0], golden_results[i], simulation_results[i], prec
         )
         for i in range(len(simulation_output_defs))
     )

@@ -119,9 +119,6 @@ def channels_last_to_contiguous_wrapper(model_fn):
             if isinstance(v, torch.Tensor) and v.ndim == 4:
                 # NHWC to NCHW
                 model_kwargs[k] = v.permute(0, 3, 1, 2)
-                if model_kwargs[k].requires_grad:
-                    # maintain the previous retain grad
-                    model_kwargs[k].retain_grad()
             else:
                 model_kwargs[k] = v
 

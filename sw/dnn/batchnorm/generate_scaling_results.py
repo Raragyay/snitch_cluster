@@ -43,9 +43,7 @@ grad_ifmap_errors_path = (
 grad_weight_errors_path = (
     base_path.parent / "batchnorm_verify_results" / "grad_weight.csv"
 )
-grad_bias_errors_path = (
-    base_path.parent / "batchnorm_verify_results" / "grad_bias.csv"
-)
+grad_bias_errors_path = base_path.parent / "batchnorm_verify_results" / "grad_bias.csv"
 
 columns = [
     "prec",
@@ -269,13 +267,13 @@ def main():
 
             grad_ifmap_max_abs_err, grad_ifmap_max_rel_err = pd.read_csv(
                 grad_ifmap_errors_path
-            ).max()[2:]
+            ).max()[2:4]
             grad_weight_max_abs_err, grad_weight_max_rel_err = pd.read_csv(
                 grad_weight_errors_path
-            ).max()[2:]
+            ).max()[2:4]
             grad_bias_max_abs_err, grad_bias_max_rel_err = pd.read_csv(
                 grad_bias_errors_path
-            ).max()[2:]
+            ).max()[2:4]
             try:
                 perf_counters_raw = subprocess.check_output(
                     r"grep -oPh 'unknown_7c4.*#; .* = \K[0-9x]+' logs/trace_hart_00000000.txt",

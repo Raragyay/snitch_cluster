@@ -148,7 +148,7 @@ def get_forward_eval_tensors(
         gamma = weight / torch.sqrt(running_var + eps)
         beta = bias - running_mean * gamma
         ofmap = golden_model_forward_eval(
-            ifmap, eps, running_mean, running_var, weight, bias, torch_dtype
+            ifmap, eps, running_mean, running_var, weight, bias, dtype=torch_dtype
         )
 
         layer_cfg = {
@@ -188,7 +188,7 @@ def get_backward_eval_tensors(
     # we just need the shape, so just use ifmap instead of recomputing ofmap
     grad_ofmap = torch.randn_like(ifmap, dtype=torch_dtype, requires_grad=False)
     grad_ifmap, grad_weight, grad_bias = golden_model_backward(
-        ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, torch_dtype
+        ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype=torch_dtype
     )
 
     layer_cfg = {
@@ -230,7 +230,7 @@ def get_backward_training_tensors(
         grad_weight_training,
         grad_bias_training,
     ) = golden_model_backward_training(
-        ifmap, grad_ofmap, weight, bias, eps, torch_dtype
+        ifmap, grad_ofmap, weight, bias, eps, dtype=torch_dtype
     )
 
     layer_cfg = {
@@ -359,7 +359,7 @@ def emit_header(**kwargs):
     )
     data_str.append(format_scalar_definition("int", "is_forward", int(is_forward)))
     data_str.append(format_scalar_definition("int", "is_training", int(is_training)))
-    
+
     data_str.extend(get_declarations(**base_tensors, **mode_specific_inputs))
 
     # .data section is not zero'ed on runtime startup, which avoids an initial DMA overhead

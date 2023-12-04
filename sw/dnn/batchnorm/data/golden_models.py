@@ -1,8 +1,45 @@
+from functools import wraps
 import torch
 
 
+# Since Batchnorm requires at least single precision floats,
+#   to test float16 and lower we upcast into the golden model and downcast when returning the results
+def upcast_half_or_quarter_precision_to_float32(model_fn):
+    @wraps(model_fn)
+    def wrapper_fn(*args, dtype, **kwargs):
+        if dtype.itemsize < torch.float32.itemsize:
+            print("upcasting precision to float32")
+            upcasted_args = []
+            for arg in args:
+                if isinstance(arg, torch.Tensor):
+                    upcasted_args.append(arg.to(torch.float32))
+                else:
+                    upcasted_args.append(arg)
+            upcasted_kwargs = {}
+            for k, v in kwargs.items():
+                if isinstance(v, torch.Tensor):
+                    upcasted_kwargs[k] = v.to(torch.float32)
+                else:
+                    upcasted_kwargs[k] = v
+            upcasted_output = model_fn(dtype=dtype, *upcasted_args, **upcasted_kwargs)
+            if isinstance(upcasted_output, tuple):
+                downcasted_output = []
+                for output in upcasted_output:
+                    if isinstance(output, torch.Tensor):
+                        downcasted_output.append(output.to(dtype))
+                    else:
+                        downcasted_output.append(output)
+                return tuple(downcasted_output)
+            else:
+                return upcasted_output.to(dtype)
+        else:
+            return model_fn(dtype=dtype, *args, **kwargs)
+
+    return wrapper_fn
+
+
 def golden_model_forward_eval(
-    ifmap, eps, running_mean, running_var, weight, bias, dtype
+    ifmap, eps, running_mean, running_var, weight, bias, *, dtype
 ) -> torch.Tensor:
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps, dtype=dtype)
@@ -14,8 +51,9 @@ def golden_model_forward_eval(
     return bn(ifmap)
 
 
+@upcast_half_or_quarter_precision_to_float32
 def golden_model_backward(
-    ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype
+    ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, *, dtype
 ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
@@ -26,12 +64,14 @@ def golden_model_backward(
     bn.eval()
     ofmap = bn(ifmap)
     ofmap.retain_grad()
+    ifmap.retain_grad()
+    bn.weight.retain_grad()
     ofmap.flatten().dot(grad_ofmap.flatten()).backward()
     return ifmap.grad, bn.weight.grad, bn.bias.grad
 
 
 def golden_model_backward_training(
-    ifmap, grad_ofmap, weight, bias, eps, dtype
+    ifmap, grad_ofmap, weight, bias, eps, *, dtype
 ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     bn = torch.nn.BatchNorm2d(ci, eps=eps, dtype=dtype)
@@ -39,13 +79,15 @@ def golden_model_backward_training(
     bn.bias = torch.nn.Parameter(bias)
     ofmap = bn(ifmap)
     ofmap.retain_grad()
+    ifmap.retain_grad()
+    bn.weight.retain_grad()
     ofmap.flatten().dot(grad_ofmap.flatten()).backward()
     return ifmap.grad, bn.weight.grad, bn.bias.grad
 
 
 # Implementation of backprop for batchnorm training mode without autograd
 def my_golden_model_backward_training(
-    ifmap, grad_ofmap, weight, bias, current_mean, current_var, eps, dtype
+    ifmap, grad_ofmap, weight, bias, current_mean, current_var, eps, *, dtype
 ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
     n, ci, ih, iw = ifmap.shape
     num_points = n * ih * iw

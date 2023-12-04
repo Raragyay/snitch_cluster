@@ -33,10 +33,9 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 int main() {
 
   compute_output_shape(&attr1, attr1.output_shape);
-  maxpool_f64_1d_with_index(&attr1,
+  maxpool_f64_1d_no_index(&attr1,
                 ifmap1,
-                output_loc1,
-                idx_loc1);
+                output_loc1);
 
   // compute_output_shape(&attr2, attr2.output_shape);
   // maxpool_f64_2d_no_index(&attr2,

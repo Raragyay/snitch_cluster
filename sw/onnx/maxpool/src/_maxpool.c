@@ -18,36 +18,27 @@
 
 #define DMA_ATTRIBS 1
 #define DMA_INDICES 1
-#define USE_SSR_FREP_1D 1
+#define USE_SSR_FREP_1D 0
 #define USE_SSR_FREP_2D 1
 #define USE_SSR_FREP_3D 1
 #define USE_SSR_FREP_ALL 0
 #define USE_TILING 1
 
-#define BASE_USABLE_CACHE (8192*4)
+#define BASE_USABLE_CACHE (8192*2)
 
 // number of usable bytes in l1
 #define USABLE_CACHE BASE_USABLE_CACHE
 
+// for 8 byte alignment
+#define ATTRIBS_SIZE ((sizeof(maxpool_attributes) + 4) - ((sizeof(maxpool_attributes) + 4) % 8))
+
 #ifdef DMA_ATTRIBS
   #undef USABLE_CACHE
-  #define USABLE_CACHE (BASE_USABLE_CACHE - sizeof(maxpool_attributes))
+  #define USABLE_CACHE (BASE_USABLE_CACHE - ATTRIBS_SIZE)
 #endif
 
 // number of usable bytes per half
 #define HALF_CACHE ((USABLE_CACHE / 2) - 16)
-
-// for 8 byte alignment
-#define ATTRIBS_SIZE (sizeof(maxpool_attributes) + (sizeof(maxpool_attributes) % 8))
-
-// #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
-//   // bytes reserved for storing in/out values
-//   #define USABLE_VALUE_CACHE USABLE_CACHE * 4 / 5
-//   // bytes reserved for storing out indices
-//   #define USABLE_INDEX_CACHE USABLE_CACHE - USABLE_VALUE_CACHE
-// #else
-//   #define USABLE_VALUE_CACHE USABLE_CACHE
-// #endif
 
 static inline int ceil_div(int, int);
 
@@ -58,7 +49,7 @@ int ceil_div(int a, int b) {
 static inline int align(int);
 
 int align(int a) {
-  return a + (a % 8);
+  return (a + 4) - ((a + 4) % 8);
 }
 
 static inline void ssr_asm_with_index(int*, int);
@@ -134,9 +125,9 @@ void ssr_asm_no_index(int n_iter_minus_two) {
 
 #endif
 
-static inline void MAXPOOL_FN_1D(maxpool_attributes*, double*, double*, int*, int, int, int, int);
-static inline void MAXPOOL_FN_2D(maxpool_attributes*, double*, double*, int*, int, int, int, int);
-static inline void MAXPOOL_FN_3D(maxpool_attributes*, double*, double*, int*, int, int, int, int);
+static inline void MAXPOOL_FN_1D(maxpool_attributes*, double*, double*, int*, int, int, int);
+static inline void MAXPOOL_FN_2D(maxpool_attributes*, double*, double*, int*, int, int, int);
+static inline void MAXPOOL_FN_3D(maxpool_attributes*, double*, double*, int*, int, int, int);
 
 static inline void MAXPOOL_FN_UNTILED(maxpool_attributes*, double*, double*, int*, int, int, int, int, char*);
 
@@ -179,7 +170,7 @@ void MAXPOOL_FN_UNTILED(maxpool_attributes* attribs,
   if (snrt_is_compute_core()) {
     snrt_cluster_hw_barrier(); // 1
 
-    char* inputs_start = ptr + ATTRIBS_SIZE;
+    char* inputs_start = ptr;
     char* outputs_start = inputs_start + sizeof(double) * total_ins;
     outputs_start += ((size_t) outputs_start) % 8; // cursed again
 
@@ -190,13 +181,13 @@ void MAXPOOL_FN_UNTILED(maxpool_attributes* attribs,
     #endif
 
     #if MAXPOOL_DIM == 1
-    MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, compute_id, total_outs);
+    MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #elif MAXPOOL_DIM == 2
     snrt_mcycle();
-    MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, compute_id, total_outs);
+    MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     snrt_mcycle();
     #elif MAXPOOL_DIM == 3
-    MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, compute_id, total_outs);
+    MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #endif
 
     snrt_fpu_fence();
@@ -221,8 +212,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     if (snrt_is_dm_core()) {
       // load the attribs into l1
       snrt_dma_start_1d(ptr, attribs_raw, sizeof(maxpool_attributes));
-
-      ptr += ATTRIBS_SIZE;
       
       snrt_dma_wait_all();
       snrt_cluster_hw_barrier();
@@ -232,21 +221,41 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     maxpool_attributes* attribs = attribs_raw;
   #endif
 
+  ptr += ATTRIBS_SIZE;
+
   #if MAXPOOL_DIM == 1
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
     int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
     // if (compute_id == 1) printf("%d * %d * %d = %d\n", attribs->output_shape[0], attribs->output_shape[1], attribs->output_shape[2], total_outs);
+    int elems_per_matrix = attribs->input_shape[2];
+    int outs_per_matrix = attribs->output_shape[2];
   #elif MAXPOOL_DIM == 2
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3];
     int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3];
+    int elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3];
+    int outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3];
   #elif MAXPOOL_DIM == 3
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
     int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
+    int elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3] * attribs->output_shape[4];
+    int outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
   #endif
 
   #if !USE_TILING
   MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
   #else
+
+  #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
+  int bytes_per_batch = elems_per_matrix * sizeof(double) + total_outs * (sizeof(double) + sizeof(int));
+  #else
+  int bytes_per_batch = elems_per_matrix * sizeof(double) + total_outs * sizeof(double);
+  #endif
+  
+  int total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+  if (bytes_per_batch * total_channels <= USABLE_CACHE) {
+    MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
+    return;
+  }
 
   char* first_ptr = ptr;
   char* second_ptr = ptr + align(USABLE_CACHE / 2);
@@ -254,205 +263,170 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   int use_second = 0;
 
   #if MAXPOOL_DIM == 1
-    // number of elements traversed heightwise per kernel
-    int elems_h = attribs->input_shape[2] * attribs->dilations[0]/* - attribs->pads[0]*/;
-    // amount we need to reserve per kernel including output
-    #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-    int size_per_kernel = elems_h * sizeof(double) + sizeof(double) + sizeof(int);
-    #else
-    int size_per_kernel = elems_h * sizeof(double) + sizeof(double);
-    #endif
-    // printf("size per kernel %d\n", size_per_kernel);
-    if (size_per_kernel > HALF_CACHE) {
-      // error: cache must handle at least one kernel
-      printf("Error: Cache must handle at least one kernel.\n");
-      return;
+
+    int batches_per_cache = HALF_CACHE / bytes_per_batch;
+    if (batches_per_cache == 0) {
+      printf("Error: Cache must handle at least one matrix.\n");
     }
+    int elems_per_cache = batches_per_cache * elems_per_matrix;
+    int outs_per_cache = batches_per_cache * outs_per_matrix;
 
-    // number of full kernels we can transmit at a time
-    int kernels_per_batch = 1 + (HALF_CACHE - size_per_kernel) / (attribs->strides[0] * sizeof(double));
-    // if (compute_id == 1) printf("half cache %d, size per kernel %d, strides %d\n", HALF_CACHE, size_per_kernel, attribs->strides[0]);
-    // should be exactly accurate regardless of padding if the input follows torch requirements
-    // of padding being strictly less than half the kernel size
-    int num_batches = ceil_div(total_outs, kernels_per_batch);
-    if (num_batches < 2) {
-      MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
-      return;
-    }
+    int num_caches = ceil_div(total_channels, batches_per_cache);
 
-    // if (compute_id == 1) printf("batches: ceil %d / %d = %d\n", total_outs, kernels_per_batch, num_batches);
-    // else {
-    //   while (1);
-    // }
-    // the number of kernels this core should compute per batch
-    // int kernels_this_core = kernels_per_batch / compute_num;
-    // if (compute_id < kernels_per_batch % compute_num) ++kernels_this_core;
-
-    // int size_per_tile = size_per_kernel * kernels_per_batch;
-
-    // also the number of values transmitted per batch
-    int output_offset = elems_h + ((kernels_per_batch - 1) * attribs->strides[0]);
-    // printf("out offset: %d\n", output_offset);
-    #if DMA_INDICES
-    int* idx_out = ((int*) first_ptr) + output_offset + kernels_per_batch;
-    #else
-    int* idx_out = idx;
-    #endif
-
-    // unroll the first iteration to account for padding
-    int starting_idx = output_offset - attribs->pads[0];
-    // printf("start idx: %d\n", starting_idx);
     if (snrt_is_dm_core()) {
-      snrt_dma_start_1d(first_ptr, in, sizeof(double) * starting_idx);
-      // use_second = 1;
+      snrt_dma_start_1d(first_ptr, in, elems_per_cache * sizeof(double));
+    }
+
+    char* this_ptr;
+    char* other_ptr;
+    char* idx_ptr;
+    int i;
+    for (i = 1; i < num_caches - 1; ++i) {
+      use_second = !use_second;
+      this_ptr = use_second ? second_ptr : first_ptr;
+      other_ptr = use_second ? first_ptr : second_ptr;
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+        #if DMA_INDICES
+        idx_ptr = other_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+        #else
+        idx_ptr = idx + outs_per_cache * (i - 1);
+        #endif
+      #endif
+
+      if (snrt_is_dm_core()) {
+
+        // load input data into this_ptr
+        snrt_dma_start_1d(this_ptr, ((double*) in) + elems_per_cache * i, elems_per_cache * sizeof(double));
+
+        snrt_dma_wait_all();
+
+        snrt_cluster_hw_barrier(); // 1: wait for computation to finish in other_ptr
+
+        // write output from other_ptr
+        snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
+          ((double*) other_ptr) + elems_per_cache,
+          outs_per_cache * sizeof(double));
+
+        #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
+        snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
+          idx_ptr,
+          outs_per_cache * sizeof(int));
+        #endif
+
+      }
+      if (snrt_is_compute_core()) {
+
+        // do computation on data in other_ptr
+        MAXPOOL_FN_1D(attribs,
+          (double*) other_ptr,
+          ((double*) other_ptr) + elems_per_cache,
+          (int*) idx_ptr,
+          compute_id,
+          compute_num,
+          outs_per_cache);
+
+        snrt_cluster_hw_barrier(); // 1
+
+      }
+    }
+
+    // unroll the last iter since it might not be a full batch
+    // we are guaranteed at least 2 batches since 1 batch inputs fallback to the untiled version
+    use_second = !use_second;
+    this_ptr = use_second ? second_ptr : first_ptr;
+    other_ptr = use_second ? first_ptr : second_ptr;
+    #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+      #if DMA_INDICES
+      idx_ptr = other_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+      #else
+      idx_ptr = idx + outs_per_cache * (i - 1);
+      #endif
+    #endif
+
+    int batches_left = (total_channels - (batches_per_cache * (num_caches - 1)));
+    int ins_left = batches_left * elems_per_matrix;
+    int outs_left = batches_left * outs_per_matrix;
+    if (snrt_is_dm_core()) {
+
+      // load input data into this_ptr
+      snrt_dma_start_1d(this_ptr,
+        ((double*) in) + elems_per_cache * i,
+        ins_left * sizeof(double));
+
       snrt_dma_wait_all();
-      snrt_cluster_hw_barrier(); // 1: input loaded, start computation
-      // snrt_cluster_hw_barrier(); // 2: computation finished, write output
+
+      snrt_cluster_hw_barrier(); // 1: wait for computation to finish in other_ptr
+
+      // write output from other_ptr
+      snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
+        ((double*) other_ptr) + elems_per_cache,
+        outs_per_cache * sizeof(double));
+
+      #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
+      snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
+        idx_ptr,
+        outs_per_cache * sizeof(int));
+      #endif
+
+      snrt_cluster_hw_barrier(); // 2: wait for computation to finish in this_ptr
+
+      snrt_dma_start_1d(((double*) out) + outs_per_cache * i,
+        ((double*) this_ptr) + elems_per_cache,
+        outs_left * sizeof(double));
+      
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+        #if DMA_INDICES
+        idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+        #else
+        idx_ptr = idx + outs_per_cache * i;
+        #endif
+      #endif
+
+      #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
+      snrt_dma_start_1d(((int*) idx) + outs_per_cache * i,
+        idx_ptr,
+        outs_left * sizeof(int));
+      #endif
+
+      snrt_cluster_hw_barrier(); // 3: all done
+
     }
     if (snrt_is_compute_core()) {
 
-      snrt_cluster_hw_barrier(); // 1: input loaded, start computation
-      printf("core id %d, kernels per batch %d\n", compute_id, kernels_per_batch);
-      // assume use_second = 0 for first iter
-      #if MAXPOOL_DIM == 1
-      MAXPOOL_FN_1D(attribs, (double*) first_ptr, ((double*) first_ptr) + output_offset, idx_out, compute_id, compute_num, compute_id, kernels_per_batch);
-      #elif MAXPOOL_DIM == 2
-      snrt_mcycle();
-      MAXPOOL_FN_2D(attribs, (double*) first_ptr, ((double*) first_ptr) + output_offset, idx_out, compute_id, compute_num, compute_id, kernels_per_batch);
-      snrt_mcycle();
-      #elif MAXPOOL_DIM == 3
-      MAXPOOL_FN_3D(attribs, (double*) first_ptr, ((double*) first_ptr) + output_offset, idx_out, compute_id, compute_num, compute_id, kernels_per_batch);
+      // do computation on data in other_ptr
+      MAXPOOL_FN_1D(attribs,
+        (double*) other_ptr,
+        ((double*) other_ptr) + elems_per_cache,
+        (int*) idx_ptr,
+        compute_id,
+        compute_num,
+        outs_per_cache);
+
+      snrt_cluster_hw_barrier(); // 1
+
+      // do remaining computation in this_ptr
+
+      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+        #if DMA_INDICES
+        idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+        #else
+        idx_ptr = idx + outs_per_cache * i;
+        #endif
       #endif
 
-      snrt_cluster_hw_barrier(); // 2: computation finished
-    }
+      MAXPOOL_FN_1D(attribs,
+        (double*) this_ptr,
+        ((double*) this_ptr) + elems_per_cache,
+        (int*) idx_ptr,
+        compute_id,
+        compute_num,
+        outs_left);
 
-    // unroll the last iter as well
-    int i;
-    for (i = 1; i < num_batches - 1; ++i) {
-      use_second = !use_second;
-      char* the_ptr = use_second ? second_ptr : first_ptr;
+      snrt_fpu_fence();
+      snrt_cluster_hw_barrier(); // 2
 
-      if (snrt_is_dm_core()) {
-        printf("begin iter %d\n", i);
+      snrt_cluster_hw_barrier(); // 3: all done
 
-        snrt_dma_start_1d(the_ptr, in + starting_idx + output_offset * (i - 1), sizeof(double) * output_offset);
-
-        snrt_dma_wait_all();
-
-        snrt_cluster_hw_barrier(); // 2: computation finished in other_ptr
-
-        // write results of other half to main mem
-        char* other_ptr = use_second ? first_ptr : second_ptr;
-        snrt_dma_start_1d(out + kernels_per_batch * (i - 1), ((double*) other_ptr) + output_offset, sizeof(double) * kernels_per_batch);
-
-        #if DMA_INDICES
-        snrt_dma_start_1d(idx + kernels_per_batch * (i - 1), ((double*) other_ptr) + output_offset + kernels_per_batch, sizeof(int) * kernels_per_batch);
-        #endif
-        // printf("dma %d\n", i);
-      }
-      if (snrt_is_compute_core()) {
-
-        #if DMA_INDICES
-        idx_out += kernels_per_batch;
-        #else
-        idx_out = ((int*) the_ptr) + output_offset + kernels_per_batch;
-        #endif
-
-        #if MAXPOOL_DIM == 1
-        MAXPOOL_FN_1D(attribs, (double*) the_ptr, ((double*) the_ptr) + output_offset, idx_out, compute_id, compute_num, kernels_per_batch * i + compute_id, kernels_per_batch * (i + 1));
-        #elif MAXPOOL_DIM == 2
-        snrt_mcycle();
-        MAXPOOL_FN_2D(attribs, (double*) the_ptr, ((double*) the_ptr) + output_offset, idx_out, compute_id, compute_num, kernels_per_batch * i + compute_id, kernels_per_batch * (i + 1));
-        snrt_mcycle();
-        #elif MAXPOOL_DIM == 3
-        MAXPOOL_FN_3D(attribs, (double*) the_ptr, ((double*) the_ptr) + output_offset, idx_out, compute_id, compute_num, kernels_per_batch * i + compute_id, kernels_per_batch * (i + 1));
-        #endif
-
-        snrt_cluster_hw_barrier(); // 2: computation finished in the_ptr
-
-        // if (compute_id == 1) printf("cpu %d\n", i);
-      }
-    }
-
-    if (num_batches > 1) {
-
-      // if (compute_id == 1) printf("end of loop\n");
-
-      // unroll the last iteration to account for uneven-ness
-      use_second = !use_second;
-      char* the_ptr = use_second ? second_ptr : first_ptr;
-      if (snrt_is_dm_core()) {
-
-        // printf("total ins: %d, starting_idx: %d, output_offset %d, i %d\n", total_ins, starting_idx, output_offset, i);
-
-        // int total_samples = output_offset * num_batches;
-        // printf("dma end of loop, nb: %d\n", sizeof(double) * (total_samples - (starting_idx + output_offset * (i - 1))));
-        
-        // write last chunk of input data
-        // snrt_dma_start_1d(the_ptr, in + starting_idx + output_offset * (i - 1), sizeof(double) * (total_outs - (kernels_per_batch * i)));
-
-        snrt_dma_wait_all();
-        // printf("dma aaa\n");
-        snrt_cluster_hw_barrier(); // 2: computation finished in other_ptr
-        // printf("dma bbb\n");
-
-        // write results of other half to main mem
-        char* other_ptr = use_second ? first_ptr : second_ptr;
-        snrt_dma_start_1d(out + kernels_per_batch * (i - 1), ((double*) other_ptr) + output_offset, sizeof(double) * kernels_per_batch);
-
-        // #if DMA_INDICES
-        // snrt_dma_start_1d(idx + kernels_per_batch * (i - 1), ((double*) other_ptr) + output_offset + kernels_per_batch, sizeof(int) * kernels_per_batch);
-        // #endif
-
-        snrt_cluster_hw_barrier(); // 3: all computation finished
-        // // write last chunk of output data
-        // snrt_dma_start_1d(out + kernels_per_batch * i, ((double*) the_ptr) + output_offset, sizeof(double) * (total_outs - (kernels_per_batch * i)));
-
-        // #if DMA_INDICES
-        // snrt_dma_start_1d(idx + kernels_per_batch * i, ((double*) the_ptr) + output_offset + kernels_per_batch, sizeof(double) * (total_outs - (kernels_per_batch * i)));
-        // #endif
-
-        // snrt_dma_wait_all();
-        snrt_cluster_hw_barrier(); // 4: all done
-
-      }
-      if (snrt_is_compute_core()) {
-
-        #if DMA_INDICES
-        idx_out += kernels_per_batch;
-        #else
-        idx_out = ((double*) the_ptr) + output_offset + kernels_per_batch;
-        #endif
-
-        // #if MAXPOOL_DIM == 1
-        // MAXPOOL_FN_1D(attribs, (double*) the_ptr, ((double*) the_ptr) + output_offset, idx_out, compute_id, compute_num, kernels_per_batch * i + compute_id, total_outs);
-        // #elif MAXPOOL_DIM == 2
-        // snrt_mcycle();
-        // MAXPOOL_FN_2D(attribs, (double*) the_ptr, ((double*) the_ptr) + output_offset, idx_out, compute_id, compute_num, kernels_per_batch * i + compute_id, total_outs);
-        // snrt_mcycle();
-        // #elif MAXPOOL_DIM == 3
-        // MAXPOOL_FN_3D(attribs, (double*) the_ptr, ((double*) the_ptr) + output_offset, idx_out, compute_id, compute_num, kernels_per_batch * i + compute_id, total_outs);
-        // #endif
-
-        snrt_fpu_fence();
-        snrt_cluster_hw_barrier(); // 3: all computation finished, waiting on last dma
-        snrt_cluster_hw_barrier(); // 4: all done
-
-      }
-
-    }
-    else {
-      // if (snrt_is_dm_core()) {
-      //   snrt_cluster_hw_barrier(); // 3: all computation done
-
-
-
-      //   snrt_cluster_hw_barrier(); // 4: all done
-      // }
-      // if (snrt_is_compute_core()) {
-      //   snrt_cluster_hw_barrier(); // 4: all done
-      // }
     }
 
   #elif MAXPOOL_DIM == 2
@@ -469,9 +443,8 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
                    double* in,
                    double* out,
                    int* idx,
-                   int core_idx,
-                   int n_cores,
                    int start_step,
+                   int n_cores,
                    int end_step) {
 
   // if (attr->n_dim != 1) return; // error
@@ -513,7 +486,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
       #endif
       continue;
     }
-    //printf("iter: %d %d %d\n", n_iter, hstart, hend);
+    // printf("iter: %d %d %d\n", n_iter, hstart, hend);
     snrt_ssr_loop_1d(SNRT_SSR_DM0, n_iter, sizeof(double) * attr->dilations[0]);
     snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
 
@@ -538,6 +511,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     for (int h = hstart; h < hend; h += attr->dilations[0]) {
       // if (h < 0) continue;
       // if (h >= height) break;
+      // if (start_step == 0) printf("val: %lf, idx: %d\n", in[x_d + h], x_d + h);
       if (!Yh_init || in[x_d + h] > Yh) {
         Yh = in[x_d + h];
         Yh_init = 1;
@@ -548,6 +522,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     }
 
     out[y_d + ph] = Yh;
+    // if (start_step == 7) printf("res: %lf, idx: %d\n", Yh, y_d + ph);
     #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
     idx[y_d + ph] = h_index;
     #endif
@@ -562,9 +537,8 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
                    double* in,
                    double* out,
                    int* idx,
-                   int core_idx,
-                   int n_cores,
                    int start_step,
+                   int n_cores,
                    int end_step) {
 
   // if (attr->n_dim != 2) return; // error
@@ -701,9 +675,8 @@ void MAXPOOL_FN_3D(maxpool_attributes* attr,
                    double* in,
                    double* out,
                    int* idx,
-                   int core_idx,
-                   int n_cores,
                    int start_step,
+                   int n_cores,
                    int end_step) {
 
   // if (attr->n_dim != 3) return; // error

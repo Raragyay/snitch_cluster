@@ -55,8 +55,8 @@ def main():
     stalls_grad_A = np.array(bytes_to_int(raw_results['stalls_grad_A'], prec='32', signedness='unsigned'))
     stalls_grad_B = np.array(bytes_to_int(raw_results['stalls_grad_B'], prec='32', signedness='unsigned'))
 
-    print("A\n",np.transpose(A))    
-    print("GRAD_C:\n", GRAD_C)
+    #print("A\n",np.transpose(A))    
+    #print("GRAD_C:\n", GRAD_C)
     #print("B:\n",np.transpose(B))
 
     # Verify results
@@ -65,6 +65,7 @@ def main():
 
     
 
+    #absolute_err = np.absolute(  actuals - goldens )
     absolute_err = np.absolute(  actuals - goldens )
     fail = np.any(absolute_err > ERR_THRESHOLD)
     if (fail):
@@ -73,8 +74,8 @@ def main():
                                          Path.cwd() / 'gradient_results.csv')
     else:
         print("SUCCESS\n")
-        verification.dump_results_to_csv([actuals, goldens, absolute_err],
-                                         Path.cwd() / 'gradient_results.csv')
+        # verification.dump_results_to_csv([actuals, goldens, absolute_err],
+        #                                  Path.cwd() / 'gradient_results.csv')
     return int(fail)
 
 

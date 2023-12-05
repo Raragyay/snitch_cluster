@@ -22,7 +22,7 @@ int main(int argc, char *argv[]) {
         #ifdef BASELINE 
             backpropagation_baseline_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K);
         #else
-            backpropagation_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,1,1,1,0,1);
+            backpropagation_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,1,1,1,1,1);
         #endif
     #endif
 }   

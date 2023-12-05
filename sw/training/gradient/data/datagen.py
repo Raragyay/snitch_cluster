@@ -18,23 +18,22 @@ import torch.optim as optim
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../util/sim/"))
 from data_utils import emit_license, format_scalar_definition, \
-                       format_array_definition, format_ifdef_wrapper  # noqa: E402
-
+    format_array_definition, format_ifdef_wrapper  # noqa: E402
 
 np.random.seed(42)
 
 C_TYPES = {
-  '64': 'double',
-  '32': 'float',
-  '16': '__fp16',
-  '8': 'char'
+    '64': 'double',
+    '32': 'float',
+    '16': '__fp16',
+    '8': 'char'
 }
 
 NUMPY_TYPES = {
-  '64': np.double,
-  '32': np.single,
-  '16': np.half,
-  '8': np.ubyte
+    '64': np.double,
+    '32': np.single,
+    '16': np.half,
+    '8': np.ubyte
 }
 
 FP8_FORMATS = {
@@ -46,80 +45,67 @@ FP8_FORMATS = {
 # the occurrence of these splits the data should be aligned to 4KB
 BURST_ALIGNMENT = 4096
 
-class NeuralNetwork(nn.Module):
-    def __init__(self, input_size, output_size):
-        super().__init__()
-        self.layer = nn.Linear(input_size, output_size)
 
-    def forward(self, x):
-        y = self.layer(x)
-        return y
-
-def golden_model(I, W, B, E, e, K, N):
-
-
-    model = NeuralNetwork(K, N)
-    with torch.no_grad():
-        for i in range(N):
-            model.layer.weight[i] = torch.from_numpy(np.transpose(W))[i]
-        for i in range(N):
-            model.layer.bias[i] = torch.from_numpy(np.transpose(B))[i]
-
-    real = model.forward(torch.from_numpy(I).type(torch.FloatTensor))
-
-    model.zero_grad()
-    optimizer = optim.SGD(model.parameters(), lr=e)
-    real.backward(gradient=(torch.from_numpy(E).type(torch.FloatTensor)))
-
-    with torch.no_grad():
-        optimizer.step()
-    return model.layer.weight, model.layer.bias
+def golden_model(alpha,A,B,GRAD_C):
+    return alpha*np.matmul( GRAD_C,np.transpose(B)), alpha*np.matmul(np.transpose(A), GRAD_C)
 
 
 def emit_header(**kwargs):
-
     # Generate random input matrices
     dtype = NUMPY_TYPES[str(kwargs['prec'])]
 
-    I = np.random.rand(kwargs['M'], kwargs['K']).astype(dtype)
-    W = np.random.rand(kwargs['K'], kwargs['N']).astype(dtype)
-    B = np.random.rand(kwargs['M'], kwargs['N']).astype(dtype)
-    E = np.random.rand(kwargs['M'], kwargs['N']).astype(dtype)
+    alpha = np.random.rand((1)).astype(dtype) [0]
+    A = np.random.rand(kwargs['M'], kwargs['K']).astype(dtype)
+    B = np.random.rand(kwargs['K'], kwargs['N']).astype(dtype)
+    GRAD_C = np.random.rand(kwargs['M'], kwargs['N']).astype(dtype)
+    OLD_GRAD_A = np.random.rand(kwargs['M'], kwargs['K']).astype(dtype)
+    OLD_GRAD_B = np.random.rand(kwargs['K'], kwargs['N']).astype(dtype)
 
-    result_weight,result_bias = golden_model(I,W,B,E,kwargs['e'],kwargs['K'],kwargs['N'])
-
+    GRAD_A, GRAD_B = golden_model(alpha,A,B,GRAD_C)
 
     data_str = [emit_license()]
     data_str += [format_scalar_definition('uint32_t', 'M', kwargs['M'])]
     data_str += [format_scalar_definition('uint32_t', 'N', kwargs['N'])]
     data_str += [format_scalar_definition('uint32_t', 'K', kwargs['K'])]
-    data_str += [format_scalar_definition('uint32_t', 'dtype_size', kwargs['prec']//8)]
-    data_str += [format_scalar_definition('double', 'e', kwargs['e'])]
+    data_str += [format_scalar_definition('uint32_t', 'dtype_size', kwargs['prec'] // 8)]
 
-    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'I', I.flatten(),
-                 alignment=BURST_ALIGNMENT, section=kwargs['section'])]
-    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'W', W.flatten(),
-                 alignment=BURST_ALIGNMENT, section=kwargs['section'])]
+    data_str += [format_scalar_definition(C_TYPES[str(kwargs['prec'])], 'alpha', alpha)]
+
+
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'A', A.flatten(),
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
     data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'B', B.flatten(),
-                 alignment=BURST_ALIGNMENT, section=kwargs['section'])]
-    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'E', E.flatten(),
-                alignment=BURST_ALIGNMENT, section=kwargs['section'])]
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
 
-    result_weight = format_array_definition(C_TYPES[str(kwargs['prec'])],
-                                            'result_weight',
-                                            np.ravel(torch.transpose(result_weight, 1, 0).detach().numpy()))
-    result_bias = format_array_definition(C_TYPES[str(kwargs['prec'])],
-                                        'result_bias',
-                                        np.ravel(result_bias.detach().numpy()))
-    data_str += [format_ifdef_wrapper('BIST', result_weight)]
-    data_str += [format_ifdef_wrapper('BIST', result_bias)]
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'GRAD_A', OLD_GRAD_A.flatten(),
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
+
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'GRAD_B', OLD_GRAD_B.flatten(),
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
+    
+    data_str += [format_array_definition(C_TYPES[str(kwargs['prec'])], 'GRAD_C', GRAD_C.flatten(),
+                                         alignment=BURST_ALIGNMENT, section=kwargs['section'])]
+
+
+    GRAD_A = format_array_definition(C_TYPES[str(kwargs['prec'])],
+                                          'RES_GRAD_A',
+                                          GRAD_A.flatten())
+    
+
+    GRAD_B = format_array_definition(C_TYPES[str(kwargs['prec'])],
+                                          'RES_GRAD_B',
+                                          GRAD_B.flatten())
+
+    data_str += [format_ifdef_wrapper('BIST', GRAD_A)]
+
+    data_str += [format_ifdef_wrapper('BIST', GRAD_B)]
+
     data_str = '\n\n'.join(data_str)
 
     return data_str
 
 
 def main():
-
     parser = argparse.ArgumentParser(description='Generate data for kernels')
     parser.add_argument(
         "-c", "--cfg",

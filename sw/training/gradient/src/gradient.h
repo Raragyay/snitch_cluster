@@ -12,58 +12,61 @@
 #define CEIL(x, y) ((((x) - 1) / (y)) + 1)
 #define MIN(x, y) ((x) < (y)?(x):(y))
 
+#define MAX_DIM 100000 / sizeof(DATA_TYPE) 
 
-#define MAX_DIM 100000.0f / sizeof(DATA_TYPE)
+uint32_t num_iter;
 
-uint32_t n_iter[2]__attribute__ ((aligned (4096)));
-uint32_t fix_size_k;
-uint32_t fix_size_n;
-float local_E_array[5];
+uint32_t stalls_grad_B[8];
+uint32_t stalls_grad_A[8];
 
+void backpropagation_baseline_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *grad_C,DATA_TYPE *grad_A,DATA_TYPE *grad_B,
+                    uint32_t M, uint32_t N, uint32_t K);
 
-void backpropagation_baseline_multicore(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
-             double e,int m, int n, int k);
+void backpropagation_baseline_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K);
 
-void __backpropagation_multicore_computation_fp64__(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE *local_b, DATA_TYPE *local_e,
-             double e, int n, int k, uint32_t do_bias);
+void backpropagation_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K);
 
-void __backpropagation_multicore_computation_fp32__(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE *local_b, DATA_TYPE *local_e,
-             double e, int n, int k, uint32_t do_bias);
+void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
+                    uint32_t compute_grad_a,uint32_t compute_grad_b);
 
-// I[m][k] inputs
-// W[k][n] weights
-// B[m][n] biases
-// E[m][n] error
-// e learning rate
-void backpropagation_baseline_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
-             double e, int N, int K){
+void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA_TYPE *local_A, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize, uint32_t setup_SSR);
 
-    int i,j;
-    uint32_t size_i, size_w, size_b, size_e;
-    DATA_TYPE *local_I, *local_W, *local_B, *local_E;
-    void *remote_B,*remote_I,*remote_E,*remote_W;
+void __backpropagation_multicore_computation_grad_A_fp64__(DATA_TYPE alpha, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_B, DATA_TYPE *local_GRAD_A,
+                    uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize, uint32_t setup_SSR);
+                    
 
-    size_i = K ;
-    size_w = K * N;
-    size_b = N ;
-    size_e = N ;
+static inline uint64_t asuint(float f);
+static inline float asfloat(uint32_t i);
 
 
-    local_I = (DATA_TYPE *)snrt_l1_next();
-    local_W = local_I + size_i;
-    local_B = local_W + size_w;
-    local_E = local_B + size_b;
+// A[M][K]
+// B[K][N]
+// grad_C[M][N]
+void backpropagation_baseline_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K){
 
-    remote_B = B;
-    remote_I = I;
-    remote_W = W;
-    remote_E = E;
+    int i,j,z;
+    DATA_TYPE sum;
+    uint32_t size_A, size_B,size_GRAD_C;
+    DATA_TYPE *local_A, *local_B, *local_GRAD_C,*local_GRAD_RES; //*local_GRAD_RES used for both computations
+
+    size_A = M*K;
+    size_B = K*N;
+    size_GRAD_C = M*N;
+
+    local_A = (DATA_TYPE *)snrt_l1_next();
+    local_B = local_A + size_A;
+    local_GRAD_C = local_B + size_B;
+    local_GRAD_RES = local_GRAD_C + size_GRAD_C;
 
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(local_I, remote_I, K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_W, remote_W, N*K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_B, remote_B, N*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_E, remote_E, N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_A, A, M*K*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_B, B, K*N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_GRAD_C, GRAD_C, M*N*sizeof(DATA_TYPE));
         snrt_dma_wait_all();
     }
 
@@ -73,22 +76,16 @@ void backpropagation_baseline_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B,
     if(snrt_cluster_core_idx()==0){
         snrt_mcycle();
 
-        //dC/dB = E 
-        //B[m][n] = old(B[m][n])- e*dC/dB[m][n]
-        for(i=0;i<N;i++){
-            local_B[i] = local_B[i]- e*local_E[i];
-        }
-
-        //dC/dW = I_t * E
-        //W[k][n] = old(W[k][n]) - e*dC/dW[k][n]
         for(i=0;i<K;i++){
             for(j=0;j<N;j++){
-                local_W[(i)*N + (j)] = local_W[(i)*N + (j)] - e * local_I[i]*local_E[j];
+                sum = 0;
+                for(z=0;z<M;z++){
+                    sum += local_A[z*K+i] * local_GRAD_C[z*N+j];
+                };
+                local_GRAD_RES [i*N+j] = alpha*sum;
             }
-        }
-
+        }        
         snrt_mcycle();
-
     }
     
     snrt_fpu_fence();
@@ -96,193 +93,64 @@ void backpropagation_baseline_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B,
 
 
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(remote_W, local_W, N*K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(remote_B, local_B, N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(GRAD_B, local_GRAD_RES, K*N*sizeof(DATA_TYPE));
         snrt_dma_wait_all();
     }
 
     snrt_cluster_hw_barrier();
-
-}
-
-void backpropagation_one_core(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
-             double e, int N, int K){
-
-    int i,j;
-    uint32_t size_i, size_w, size_b, size_e;
-    DATA_TYPE *local_I, *local_W, *local_B, *local_E;
-    void *remote_B,*remote_I,*remote_E,*remote_W;
-    const register double neg_e_reg = -e;
-    register uint32_t n_frep_reg = N-1;
-    register double I_reg;
-
-    size_i = K ;
-    size_w = K * N;
-    size_b = N ;
-    size_e = N ;
-
-
-    local_I = (DATA_TYPE *)snrt_l1_next();
-    local_W = local_I + size_i;
-    local_B = local_W + size_w;
-    local_E = local_B + size_b;
-
-    remote_B = B;
-    remote_I = I;
-    remote_W = W;
-    remote_E = E;
-
-    if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(local_I, remote_I, K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_W, remote_W, N*K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_B, remote_B, N*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_E, remote_E, N*sizeof(DATA_TYPE));
-        snrt_dma_wait_all();
-    }
-
-    snrt_cluster_hw_barrier();
-    snrt_mcycle();
 
     if(snrt_cluster_core_idx()==0){
+        snrt_mcycle();
 
-        snrt_ssr_loop_1d(SNRT_SSR_DM0, N , sizeof(DATA_TYPE));
-        snrt_ssr_loop_1d(SNRT_SSR_DM1, N , sizeof(DATA_TYPE));
-        snrt_ssr_loop_1d(SNRT_SSR_DM2, N , sizeof(DATA_TYPE));
-
-
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, local_B);
-        snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, local_E);
-        snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, local_B);
-
-        snrt_ssr_enable();
-        asm volatile(
-            "frep.o %[n_frep], 1, 0, 0 \n"
-            "fmadd.d ft2, %[neg_e], ft1, ft0\n"
-            :
-            : [ n_frep ] "r"(n_frep_reg), [ neg_e ] "f"(neg_e_reg) //define variables used 
-            : "ft0", "ft1", "ft2", "memory"); //registered touched
-
-        snrt_fpu_fence();
-        snrt_ssr_disable();
-
-        
-        n_frep_reg = N/4-1;
-
-        for(i=0;i<K;i++){
-            I_reg = local_I[i];
-            snrt_ssr_loop_1d(SNRT_SSR_DM0,N,sizeof(DATA_TYPE));//E
-            snrt_ssr_loop_1d(SNRT_SSR_DM1,N,sizeof(DATA_TYPE));//W read
-            snrt_ssr_loop_1d(SNRT_SSR_DM2,N,sizeof(DATA_TYPE));//W write
-
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, local_E);
-            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, local_W+i*N);
-            snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, local_W+i*N);
-
-            snrt_ssr_enable();
-            asm volatile(  "frep.o %[n_frep], 8, 0, 0\n"
-            "fmul.d ft3, ft0, %[I] \n"
-            "fmul.d ft4, ft0, %[I] \n"
-            "fmul.d ft5, ft0, %[I] \n"
-            "fmul.d ft6, ft0, %[I] \n"
-            "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-            "fmadd.d ft2, %[neg_e], ft4, ft1 \n"
-            "fmadd.d ft2, %[neg_e], ft5, ft1 \n"
-            "fmadd.d ft2, %[neg_e], ft6, ft1 \n"
-
-            :
-            : [ n_frep ] "r"(n_frep_reg), [ neg_e ] "fr"(neg_e_reg), [I] "fr"(I_reg)
-            :"ft0", "ft1","ft2","ft3", "ft4", "ft5","ft6","memory");
-
-            switch(N%4){
-                case 3:
-                    asm volatile(
-                        "fmul.d ft3, ft0, %[I] \n"
-                        "fmul.d ft4, ft0, %[I] \n"
-                        "fmul.d ft5, ft0, %[I] \n"
-                        "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-                        "fmadd.d ft2, %[neg_e], ft4, ft1 \n"
-                        "fmadd.d ft2, %[neg_e], ft5, ft1 \n"
-
-                        :
-                        : [ neg_e ] "fr"(neg_e_reg), [I] "fr"(I_reg)
-                        :"ft0", "ft1","ft2","ft3","ft4","ft5","memory");
-                        break;
-                case 2:
-                    asm volatile(
-                        "fmul.d ft3, ft0, %[I] \n"
-                        "fmul.d ft4, ft0, %[I] \n"
-                        "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-                        "fmadd.d ft2, %[neg_e], ft4, ft1 \n"
-                        :
-                        : [ neg_e ] "fr"(neg_e_reg), [I] "fr"(I_reg)
-                        :"ft0", "ft1","ft2","ft3","ft4","memory");
-                        break;
-                case 1:
-                    asm volatile(
-                        "fmul.d ft3, ft0, %[I] \n"
-                        "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-
-                        :
-                        : [ neg_e ] "fr"(neg_e_reg), [I] "fr"(I_reg)
-                        :"ft0", "ft1","ft2","ft3","memory");
-                    break;
-
+        for(i=0;i<M;i++){
+            for(j=0;j<K;j++){
+                sum = 0;
+                for(z=0;z<N;z++){
+                    sum += local_GRAD_C[i*N+z] * local_B[z+j*N];
+                }
+                local_GRAD_RES [i*K+j] = alpha*sum;
             }
-            snrt_fpu_fence();
-            snrt_ssr_disable();
-        }
+        }        
+        snrt_mcycle();
     }
-
-    snrt_mcycle();
+    
     snrt_fpu_fence();
     snrt_cluster_hw_barrier();
 
 
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(remote_W, local_W, N*K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(remote_B, local_B, N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(GRAD_A, local_GRAD_RES, M*K*sizeof(DATA_TYPE));
         snrt_dma_wait_all();
     }
 
     snrt_cluster_hw_barrier();
-
 }
 
 
 //works only without tiling
-void backpropagation_baseline_multicore(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
-             double e,int N, int K, int prec){
+void backpropagation_baseline_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K){
 
-
-    uint32_t c, lb, ub,i,j;
-    uint32_t size_i, size_w, size_b, size_e;
-    DATA_TYPE *local_I, *local_W, *local_B, *local_E;
-    void *remote_B,*remote_I,*remote_E,*remote_W;
-    
     const uint32_t compute_num = snrt_cluster_compute_core_num();
     const uint32_t compute_id = snrt_cluster_core_idx();
+    int32_t i,c,lb,ub,j,z;
+    DATA_TYPE sum;
+    uint32_t size_A, size_B,size_GRAD_C;
+    DATA_TYPE *local_A, *local_B, *local_GRAD_C,*local_GRAD_RES; //*local_GRAD_RES used for both computations
 
-    size_i = K ;
-    size_w = K * N;
-    size_b = N ;
-    size_e = N ;
+    size_A = M*K;
+    size_B = K*N;
+    size_GRAD_C = M*N;
 
-
-    local_I = (DATA_TYPE *)snrt_l1_next();
-    local_W = local_I + size_i;
-    local_B = local_W + size_w;
-    local_E = local_B + size_b;
-
-    remote_B = B;
-    remote_I = I;
-    remote_W = W;
-    remote_E = E;
+    local_A = (DATA_TYPE *)snrt_l1_next();
+    local_B = local_A + size_A;
+    local_GRAD_C = local_B + size_B;
+    local_GRAD_RES = local_GRAD_C + size_GRAD_C;
 
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(local_I, remote_I, K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_W, remote_W, N*K*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_B, remote_B,N*sizeof(DATA_TYPE));
-        snrt_dma_start_1d(local_E, remote_E,N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_A, A, M*K*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_B, B, K*N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_GRAD_C, GRAD_C, M*N*sizeof(DATA_TYPE));
         snrt_dma_wait_all();
     }
 
@@ -291,319 +159,702 @@ void backpropagation_baseline_multicore(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B
 
     if(!snrt_is_dm_core()){
         snrt_mcycle();
-        c = CEIL(N, compute_num);
-        lb = c * compute_id;
-        ub = MIN((c * (compute_id + 1)), N);
-
-
-        //dC/dB = E 
-        //B[n] = old(B[n])- e*dC/dB[n]
-        for(i=lb;i<ub;i++){
-            local_B[i] = local_B[i]- e*local_E[i];
-        }
 
         c = CEIL(K, compute_num);
         lb = c * compute_id;
         ub = MIN((c * (compute_id + 1)), K);
 
-        //dC/dW = I_t * E
-        //W[k][n] = old(W[k][n]) - e*dC/dW[k][n]
         for(i=lb;i<ub;i++){
             for(j=0;j<N;j++){
-                local_W[(i)*N+ (j)] = local_W[(i)*N + (j)] - e * local_I[i]*local_E[j];
+                sum = 0;
+                for(z=0;z<M;z++){
+                    sum += local_A[z*K+i] * local_GRAD_C[z*N+j];
+                };
+                local_GRAD_RES [i*N+j] = alpha*sum;
+            }
+        }        
+        snrt_mcycle();
+    }
+    
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier();
+
+
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(GRAD_B, local_GRAD_RES, K*N*sizeof(DATA_TYPE));
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();
+
+    if(!snrt_is_dm_core()){
+        snrt_mcycle();
+
+        c = CEIL(M, compute_num);
+        lb = c * compute_id;
+        ub = MIN((c * (compute_id + 1)), M);
+
+        for(i=lb;i<ub;i++){
+            for(j=0;j<K;j++){
+                sum = 0;
+                for(z=0;z<N;z++){
+                    sum += local_GRAD_C[i*N+z] * local_B[z+j*N];
+                }
+                local_GRAD_RES [i*K+j] = alpha*sum;
+            }
+        }        
+        snrt_mcycle();
+    }
+    
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier();
+
+
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(GRAD_A, local_GRAD_RES, M*K*sizeof(DATA_TYPE));
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();        
+}
+
+
+//works only without tiling
+void backpropagation_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K){
+    
+    int i,j,z,unroll=4;
+    DATA_TYPE sum;
+    uint32_t size_A, size_B,size_GRAD_C;
+    DATA_TYPE *local_A, *local_B, *local_GRAD_C,*local_GRAD_RES; //*local_GRAD_RES used for both computations
+
+    size_A = M*K;
+    size_B = K*N;
+    size_GRAD_C = M*N;
+
+    local_A = (DATA_TYPE *)snrt_l1_next();
+    local_B = local_A + size_A;
+    local_GRAD_C = local_B + size_B;
+    local_GRAD_RES = local_GRAD_C + size_GRAD_C;
+
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(local_A, A, M*K*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_B, B, K*N*sizeof(DATA_TYPE));
+        snrt_dma_start_1d(local_GRAD_C, GRAD_C, M*N*sizeof(DATA_TYPE));
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();
+    snrt_mcycle();
+
+    if(snrt_cluster_core_idx()==0){
+
+        //prepare loop A transposed    
+        const uint32_t ssr0_b[4] = {unroll, M, N / unroll, K};
+        const uint32_t ssr0_i[4] = {0, 8 * K, 0, 8 };
+
+        snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                            ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+        snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+
+        //prepare loop GRAD_C
+        const uint32_t ssr1_b[4] = {unroll, M, N / unroll, K}; 
+        const uint32_t ssr1_i[4] = {8, 8 * N, 8 * unroll, 0};
+
+
+        snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                            ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                            ssr1_i[3]);
+
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, local_A);
+        snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, local_GRAD_C);
+
+        
+        for (uint32_t k=0; k<K; k++) { 
+            uint32_t n = 0;
+
+            snrt_ssr_enable();
+
+            for (uint32_t n0=0; n0<N/unroll; n0++) { 
+
+                register DATA_TYPE sum[]={0.0f,0.0f,0.0f,0.0f};
+                asm volatile(
+                    "frep.o %[n_frep], 4, 0, 0 \n"
+                    "fmadd.d %[sum0], ft0, ft1, %[sum0] \n"
+                    "fmadd.d %[sum1], ft0, ft1, %[sum1] \n"
+                    "fmadd.d %[sum2], ft0, ft1, %[sum2] \n"
+                    "fmadd.d %[sum3], ft0, ft1, %[sum3] \n"
+
+                    "fmul.d %[sum0], %[alpha],%[sum0] \n"
+                    "fmul.d %[sum1], %[alpha],%[sum1] \n"
+                    "fmul.d %[sum2], %[alpha],%[sum2] \n"
+                    "fmul.d %[sum3], %[alpha],%[sum3] \n"
+
+                    
+                    :[ sum0 ] "+f"(sum[0]), [ sum1 ] "+f"(sum[1]), [ sum2 ] "+f"(sum[2]),
+                        [ sum3 ] "+f"(sum[3])
+                    : [ n_frep ] "r"(M - 1), [alpha] "f"(alpha)
+                    : "ft0", "ft1", "ft2");
+
+                // Store results back
+                local_GRAD_RES[k*N + n + 0] = sum[0];
+                local_GRAD_RES[k*N + n + 1] = sum[1];
+                local_GRAD_RES[k*N + n + 2] = sum[2];
+                local_GRAD_RES[k*N + n + 3] = sum[3];
+                n += unroll;         
+            }
+
+            snrt_ssr_disable();
+
+            for (; n<N; n++) {
+                double sum=0;
+                for (uint32_t m=0; m<M; m++) {
+                    sum += local_A[k + m*K] * local_GRAD_C[m*N + n];
+                }
+                local_GRAD_RES[k*N + n] = alpha*sum;
             }
         }
-        snrt_mcycle();
+
         snrt_fpu_fence();
-    
     }
+
+    snrt_mcycle();
     snrt_cluster_hw_barrier();
 
     if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(GRAD_B, local_GRAD_RES, K*N*sizeof(DATA_TYPE));
+        snrt_dma_wait_all();
+    }
 
-                snrt_dma_start_1d(remote_W, local_W, N*K*sizeof(DATA_TYPE));
+    snrt_cluster_hw_barrier();   
+    snrt_mcycle();
 
-                snrt_dma_start_1d(remote_B, local_B, N*sizeof(DATA_TYPE));
+    if(snrt_cluster_core_idx()==0){
+        //prepare loop GRAD_C    
+        const uint32_t ssr0_b[4] = {unroll, N, K/unroll, M};
+        const uint32_t ssr0_i[4] = {0, 8, 0, 8 * N};
 
-                snrt_dma_wait_all();
+        // A[k + unroll * m * ldA]
+        snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                            ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+        snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+        
+        //prepare loop B TRANSPOSED 
+        const uint32_t ssr1_b[4] = {unroll, N, K / unroll, M};
+        const uint32_t ssr1_i[4] = {8*N, 8, N*unroll*8, 0};
+
+        snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                            ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                            ssr1_i[3]);
+
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, local_GRAD_C);
+        snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, local_B);
+
+        
+        for (uint32_t m=0; m<M; m++) { 
+            uint32_t k = 0;
+
+            snrt_ssr_enable();
+
+            for (uint32_t k0=0; k0<K/unroll; k0++) { 
+
+                register DATA_TYPE sum[]={0.0f,0.0f,0.0f,0.0f};
+                asm volatile(
+                    "frep.o %[n_frep], 4, 0, 0 \n"
+                    "fmadd.d %[sum0], ft0, ft1, %[sum0] \n"
+                    "fmadd.d %[sum1], ft0, ft1, %[sum1] \n"
+                    "fmadd.d %[sum2], ft0, ft1, %[sum2] \n"
+                    "fmadd.d %[sum3], ft0, ft1, %[sum3] \n"
+
+                    "fmul.d %[sum0], %[alpha],%[sum0] \n"
+                    "fmul.d %[sum1], %[alpha],%[sum1] \n"
+                    "fmul.d %[sum2], %[alpha],%[sum2] \n"
+                    "fmul.d %[sum3], %[alpha],%[sum3] \n"
+
+                    
+                    :[ sum0 ] "+f"(sum[0]), [ sum1 ] "+f"(sum[1]), [ sum2 ] "+f"(sum[2]),
+                        [ sum3 ] "+f"(sum[3])
+                    : [ n_frep ] "r"(N - 1), [alpha] "f"(alpha)
+                    : "ft0", "ft1", "ft2");
+
+                // Store results back
+                local_GRAD_RES[m*K + k + 0] = sum[0];
+                local_GRAD_RES[m*K + k + 1] = sum[1];
+                local_GRAD_RES[m*K + k + 2] = sum[2];
+                local_GRAD_RES[m*K + k + 3] = sum[3];
+                k += unroll;         
+            }
+
+            snrt_ssr_disable();
+
+            for (; k<K; k++) {
+                double sum=0;
+                for (uint32_t n=0; n<N; n++) {
+                    sum +=  local_GRAD_C[m*N+n]*local_B[n+k*N];
+                }
+                local_GRAD_RES[m*K + k] = alpha*sum;
+            }
+        }
+
+        snrt_fpu_fence();
+    }
+    
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier();
+    snrt_mcycle();
+
+
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(GRAD_A, local_GRAD_RES, M*K*sizeof(DATA_TYPE));
+        snrt_dma_wait_all();
     }
 
     snrt_cluster_hw_barrier();
 
-        
-}
-
-void backpropagation_multicore(DATA_TYPE *I, DATA_TYPE *W, DATA_TYPE *B, DATA_TYPE *E,
-             double e,int N, int K,int prec){
-
-    float div;
-    uint32_t fix_tiling_size_k,new_tiling_size_k;
-    uint32_t fix_tiling_size_n, new_tiling_size_n; 
-    uint32_t size_i, size_w, size_b, size_e;
-    void *local_I, *local_W, *local_B, *local_E;
-    void *remote_B,*remote_I,*remote_E,*remote_W;
-    uint32_t ub_i, ub_j,i ,j;
-
-    //find best values for fix sizes of tiling
-    if(K>=N){
-        div =(float) (K/N); //K=div*N
-
-        //K*N+k+n<=MAX_DIM ---> div*N*N+(div+1)*N-MAX_DIM == 0 ----> N =(-(div+1)+sqrt((div+1)*(div+1)-4*div*(-MAX_DIM))) / 2*div
-        fix_tiling_size_n = ((uint32_t)(-(div+1.0f)+(float)sqrtf((div+1.0f)*(div+1.0f)-4.0f*div*(-MAX_DIM)))/(uint32_t)(2*div));
-
-        fix_tiling_size_k = fix_tiling_size_n * (uint32_t)div;
-        
-    }else{
-        div =(float) (N/K); 
-
-        fix_tiling_size_k = ((uint32_t)(-(div+1.0f)+(float)sqrtf((div+1.0f)*(div+1.0f)-4.0f*div*(-MAX_DIM)))/(uint32_t)(2*div));
-
-        fix_tiling_size_n = fix_tiling_size_k * (uint32_t)div;
-
-    }
-
-    size_i = fix_tiling_size_k * sizeof(DATA_TYPE);
-    size_w = fix_tiling_size_k * fix_tiling_size_n * sizeof(DATA_TYPE);
-    size_b = fix_tiling_size_n * sizeof(DATA_TYPE);
-    size_e = fix_tiling_size_n * sizeof(DATA_TYPE);
-
-    local_I = (void *)snrt_l1_next();
-    local_W = local_I + size_i;
-    local_B = local_W + size_w;
-    local_E = local_B + size_b;
-
-    remote_B = B;
-    remote_I = I;
-    remote_W = W;
-    remote_E = E;
-
-    ub_i =(K%fix_tiling_size_k==0)? K/fix_tiling_size_k : K/fix_tiling_size_k+1;
-    ub_j =(N%fix_tiling_size_n==0)? N/fix_tiling_size_n : N/fix_tiling_size_n+1;
-  
-    if(snrt_cluster_core_idx()==0){
-        n_iter[0]=ub_i;
-        n_iter[1]= ub_j;
-        fix_size_k = fix_tiling_size_k;
-        fix_size_n = fix_tiling_size_n;
-   //     printf("Number of iterations is: %u\n",ub_i*ub_j);
-    }
-
-    for(i=0;i<ub_i;i++){
-        new_tiling_size_k = (i!=ub_i-1) ? fix_tiling_size_k : (K-i*fix_tiling_size_k);
-   //     if(snrt_cluster_core_idx()==0)
-    //        printf("Iteration number %u out of %u\n",i*ub_j,ub_i*ub_j);
-        for(j=0;j<ub_j;j++){
-
-            //all the cycles but the last one  with fixed size
-            new_tiling_size_n = (j!=ub_j-1) ? fix_tiling_size_n : (N-j*fix_tiling_size_n);
-        
-
-            // Copy data in TCDM
-            if (snrt_is_dm_core()) {
-
-                if(j==0){
-                    snrt_dma_start_1d(local_I, remote_I+i*fix_tiling_size_k*sizeof(DATA_TYPE), new_tiling_size_k*sizeof(DATA_TYPE));
-                }
-                //it is not slower than 2d dma
-                for(int z=0;z<new_tiling_size_k;z++){
-                    snrt_dma_start_1d(local_W + z*new_tiling_size_n*sizeof(DATA_TYPE),
-                     remote_W + j*fix_tiling_size_n*sizeof(DATA_TYPE)+ i*N*fix_tiling_size_k*sizeof(DATA_TYPE) + z*N*sizeof(DATA_TYPE),
-                     new_tiling_size_n*sizeof(DATA_TYPE));
-                }
-
-                if(i==0){
-                snrt_dma_start_1d(local_B, remote_B+j*fix_tiling_size_n*sizeof(DATA_TYPE), new_tiling_size_n*sizeof(DATA_TYPE));
-                }
-
-                snrt_dma_start_1d(local_E, remote_E+j*fix_tiling_size_n*sizeof(DATA_TYPE), new_tiling_size_n*sizeof(DATA_TYPE));
-
-                snrt_dma_wait_all();
-            }
-        
-            snrt_cluster_hw_barrier();
-
-
-            if(!snrt_is_dm_core()){
-                snrt_mcycle();
-                
-                if(prec==8){
-                    __backpropagation_multicore_computation_fp64__((DATA_TYPE*)local_I,(DATA_TYPE*)local_W,(DATA_TYPE*)local_B,(DATA_TYPE*)local_E,e,new_tiling_size_n,new_tiling_size_k,i==0);
-                }else if(prec==4){
-                    __backpropagation_multicore_computation_fp32__((DATA_TYPE*)local_I,(DATA_TYPE*)local_W,(DATA_TYPE*)local_B,(DATA_TYPE*)local_E,e,new_tiling_size_n,new_tiling_size_k,i==0);
-                }
-
-                snrt_mcycle();
-                snrt_fpu_fence();
-            }
-         
-            snrt_cluster_hw_barrier();
-            
-
-            if (snrt_is_dm_core()) {
-
-                for(int z=0;z<new_tiling_size_k;z++){
-                    snrt_dma_start_1d(remote_W + j*fix_tiling_size_n*sizeof(DATA_TYPE) + i*N*fix_tiling_size_k*sizeof(DATA_TYPE)+ z*N*sizeof(DATA_TYPE),
-                     local_W + z*new_tiling_size_n*sizeof(DATA_TYPE),
-                     new_tiling_size_n*sizeof(DATA_TYPE));
-                }
-
-                if(i==0){
-                    snrt_dma_start_1d(remote_B+j*fix_tiling_size_n*sizeof(DATA_TYPE), local_B, new_tiling_size_n*sizeof(DATA_TYPE));
-                }
-
-                snrt_dma_wait_all();
-            }
-
-            snrt_cluster_hw_barrier();
-        }
-    }
- 
 }
 
 
-
-void __backpropagation_multicore_computation_fp64__(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE *local_b, DATA_TYPE *local_e,
-             double e, int n, int k, uint32_t do_bias){
-
-    uint32_t c, lb, ub,i,j,z;
-    int32_t dim; 
-    const register double neg_e_reg = -e;
-    register uint32_t n_frep_reg;
-    register double I_reg;
+/*requires M%M_tiles==0 && N%N_tiles==0 && K%K_tiles==0 */
+void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
+                    uint32_t compute_grad_a,uint32_t compute_grad_b){
+                        
+    const uint32_t frac_M = M / M_tiles;
+    const uint32_t frac_N = N / N_tiles;
+    const uint32_t frac_K = K / K_tiles;
 
     const uint32_t compute_num = snrt_cluster_compute_core_num();
     const uint32_t compute_id = snrt_cluster_core_idx();
- 
+    int32_t c,lb,ub;
+    uint32_t k,m,n;
+    uint32_t size_A, size_B, size_GRAD_C,size_GRAD_B;
+    DATA_TYPE *local_A, *local_B, *local_GRAD_C, *local_GRAD_RES; //*local_GRAD_RES used for both computations
+    register uint32_t mult_alpha,initialize,setup_SSR;
 
-    if(do_bias){      
-        c = CEIL(n, compute_num);
+    size_A = frac_M * frac_K;
+    size_B = frac_N * frac_K;
+    size_GRAD_C = frac_M * frac_N;
+    size_GRAD_B = frac_N * frac_K;
+    
+    snrt_cluster_hw_barrier();
+
+
+    if(compute_grad_b){
+        
+        local_A = (DATA_TYPE *)snrt_l1_next();
+        local_GRAD_RES = local_A + size_A;
+        local_GRAD_C = local_GRAD_RES + size_GRAD_B;
+
+        c = CEIL(frac_K, compute_num);
         lb = c * compute_id;
-        ub = MIN((c * (compute_id + 1)), n);
-        dim = ub-lb;  
+        ub = MIN((c * (compute_id + 1)), frac_K);
+        setup_SSR = 1;
 
-        //dC/dB = E 
-        //B[n] = old(B[n])- e*dC/dB[n]
-        if(dim>0){
-            n_frep_reg = dim-1;
-            snrt_ssr_loop_1d(SNRT_SSR_DM0, dim, sizeof(DATA_TYPE));
-            snrt_ssr_loop_1d(SNRT_SSR_DM1,dim, sizeof(DATA_TYPE));
-            snrt_ssr_loop_1d(SNRT_SSR_DM2, dim, sizeof(DATA_TYPE));
+        for(k=0;k<K_tiles;k++){        
+            for(n=0;n<N_tiles;n++){
+                for(m=0;m<M_tiles;m++){
 
 
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, local_b+lb);
-            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, local_e+lb);
-            snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, local_b+lb);
+                    if(snrt_is_dm_core()){
+                        snrt_dma_load_2d_tile(local_A,A,m,k,frac_M,frac_K,K,sizeof(DATA_TYPE));
+                        snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,sizeof(DATA_TYPE));
+                        
+                        snrt_dma_wait_all();
+                    }      
+                
+                    snrt_cluster_hw_barrier();
 
-            snrt_ssr_enable();
-            asm volatile(
-                "frep.o %[n_frep], 1, 0, 0 \n"
-                "fmadd.d ft2, %[neg_e], ft1, ft0\n"
-                :
-                : [ n_frep ] "r"(n_frep_reg), [ neg_e ] "f"(neg_e_reg) //define variables used 
-                : "ft0", "ft1", "ft2", "memory"); //registered touched
+                
+                    if(!snrt_is_dm_core()){
 
-            snrt_fpu_fence();
-            snrt_ssr_disable();
+                        //C code
+                        //mult_alpha = (m<M_tiles-1) ? 0 : 1;
+                        //initialize = (m==0) ? 1 : 0;
+                        asm volatile(
+                            "mv %[initialize], zero \n"
+                            "mv %[mult_alpha], zero \n"
+
+                            "bnez %[m], 1f \n"
+                            "addi %[initialize], %[initialize], 1 \n"
+
+                            "1:\n"
+                            "bne %[m], %[M_tiles_m_1], 2f \n"
+                            "addi %[mult_alpha], %[mult_alpha], 1 \n"
+
+                            "2:\n"
+                            :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
+                            :[m] "r"(m),[M_tiles_m_1] "r"(M_tiles-1)
+                        :);
+                        snrt_mcycle();
+
+                        __backpropagation_multicore_computation_grad_B_fp64__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
+                                                                                frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
+
+                        snrt_mcycle();
+
+                        //C code
+                        //if(setup_SSR==1) setup_SSR=0;
+                        asm volatile(
+                            "beqz %[setup_SSR], 1f \n"
+                            "mv %[setup_SSR], zero \n"
+                            "1: \n"
+                            :[setup_SSR] "+r"(setup_SSR)
+                            :
+                        :);                    
+                    }
+                    
+                    snrt_fpu_fence();
+                    snrt_cluster_hw_barrier();
+
+                }
+
+                if (snrt_is_dm_core()) {
+                    snrt_dma_store_2d_tile(GRAD_B, local_GRAD_RES,k,n,frac_K,frac_N,N,sizeof(DATA_TYPE));
+
+                    snrt_dma_wait_all();
+                }
+
+                snrt_cluster_hw_barrier();
+            }
         }
     }
 
-    c = CEIL(k, compute_num);
-    lb = c * compute_id;
-    ub = MIN((c * (compute_id + 1)), k);
-    n_frep_reg = n/4-1;
-    //dC/dW = I_t * E
-    //W[k][n] = old(W[k][n]) - e*dC/dW[k][n]
-    for(i =lb;i<ub;i++){
-        I_reg = local_i[i];
-        snrt_ssr_loop_1d(SNRT_SSR_DM0,n,sizeof(DATA_TYPE));//E
-        snrt_ssr_loop_1d(SNRT_SSR_DM1,n,sizeof(DATA_TYPE));//W read
-        snrt_ssr_loop_1d(SNRT_SSR_DM2,n,sizeof(DATA_TYPE));//W write
 
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, local_e);
-        snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_1D, local_w+i*n);
-        snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_1D, local_w+i*n);
+    snrt_cluster_hw_barrier();
 
-        snrt_ssr_enable();
-        asm volatile(
-            "frep.o %[n_frep], 8, 0, 0\n"
-            "fmul.d ft3, ft0, %[I] \n"
-            "fmul.d ft4, ft0, %[I] \n"
-            "fmul.d ft5, ft0, %[I] \n"
-            "fmul.d ft6, ft0, %[I] \n"
-            "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-            "fmadd.d ft2, %[neg_e], ft4, ft1 \n"
-            "fmadd.d ft2, %[neg_e], ft5, ft1 \n"
-            "fmadd.d ft2, %[neg_e], ft6, ft1 \n"
+    if(compute_grad_a){
 
-            :
-            : [ n_frep ] "r"(n_frep_reg), [ neg_e ] "f"(neg_e_reg), [I] "f"(I_reg)
-            :"ft0", "ft1","ft2","ft3", "ft4", "ft5","ft6","memory");
+        local_GRAD_C = (DATA_TYPE *)snrt_l1_next();
+        local_B =(N%32!=0) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C+1;
+        local_GRAD_RES = local_B + size_B;
 
-    
-        switch(n%4){
-            case 3:
-                asm volatile(
-                    "fmul.d ft3, ft0, %[I] \n"
-                    "fmul.d ft4, ft0, %[I] \n"
-                    "fmul.d ft5, ft0, %[I] \n"
-                    "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-                    "fmadd.d ft2, %[neg_e], ft4, ft1 \n"
-                    "fmadd.d ft2, %[neg_e], ft5, ft1 \n"
+        c = CEIL(frac_M, compute_num);
+        lb = c * compute_id;
+        ub = MIN((c * (compute_id + 1)), frac_M);
+        setup_SSR = 1;
 
-                    :
-                    : [ neg_e ] "f"(neg_e_reg), [I] "f"(I_reg)
-                    :"ft0", "ft1","ft2","ft3","ft4","ft5","memory");
-                    break;
-            case 2:
-                asm volatile(
-                    "fmul.d ft3, ft0, %[I] \n"
-                    "fmul.d ft4, ft0, %[I] \n"
-                    "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
-                    "fmadd.d ft2, %[neg_e], ft4, ft1 \n"
-                    :
-                    : [ neg_e ] "f"(neg_e_reg), [I] "f"(I_reg)
-                    :"ft0", "ft1","ft2","ft3","ft4","memory");
-                    break;
-            case 1:
-                asm volatile(
-                    "fmul.d ft3, ft0, %[I] \n"
-                    "fmadd.d ft2, %[neg_e], ft3, ft1 \n"
+        for(m=0;m<M_tiles;m++){
+            for(k=0;k<K_tiles;k++){
+                for(n=0;n<N_tiles;n++){
 
-                    :
-                    : [ neg_e ] "f"(neg_e_reg), [I] "f"(I_reg)
-                    :"ft0", "ft1","ft2","ft3","memory");
-                break;
+                        if(snrt_is_dm_core()){
+                            snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,sizeof(DATA_TYPE));
+                            snrt_dma_load_2d_tile(local_B,B,k,n,frac_K,frac_N,N,sizeof(DATA_TYPE));
 
+                            snrt_dma_wait_all();
+
+                        }
+
+                        snrt_cluster_hw_barrier();
+                        
+                        if(!snrt_is_dm_core()){
+                            //C code
+                            //mult_alpha = (n==N_tiles-1) ? 1 : 0;
+                            //initialize = (n==0) ? 1 : 0;
+                            asm volatile(
+                                "mv %[initialize], zero \n"
+                                "mv %[mult_alpha], zero \n"
+
+                                "bnez %[n], 1f \n"
+                                "addi %[initialize], %[initialize], 1 \n"
+
+                                "1:\n"
+                                "bne %[n], %[N_tiles_m_1], 2f \n"
+                                "addi %[mult_alpha], %[mult_alpha], 1 \n"
+
+                                "2:\n"
+                                :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
+                                :[n] "r"(n),[N_tiles_m_1] "r"(N_tiles-1)
+                            :);
+
+
+                            snrt_mcycle();
+
+                            __backpropagation_multicore_computation_grad_A_fp64__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
+                                                                                    frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
+
+                            snrt_mcycle();
+
+                            //C code
+                            //if(setup_SSR==1) setup_SSR=0;
+                            asm volatile(
+                                "beqz %[setup_SSR], 1f \n"
+                                "mv %[setup_SSR], zero \n"
+                                "1: \n"
+                            :[setup_SSR] "+r"(setup_SSR)
+                            :
+                            :);
+
+                        }
+
+                        snrt_fpu_fence();
+                        snrt_cluster_hw_barrier();
+                }
+
+                if (snrt_is_dm_core()) {
+                    snrt_dma_store_2d_tile(GRAD_A, local_GRAD_RES,m,k,frac_M,frac_K,K,sizeof(DATA_TYPE));
+
+                    snrt_dma_wait_all();
+                }
+
+                snrt_cluster_hw_barrier();
+
+            }
         }
-        snrt_fpu_fence();
-        snrt_ssr_disable();
-    
     }
-
-
-        //I liked this one more
-        // snrt_ssr_loop_2d(SNRT_SSR_DM1,n,k,0,sizeof(DATA_TYPE));//I_t
-        // snrt_ssr_loop_2d(SNRT_SSR_DM2,n,k,sizeof(DATA_TYPE),0);//E
-        // snrt_ssr_loop_2d(SNRT_SSR_DM0,2,n*k,0,sizeof(DATA_TYPE));//W       
-        // snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, local_w); 
-        // snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, local_i);            
-        // snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, local_e); 
-        // snrt_ssr_write(SNRT_SSR_DM0, SNRT_SSR_2D, local_w);      
-        // snrt_ssr_enable();
-        // asm volatile(
-        //     "frep.o %[n_frep], 2, 0, 0 \n" //rep_loop, length_loop, stagger_count, dtagger [rd|rs1|rs2|rs3]
-        //     "fmul.d fa0, ft2, ft1 \n"
-        //     "fmadd.d ft0, %[neg_e], fa0, ft0 \n"
-        //     :  
-        //     : [ n_frep ] "r"(k*n-1), [ neg_e ] "f"(-e), [ addr ] "r"(local_w)//define variables used 
-        //     : "ft0", "ft1","fa0","fa1", "memory"); //registered touched
-        // snrt_fpu_fence();
-        // snrt_ssr_disable();
 }
 
 
-void __backpropagation_multicore_computation_fp32__(DATA_TYPE *local_i, DATA_TYPE *local_w, DATA_TYPE *local_b, DATA_TYPE *local_e,
-             double e, int n, int k, uint32_t do_bias){
 
-                //TODO
+void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA_TYPE *local_A, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR){
+
+    register const uint32_t compute_num = snrt_cluster_compute_core_num();
+    register const uint32_t compute_id = snrt_cluster_core_idx();
+    register double ZERO=0.0f;
+    int32_t dim = ub-lb;
+    int32_t unroll=8;//high contention due to the transposed first matrix.
+    uint32_t i,index_addr;
+    register uint32_t n;
+    register int32_t n0; 
+    const register int32_t loops= N/unroll;
+    register int32_t k=compute_id;
+    if(dim>0){
+
+        if(loops > 0){
+            if(setup_SSR==1){
+                //prepare loop A transposed    
+                const uint32_t ssr0_b[4] = {unroll, M, loops, dim};
+                const uint32_t ssr0_i[4] = {0, 8 * K, 0, 8*compute_num };
+
+                snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                                    ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+                snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+                
+
+                //prepare loop GRAD_C
+                const uint32_t ssr1_b[4] = {unroll, M, loops, dim}; 
+                const uint32_t ssr1_i[4] = {8, 8 * N, 8 * unroll, 0};
+
+
+                snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                                    ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                                    ssr1_i[3]);
+            }
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, local_A+compute_id);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, local_GRAD_C);
+        }
+
+     //   snrt_mcycle();
+        //check lower bounds
+        while(k<K){ 
+            n=0;
+            n0=0;
+            snrt_ssr_enable();
+
+            while(n0<loops){
+
+                asm volatile(
+                    "beqz %[initialize], 1f\n"
+                    "fcvt.d.w %[ZERO], zero\n"
+                    "fsgnj.d ft10,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft3,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft4,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft5,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft6,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft7,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft8,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft9,%[ZERO],%[ZERO]\n"
+                    "j 2f\n"            
+
+                    "1:\n"
+                    "fld ft10, 0(%[sum_addr]) \n"
+                    "fld ft3, 8(%[sum_addr]) \n"
+                    "fld ft4, 16(%[sum_addr]) \n"
+                    "fld ft5, 24(%[sum_addr]) \n"
+                    "fld ft6, 32(%[sum_addr]) \n"
+                    "fld ft7, 40(%[sum_addr]) \n"
+                    "fld ft8, 48(%[sum_addr]) \n"
+                    "fld ft9, 56(%[sum_addr]) \n"
+
+                    "2:\n"
+                    "frep.o %[n_frep], 8, 0, 0 \n"
+                    "fmadd.d ft10, ft0, ft1, ft10 \n"
+                    "fmadd.d ft3, ft0, ft1, ft3 \n"
+                    "fmadd.d ft4, ft0, ft1, ft4 \n"
+                    "fmadd.d ft5, ft0, ft1, ft5 \n"
+                    "fmadd.d ft6, ft0, ft1, ft6 \n"
+                    "fmadd.d ft7, ft0, ft1, ft7 \n"
+                    "fmadd.d ft8, ft0, ft1, ft8 \n"
+                    "fmadd.d ft9, ft0, ft1, ft9 \n"
+
+
+                    "beqz %[mult_alpha], 3f \n"
+                    "fmul.d ft10, %[alpha],ft10 \n"
+                    "fmul.d ft3, %[alpha],ft3 \n"
+                    "fmul.d ft4, %[alpha],ft4 \n"
+                    "fmul.d ft5, %[alpha],ft5 \n"
+                    "fmul.d ft6, %[alpha],ft6 \n"
+                    "fmul.d ft7, %[alpha],ft7 \n"
+                    "fmul.d ft8, %[alpha],ft8 \n"
+                    "fmul.d ft9, %[alpha],ft9 \n"
+
+                    "3: \n"
+                    "fsd ft10, 0(%[sum_addr]) \n"
+                    "fsd ft3, 8(%[sum_addr]) \n"
+                    "fsd ft4, 16(%[sum_addr]) \n"
+                    "fsd ft5, 24(%[sum_addr]) \n"
+                    "fsd ft6, 32(%[sum_addr]) \n"
+                    "fsd ft7, 40(%[sum_addr]) \n"
+                    "fsd ft8, 48(%[sum_addr]) \n"
+                    "fsd ft9, 56(%[sum_addr]) \n"  
+
+                    "addi %[n0],%[n0],1 \n"
+                    "addi %[n], %[n],8 \n"//if unroll changes, change this
+
+                    : [n0] "+r"(n0), [n] "+r"(n)
+                    :[ sum_addr ] "r"(local_GRAD_B+ k*N +n), [ n_frep ] "r"(M - 1), [alpha] "f"(alpha), [initialize] "r"(initialize), [ZERO] "fr"(ZERO),
+                    [mult_alpha] "r"(mult_alpha)
+                    : "ft0", "ft1", "ft10","ft3","ft5","ft6","ft7","ft8","ft9","ft2");
+                
+            }
+
+            snrt_ssr_disable();
+
+           //cleanup sucks, make it better
+            for (; n<N; n++) {
+                double sum=(initialize) ? 0 : local_GRAD_B[k*N + n] ;
+                for (uint32_t m=0; m<M; m++) {
+                    sum += local_A[k + m*K] * local_GRAD_C[m*N + n];
+                }
+                local_GRAD_B[k*N + n] = (mult_alpha) ? alpha*sum : sum;
+            }
+
+        k+=compute_num;
+        }
+       // snrt_mcycle();
+    }
+
+}
+
+
+void __backpropagation_multicore_computation_grad_A_fp64__(DATA_TYPE alpha, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_B, DATA_TYPE *local_GRAD_A,
+                    uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR){
+                        
+    int32_t dim = ub-lb,unroll=4;
+    int32_t i,k,m,k0;
+    const register int32_t loops=K/unroll;
+    register double ZERO=0.0f;
+
+    if(dim>0){
+
+        if(loops>0){
+            if(setup_SSR==1){
+                //prepare loop GRAD_C    
+                const uint32_t ssr0_b[4] = {unroll, N, K/unroll, dim};
+                const uint32_t ssr0_i[4] = {0, 8, 0, 8 * N};
+
+                snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                                    ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+                snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+                
+                //prepare loop B TRANSPOSED 
+                const uint32_t ssr1_b[4] = {unroll, N, K / unroll, dim};
+                const uint32_t ssr1_i[4] = {8*N, 8, N*unroll*8, 0};
+
+                snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                                    ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                                    ssr1_i[3]);
+
+            }
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, local_GRAD_C + lb*N);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, local_B);
+    
+        }
+
+
+        m=lb;
+        while(m<ub){
+            k=0;
+            k0=0;
+            snrt_ssr_enable();
+
+            while(k0<loops){
+                asm volatile(
+                    "beqz %[initialize], 1f\n"
+                    "fcvt.d.w %[ZERO], zero\n"
+                    "fsgnj.d ft3,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft4,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft5,%[ZERO],%[ZERO]\n"
+                    "fsgnj.d ft6,%[ZERO],%[ZERO]\n"
+                    "j 2f\n"            
+
+                    "1:\n"
+                    "fld ft3, 0(%[sum_addr]) \n"
+                    "fld ft4, 8(%[sum_addr]) \n"
+                    "fld ft5, 16(%[sum_addr]) \n"
+                    "fld ft6, 24(%[sum_addr]) \n"
+
+                    "2:\n"
+                    "frep.o %[n_frep], 4, 0, 0 \n"
+                    "fmadd.d ft3, ft0, ft1, ft3 \n"
+                    "fmadd.d ft4, ft0, ft1, ft4 \n"
+                    "fmadd.d ft5, ft0, ft1, ft5 \n"
+                    "fmadd.d ft6, ft0, ft1, ft6 \n"
+
+                    "beqz %[mult_alpha], 3f \n"
+                    "fmul.d ft3, %[alpha],ft3 \n"
+                    "fmul.d ft4, %[alpha],ft4 \n"
+                    "fmul.d ft5, %[alpha],ft5 \n"
+                    "fmul.d ft6, %[alpha],ft6 \n"
+
+                    "3: \n"
+                    "fsd ft3, 0(%[sum_addr]) \n"
+                    "fsd ft4, 8(%[sum_addr]) \n"
+                    "fsd ft5, 16(%[sum_addr]) \n"
+                    "fsd ft6, 24(%[sum_addr]) \n"
+                    
+
+                    "addi %[k0],%[k0],1 \n"
+                    "addi %[k], %[k],4 \n"//if unroll changes, change this
+                    
+                    : [k0] "+r"(k0), [k] "+r"(k)
+                    : [ n_frep ] "r"(N - 1), [alpha] "f"(alpha), [initialize] "r"(initialize), [mult_alpha] "r"(mult_alpha), [ZERO] "fr"(ZERO),
+                    [ sum_addr ] "r"(local_GRAD_A + m*K + k)
+                    : "ft0", "ft1", "ft2","ft3","ft4","ft5","ft6");
+
+            }
+
+            snrt_ssr_disable();
+
+            //cleanup suckes
+            for (; k<K; k++) {
+                double sum=0;
+                for (uint32_t n=0; n<N; n++) {
+                    sum +=  local_GRAD_C[m*N+n]*local_B[n+k*N];
+                }
+                local_GRAD_A[m*K + k] = alpha*sum;
+            }
+            m++;
+        }
+
+    }
+    snrt_fpu_fence();    
+
+}
+
+
+
+static inline uint64_t asuint(float f) {
+    uint32_t result;
+    snrt_fpu_fence();
+    result = *(uint32_t *)&f;
+    return result;
+}
+
+static inline float asfloat(uint32_t i) {
+	float result;
+	snrt_fpu_fence();
+	result = *(float *)&i;
+	return result;
 }

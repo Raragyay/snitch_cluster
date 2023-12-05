@@ -13,16 +13,16 @@
 int main(int argc, char *argv[]) {
     #ifdef SINGLE_CORE
         #ifdef BASELINE
-            backpropagation_baseline_one_core(I,W,B,E,e,N,K);
+            backpropagation_baseline_one_core(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K);
         #else
-            backpropagation_one_core(I,W,B,E,e,N,K);
+            backpropagation_one_core(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K);
         #endif
     #else
 
         #ifdef BASELINE 
-            backpropagation_baseline_multicore(I,W,B,E,e,N,K,dtype_size);
+            backpropagation_baseline_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K);
         #else
-            backpropagation_multicore(I,W,B,E,e,N,K,dtype_size);
+            backpropagation_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,1,1,1,1,1);
         #endif
     #endif
 }   

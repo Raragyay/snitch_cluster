@@ -370,7 +370,6 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
     // SSR start address need to be configured each time
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, A);
     snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, B);
-    snrt_ssr_enable();
 
     for (uint32_t m = 0; m < M; m++) {
         uint32_t n = 0;
@@ -379,10 +378,10 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
 
             // Load intermediate result
             if (bet) {
-                c[0] = C[m * ldC + n + 0];
-                c[1] = C[m * ldC + n + 1];
-                c[2] = C[m * ldC + n + 2];
-                c[3] = C[m * ldC + n + 3];
+                c[0] = C[m * ldC + n + 0] * bet;
+                c[1] = C[m * ldC + n + 1] * bet;
+                c[2] = C[m * ldC + n + 2] * bet;
+                c[3] = C[m * ldC + n + 3] * bet;
                 // c[4] = C[m * ldC + n + 4];
                 // c[5] = C[m * ldC + n + 5];
                 // c[6] = C[m * ldC + n + 6];
@@ -397,6 +396,7 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
                 // c[6] = 0.0;
                 // c[7] = 0.0;
             }
+            snrt_ssr_enable();
             asm volatile(
                 "frep.o %[n_frep], %[unroll], 0, 0 \n"
                 "fmadd.d %[c0], ft0, ft1, %[c0] \n"
@@ -412,6 +412,7 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
                   [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7])
                 : [ n_frep ] "r"(K - 1), [ unroll ] "i"(unroll)
                 : "ft0", "ft1", "ft2");
+            snrt_ssr_disable();
 
             // Store results back
             C[m * ldC + n + 0] = c[0];
@@ -426,7 +427,6 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
         }
 
         // Clean up of leftover columns
-        snrt_ssr_disable();
 
         for (; n < N; n++) {
             double c;
@@ -457,6 +457,9 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
     const uint32_t unroll = 8;
     const double alp = *ALPHA;
     const double bet = *BETA / alp;
+    const uint32_t int_bet = (uint32_t) *BETA;
+    register double ZERO = 0.0;
+    register uint32_t ONE = 1.0;
 
     // SSR strides and bounds only have to be configured
     // once in the beginning
@@ -501,86 +504,141 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
     // SSR start address need to be configured each time
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, A);
     snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, B);
+
+    uint32_t n_u = N/unroll;
     
 
     for (uint32_t m = 0; m < M; m++) {
         uint32_t n = 0;
-        for (uint32_t n0 = 0; n0 < N / unroll; n0++) {
+        for (uint32_t n0 = 0; n0 < n_u; n0++) {
             double c[unroll];
 
             // Load intermediate result
-            snrt_mcycle();
-            if (bet) {
-                if (bet == 1) {
-                c[0] = C[m * ldC + n + 0];
-                c[1] = C[m * ldC + n + 1];
-                c[2] = C[m * ldC + n + 2];
-                c[3] = C[m * ldC + n + 3];
-                c[4] = C[m * ldC + n + 4];
-                c[5] = C[m * ldC + n + 5];
-                c[6] = C[m * ldC + n + 6];
-                c[7] = C[m * ldC + n + 7];
-                } else {
-                c[0] = bet * C[m * ldC + n + 0];
-                c[1] = bet * C[m * ldC + n + 1];
-                c[2] = bet * C[m * ldC + n + 2];
-                c[3] = bet * C[m * ldC + n + 3];
-                c[4] = bet * C[m * ldC + n + 4];
-                c[5] = bet * C[m * ldC + n + 5];
-                c[6] = bet * C[m * ldC + n + 6];
-                c[7] = bet * C[m * ldC + n + 7];
+            // if (bet) {
+            //     if (bet == 1) {
+            //     c[0] = C[m * ldC + n + 0];
+            //     c[1] = C[m * ldC + n + 1];
+            //     c[2] = C[m * ldC + n + 2];
+            //     c[3] = C[m * ldC + n + 3];
+            //     c[4] = C[m * ldC + n + 4];
+            //     c[5] = C[m * ldC + n + 5];
+            //     c[6] = C[m * ldC + n + 6];
+            //     c[7] = C[m * ldC + n + 7];
+            //     } else {
+            //     c[0] = bet * C[m * ldC + n + 0];
+            //     c[1] = bet * C[m * ldC + n + 1];
+            //     c[2] = bet * C[m * ldC + n + 2];
+            //     c[3] = bet * C[m * ldC + n + 3];
+            //     c[4] = bet * C[m * ldC + n + 4];
+            //     c[5] = bet * C[m * ldC + n + 5];
+            //     c[6] = bet * C[m * ldC + n + 6];
+            //     c[7] = bet * C[m * ldC + n + 7];
 
-                }
-            } else {
-                c[0] = 0.0;
-                c[1] = 0.0;
-                c[2] = 0.0;
-                c[3] = 0.0;
-                c[4] = 0.0;
-                c[5] = 0.0;
-                c[6] = 0.0;
-                c[7] = 0.0;
-            }
-            snrt_mcycle();
-            return;
+            //     }
+            // } else {
+            //     c[0] = 0.0;
+            //     c[1] = 0.0;
+            //     c[2] = 0.0;
+            //     c[3] = 0.0;
+            //     c[4] = 0.0;
+            //     c[5] = 0.0;
+            //     c[6] = 0.0;
+            //     c[7] = 0.0;
+            // }
 
             snrt_ssr_enable();
             asm volatile(
+                "beqz %[int_beta], 1f\n"
+                "sub a0,%[int_beta],%[ONE]\n"
+                "beqz a0, 2f\n"
+
+                "fld ft10, 0(%[sum_addr]) \n"
+                "fmul.d ft10, ft10, %[beta] \n"
+                "fld ft3, 8(%[sum_addr]) \n"
+                "fmul.d ft3, ft3, %[beta]\n"
+                "fld ft4, 16(%[sum_addr]) \n"
+                "fmul.d ft4, ft4, %[beta]\n"
+                "fld ft5, 24(%[sum_addr]) \n"
+                "fmul.d ft5, ft5, %[beta]\n"
+                "fld ft6, 32(%[sum_addr]) \n"
+                "fmul.d ft6, ft6, %[beta]\n"
+                "fld ft7, 40(%[sum_addr]) \n"
+                "fmul.d ft7, ft7, %[beta]\n"
+                "fld ft8, 48(%[sum_addr]) \n"
+                "fmul.d ft8, ft8, %[beta]\n"
+                "fld ft9, 56(%[sum_addr]) \n"
+                "fmul.d ft9, ft9, %[beta]\n"
+                "j 3f\n"
+
+                "1:\n"
+                "fcvt.d.w %[ZERO], zero\n"
+                "fsgnj.d ft10,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft3,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft4,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft5,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft6,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft7,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft8,%[ZERO],%[ZERO]\n"
+                "fsgnj.d ft9,%[ZERO],%[ZERO]\n"
+                "j 3f\n"            
+
+                "2:\n"
+                "fld ft10, 0(%[sum_addr]) \n"
+                "fld ft3, 8(%[sum_addr]) \n"
+                "fld ft4, 16(%[sum_addr]) \n"
+                "fld ft5, 24(%[sum_addr]) \n"
+                "fld ft6, 32(%[sum_addr]) \n"
+                "fld ft7, 40(%[sum_addr]) \n"
+                "fld ft8, 48(%[sum_addr]) \n"
+                "fld ft9, 56(%[sum_addr]) \n"
+
+                "3:\n"
                 "frep.o %[n_frep], %[unroll], 0, 0 \n"
-                "fmadd.d %[c0], ft0, ft1, %[c0] \n"
-                "fmadd.d %[c1], ft0, ft1, %[c1] \n"
-                "fmadd.d %[c2], ft0, ft1, %[c2] \n"
-                "fmadd.d %[c3], ft0, ft1, %[c3] \n"
-                "fmadd.d %[c4], ft0, ft1, %[c4] \n"
-                "fmadd.d %[c5], ft0, ft1, %[c5] \n"
-                "fmadd.d %[c6], ft0, ft1, %[c6] \n"
-                "fmadd.d %[c7], ft0, ft1, %[c7] \n"
-                // "fmul.d %[c0], %[alpha], %[c0] \n"
-                // "fmul.d %[c1], %[alpha], %[c1] \n"
-                // "fmul.d %[c2], %[alpha], %[c2] \n"
-                // "fmul.d %[c3], %[alpha], %[c3] \n"
-                : [ c0 ] "+f"(c[0]), [ c1 ] "+f"(c[1]), [ c2 ] "+f"(c[2]),
-                  [ c3 ] "+f"(c[3]), [ c4 ] "+f"(c[4]), [ c5 ] "+f"(c[5]),
-                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7])
-                : [ n_frep ] "r"(K - 1), [ unroll ] "i"(unroll)//, [ alpha ] "f"(alp)
-                : "ft0", "ft1", "ft2");
+                "fmadd.d ft10, ft0, ft1, ft10 \n"
+                "fmadd.d ft3, ft0, ft1, ft3 \n"
+                "fmadd.d ft4, ft0, ft1, ft4 \n"
+                "fmadd.d ft5, ft0, ft1, ft5 \n"
+                "fmadd.d ft6, ft0, ft1, ft6 \n"
+                "fmadd.d ft7, ft0, ft1, ft7 \n"
+                "fmadd.d ft8, ft0, ft1, ft8 \n"
+                "fmadd.d ft9, ft0, ft1, ft9 \n"
+
+
+                "fmul.d ft10, %[alpha], ft10 \n"
+                "fmul.d ft3, %[alpha], ft3 \n"
+                "fmul.d ft4, %[alpha], ft4 \n"
+                "fmul.d ft5, %[alpha], ft5 \n"
+                "fmul.d ft6, %[alpha], ft6 \n"
+                "fmul.d ft7, %[alpha], ft7 \n"
+                "fmul.d ft8, %[alpha], ft8 \n"
+                "fmul.d ft9, %[alpha], ft9 \n"
+                "fsd ft10, 0(%[sum_addr]) \n"
+                "fsd ft3, 8(%[sum_addr]) \n"
+                "fsd ft4, 16(%[sum_addr]) \n"
+                "fsd ft5, 24(%[sum_addr]) \n"
+                "fsd ft6, 32(%[sum_addr]) \n"
+                "fsd ft7, 40(%[sum_addr]) \n"
+                "fsd ft8, 48(%[sum_addr]) \n"
+                "fsd ft9, 56(%[sum_addr]) \n"
+
+                : 
+                : [ n_frep ] "r"(K - 1), [ unroll ] "i"(unroll), [ alpha ] "f"(alp), [ beta ] "f"(bet), [ int_beta ] "r"(int_bet), [ ZERO ] "f"(ZERO), [ ONE ] "r"(ONE), [ sum_addr ] "r"(C + m * ldC + n)
+                : "ft0", "ft1", "ft10", "ft3", "ft5", "ft6", "ft7", "ft8", "ft9", "ft2", "a0");
             snrt_ssr_disable();
-            snrt_mcycle();
 
             // Store results back
-            C[m * ldC + n + 0] = alp * c[0];
-            C[m * ldC + n + 1] = alp * c[1];
-            C[m * ldC + n + 2] = alp * c[2];
-            C[m * ldC + n + 3] = alp * c[3];
-            C[m * ldC + n + 4] = alp * c[4];
-            C[m * ldC + n + 5] = alp * c[5];
-            C[m * ldC + n + 6] = alp * c[6];
-            C[m * ldC + n + 7] = alp * c[7];
+            // C[m * ldC + n + 0] = alp * c[0];
+            // C[m * ldC + n + 1] = alp * c[1];
+            // C[m * ldC + n + 2] = alp * c[2];
+            // C[m * ldC + n + 3] = alp * c[3];
+            // C[m * ldC + n + 4] = alp * c[4];
+            // C[m * ldC + n + 5] = alp * c[5];
+            // C[m * ldC + n + 6] = alp * c[6];
+            // C[m * ldC + n + 7] = alp * c[7];
             n += unroll;
         }
 
         // Clean up of leftover columns
-    snrt_mcycle();
 
 
         for (; n < N; n++) {
@@ -598,7 +656,6 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
             }
             C[m * ldC + n] = alp * c;
         }
-    snrt_mcycle();
 
         snrt_ssr_enable();
     }

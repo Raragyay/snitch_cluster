@@ -16,7 +16,7 @@ base_config = {
     "tile_ci": 16,
     "prec": 64,
     "impl_opt_level": "MULTICORE_OPT",
-    "is_forward": False,
+    "is_forward": True,
     "is_training": False,
 }
 
@@ -37,13 +37,9 @@ config_path = base_path.parent / "data" / "params.hjson"
 target_snitch_cluster_path = (
     base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 )
-grad_ifmap_errors_path = (
-    base_path.parent / "batchnorm_verify_results" / "grad_ifmap.csv"
+ofmap_errors_path = (
+    base_path.parent / "batchnorm_verify_results" / "ofmap.csv"
 )
-grad_weight_errors_path = (
-    base_path.parent / "batchnorm_verify_results" / "grad_weight.csv"
-)
-grad_bias_errors_path = base_path.parent / "batchnorm_verify_results" / "grad_bias.csv"
 
 columns = [
     "prec",
@@ -57,12 +53,14 @@ columns = [
     "fpss_fpu_occupancy",
     "total_ipc",
     "main_loop_snitch_occupancy",
-    "grad_ifmap_max_abs_err",
-    "grad_ifmap_max_rel_err",
-    "grad_weight_max_abs_err",
-    "grad_weight_max_rel_err",
-    "grad_bias_max_abs_err",
-    "grad_bias_max_rel_err",
+    "ofmap_max_abs_err", 
+    "ofmap_max_rel_err",
+    # "grad_ifmap_max_abs_err",
+    # "grad_ifmap_max_rel_err",
+    # "grad_weight_max_abs_err",
+    # "grad_weight_max_rel_err",
+    # "grad_bias_max_abs_err",
+    # "grad_bias_max_rel_err",
     "time_spent_waiting_in_barrier",
 ]
 index = ["prec", "impl", "C", "H", "W"]
@@ -88,7 +86,7 @@ def flatten_config_list(config_modifiers):
 def get_scaling_results_path(whole_block):
     return (
         base_path.parent
-        / f"scaling_results{'' if not whole_block else '_whole_block'}.csv"
+        / f"fe_scaling_results{'' if not whole_block else '_whole_block'}.csv"
     )
 
 
@@ -139,48 +137,52 @@ non_aligned_sizes = [
 config_modifiers = {
     64: {
         # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-        "SINGLE_CORE_OPT": [
-            *small_sizes,
-            format_size(16, 8, 8),
-            format_size(16, 16, 8),
-            format_size(16, 16, 16),
-        ],
+        # "SINGLE_CORE_OPT": [
+        #     *small_sizes,
+        #     format_size(16, 8, 8),
+        #     format_size(16, 16, 8),
+        #     format_size(16, 16, 16),
+        # ],
         "MULTICORE_OPT": [
             *small_sizes,
+            format_size(8, 8, 8),
             format_size(16, 8, 8),
             format_size(16, 16, 8),
             format_size(16, 16, 16),
+            # format_size(16, 16, 16, tile_ci=8),
             format_size(16, 64, 64),
+            # format_size(32, 16, 16, tile_ci=16),
             format_size(32, 16, 16),
+            # format_size(32, 32, 16, tile_ci=16),
             format_size(32, 32, 16),
             format_size(32, 32, 32),
             format_size(32, 64, 32),
             format_size(32, 64, 64),
         ],
     },
-    32: {
-        "SINGLE_CORE_OPT": [
-            *small_sizes,
-            *non_aligned_sizes,
-            format_size(16, 8, 8),
-            format_size(16, 16, 8),
-            format_size(16, 16, 16),
-        ],
-        "MULTICORE_OPT": [
-            *small_sizes,
-            format_size(15, 16, 16),
-            format_size(15, 23, 23),
-            format_size(16, 8, 8),
-            format_size(16, 16, 8),
-            format_size(16, 16, 16),
-            format_size(16, 64, 64),
-            format_size(32, 16, 16),
-            format_size(32, 32, 16),
-            format_size(32, 32, 32),
-            format_size(32, 64, 32),
-            format_size(32, 64, 64),
-        ],
-    },
+    # 32: {
+    #     "SINGLE_CORE_OPT": [
+    #         *small_sizes,
+    #         *non_aligned_sizes,
+    #         format_size(16, 8, 8),
+    #         format_size(16, 16, 8),
+    #         format_size(16, 16, 16),
+    #     ],
+    #     "MULTICORE_OPT": [
+    #         *small_sizes,
+    #         format_size(15, 16, 16),
+    #         format_size(15, 23, 23),
+    #         format_size(16, 8, 8),
+    #         format_size(16, 16, 8),
+    #         format_size(16, 16, 16),
+    #         format_size(16, 64, 64),
+    #         format_size(32, 16, 16),
+    #         format_size(32, 32, 16),
+    #         format_size(32, 32, 32),
+    #         format_size(32, 64, 32),
+    #         format_size(32, 64, 64),
+    #     ],
+    # },
     # 16: {
     #     "SINGLE_CORE_OPT": [
     #         *small_sizes,
@@ -278,15 +280,15 @@ def main():
                 0, f"{main_loop_mcycle_section}_snitch_occupancy"
             ]
 
-            grad_ifmap_max_abs_err, grad_ifmap_max_rel_err = pd.read_csv(
-                grad_ifmap_errors_path
+            ofmap_max_abs_err, ofmap_max_rel_err = pd.read_csv(
+                ofmap_errors_path
             ).max()[2:4]
-            grad_weight_max_abs_err, grad_weight_max_rel_err = pd.read_csv(
-                grad_weight_errors_path
-            ).max()[2:4]
-            grad_bias_max_abs_err, grad_bias_max_rel_err = pd.read_csv(
-                grad_bias_errors_path
-            ).max()[2:4]
+            # grad_weight_max_abs_err, grad_weight_max_rel_err = pd.read_csv(
+            #     grad_weight_errors_path
+            # ).max()[2:4]
+            # grad_bias_max_abs_err, grad_bias_max_rel_err = pd.read_csv(
+            #     grad_bias_errors_path
+            # ).max()[2:4]
             try:
                 perf_counters_raw = subprocess.check_output(
                     r"grep -oPh 'unknown_7c4.*#; .* = \K[0-9x]+' logs/trace_hart_00000000.txt",
@@ -317,28 +319,9 @@ def main():
                 / "logs"
                 / f"barrier-timings-for-mcycle-{main_loop_mcycle_section}.csv"
             )
-            if impl == "MULTICORE_OPT":
-                # 0th one matters - first load
-                # 1st one matters - first tile load in
-                # for looped, 2nd one doesn't matter because it is info.
-                # for looped, 3rd, 5th, and so on matter
-                # for non looped, 2nd one also doesn't matter because dma immediately waits
-                # so the potentially dma-bound ones are 0, 1, odd, and last barrier
-                total_time_waiting_in_barrier = sum(
-                    (barrier_times["core_8"] - barrier_times["core_0"])
-                    .clip(0, None)
-                    .iloc[
-                        [
-                            i
-                            for i in barrier_times.index
-                            if i in (0, 1, barrier_times.index[-1]) or i % 2 == 1
-                        ]
-                    ]
-                )
-            else:
-                total_time_waiting_in_barrier = sum(
-                    (barrier_times["core_8"] - barrier_times["core_0"]).clip(0, None)
-                )
+            total_time_waiting_in_barrier = sum(
+                (barrier_times["core_8"] - barrier_times["core_0"]).clip(0, None)
+            )
 
             data.append(
                 (
@@ -353,25 +336,21 @@ def main():
                     main_loop_fpu_occupancy,
                     main_loop_total_ipc,
                     main_loop_snitch_occupancy,
-                    grad_ifmap_max_abs_err,
-                    grad_ifmap_max_rel_err,
-                    grad_weight_max_abs_err,
-                    grad_weight_max_rel_err,
-                    grad_bias_max_abs_err,
-                    grad_bias_max_rel_err,
+                    ofmap_max_abs_err,
+                    ofmap_max_rel_err,
                     total_time_waiting_in_barrier,
                     *perf_counters_int,
                 )
             )
             subprocess.run(
-                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
+                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results_fe/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,
             ).check_returncode()
             subprocess.run(
-                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
+                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results_fe/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,

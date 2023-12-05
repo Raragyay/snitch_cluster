@@ -57,11 +57,15 @@ typedef struct {
 typedef struct {
     uint32_t num_points_work_in_tile;  // distinct from tile size
     union {
+        uint32_t work_mod_unroll; // Generic name for dma
+        uint32_t work_mod_1;
         uint32_t work_mod_2;
         uint32_t work_mod_3;
         uint32_t work_mod_4;
     };
     union {
+        uint32_t work_div_unroll_sub_1; // Generic name for dma
+        uint32_t work_div_1_sub_1;
         uint32_t work_div_2_sub_1;
         uint32_t work_div_3_sub_1;
         uint32_t work_div_4_sub_1;

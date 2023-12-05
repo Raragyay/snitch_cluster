@@ -1019,8 +1019,8 @@ static inline void batchnorm_backward_training_tiling(
 
     double *used_tcdm_end_addr =
         (double *)(snrt_l1_end_addr() -
-                   (snrt_l1_end_addr() - snrt_l1_start_addr()) /
-                       4);  // use 3/4 for now
+                   ((1 << SNRT_LOG2_STACK_SIZE) + 8) *
+                       (snrt_cluster_core_num() + 1));  // + 1 for safety
     ptrdiff_t space_left = used_tcdm_end_addr - ptr;
     ptrdiff_t tile_size_in_points = (space_left) / (2 * 2 * C);
 
@@ -1038,11 +1038,12 @@ static inline void batchnorm_backward_training_tiling(
     snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load,
         grad_ofmap_load, ifmap_load;
 
-    uint32_t doubles_loadable = ceildiv(C, num_compute_cores) * 50 * 7;
+    uint32_t doubles_loadable =
+        max(ceildiv(C, num_compute_cores) * 50 * 7, 128);
     uint32_t points_loadable = doubles_loadable / C;
-    // uint32_t work_in_tile = min(min(points_loadable, tile_size_in_points),
-    // num_points);
-    uint32_t work_in_tile = 4;
+    uint32_t work_in_tile =
+        min(min(points_loadable, tile_size_in_points), num_points);
+    // uint32_t work_in_tile = 4;
     uint32_t work_left = num_points;
     uint32_t work_mod_3 = work_in_tile % 3;
     uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
@@ -1056,12 +1057,16 @@ static inline void batchnorm_backward_training_tiling(
         buf_flag = !buf_flag;
     }
 
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
     uint32_t start_dma_load = snrt_mcycle();
     if (snrt_is_dm_core()) {
         grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                                            grad_ofmap_len * sizeof(double));
+                                            work_in_tile * C * sizeof(double));
         ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
-                                       ifmap_len * sizeof(double));
+                                       work_in_tile * C * sizeof(double));
         curr_mean_load = snrt_dma_start_1d(current_mean_scratch,
                                            l->current_mean, C * sizeof(double));
         curr_var_load = snrt_dma_start_1d(invstd_scratch, l->current_var,
@@ -1121,9 +1126,9 @@ static inline void batchnorm_backward_training_tiling(
         dm_comm->work_div_4_sub_1 = work_div_4_sub_1;
         buf_flag = 0;
         grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                                            grad_ofmap_len * sizeof(double));
+                                            work_in_tile * C * sizeof(double));
         ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
-                                       ifmap_len * sizeof(double));
+                                       work_in_tile * C * sizeof(double));
         snrt_dma_wait(weight_load);
         snrt_dma_wait(grad_ofmap_load);
         snrt_dma_wait(ifmap_load);
@@ -1235,6 +1240,8 @@ static inline void batchnorm_backward_training_tiling(
     }
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 }
 
 static inline void batchnorm_backward_training(

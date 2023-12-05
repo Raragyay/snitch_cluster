@@ -1874,6 +1874,7 @@ batchnorm_backward_training_tile_fp64_looped_1(
         num_channels_to_process,  // dimension of outer loop
         inner_loop_stride,        // stride per inner loop iteration: 1 point
         outer_loop_stride);       // stride per outer loop iteration
+    snrt_ssr_repeat(SNRT_SSR_DM0, 2);
     snrt_ssr_enable();
     // TODO: fix num_channels_work_for_core == 0.
     do {
@@ -1901,30 +1902,23 @@ batchnorm_backward_training_tile_fp64_looped_1(
             // DUMP(work_div_3_sub_1);
             if (frep) {
                 asm volatile(
-                    "frep.o %[n_frep], 15, 0, 0 \n"
-                    "fadd.d ft3, ft0, %[zero] \n"
-                    "fadd.d ft5, ft0, %[zero] \n"
-                    "fadd.d ft7, ft0, %[zero] \n"
+                    "frep.o %[n_frep], 9, 0, 0 \n"
                     "fsub.d ft4, ft1, %[current_mean]\n"
                     "fsub.d ft6, ft1, %[current_mean]\n"
                     "fsub.d ft8, ft1, %[current_mean]\n"
-                    "fmul.d ft4, ft4, ft3\n"
-                    "fmul.d ft6, ft6, ft5\n"
-                    "fmul.d ft8, ft8, ft7\n"
-                    "fadd.d %[sum_0], ft3, %[sum_0] \n"
-                    "fadd.d %[sum_1], ft5, %[sum_1] \n"
-                    "fadd.d %[sum_2], ft7, %[sum_2] \n"
-                    "fadd.d %[dotp_0], ft4, %[dotp_0]\n"
-                    "fadd.d %[dotp_1], ft6, %[dotp_1]\n"
-                    "fadd.d %[dotp_2], ft8, %[dotp_2]\n"
+                    "fadd.d %[sum_0], ft0, %[sum_0] \n"
+                    "fmadd.d %[dotp_0], ft4, ft0,%[dotp_0]\n"
+                    "fadd.d %[sum_1], ft0, %[sum_1] \n"
+                    "fmadd.d %[dotp_1], ft6, ft0,%[dotp_1]\n"
+                    "fadd.d %[sum_2], ft0, %[sum_2] \n"
+                    "fmadd.d %[dotp_2], ft8, ft0,%[dotp_2]\n"
                     : [sum_0] "+fr"(sum_0), [sum_1] "+fr"(sum_1),
                       [sum_2] "+fr"(sum_2), [dotp_0] "+fr"(dotp_0),
                       [dotp_1] "+fr"(dotp_1), [dotp_2] "+fr"(dotp_2)
                     : [current_mean] "fr"(current_mean), [zero] "fr"(ZERO),
                       [n_frep] "r"(
                           work_div_3_sub_1)  // we repeat n_frep+1 times
-                    : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",
-                      "ft8");
+                    : "ft0", "ft1", "ft2", "ft4", "ft6", "ft8");
             }
 
             register uint32_t channel_stride_in_bytes;
@@ -2014,23 +2008,17 @@ batchnorm_backward_training_tile_fp64_looped_1(
                                                         // yes, then mod is 1
                 "bnez %[mod_temp], 1f\n"                // jump to 1 if yes
                 "2:\n"
-                "fadd.d ft3, ft0, %[zero] \n"
-                "fadd.d ft5, ft0, %[zero] \n"
                 "fsub.d ft4, ft1, %[current_mean]\n"
                 "fsub.d ft6, ft1, %[current_mean]\n"
-                "fmul.d ft4, ft4, ft3\n"
-                "fmul.d ft6, ft6, ft5\n"
-                "fadd.d %[sum_0], ft3, %[sum_0] \n"
-                "fadd.d %[sum_1], ft5, %[sum_1] \n"
-                "fadd.d %[dotp_0], ft4, %[dotp_0]\n"
-                "fadd.d %[dotp_1], ft6, %[dotp_1]\n"
+                "fadd.d %[sum_0], ft0, %[sum_0] \n"
+                "fmadd.d %[dotp_0], ft4, ft0,%[dotp_0]\n"
+                "fadd.d %[sum_1], ft0, %[sum_1] \n"
+                "fmadd.d %[dotp_1], ft6, ft0,%[dotp_1]\n"
                 "j 0f\n"
                 "1:\n"
-                "fadd.d ft3, ft0, %[zero] \n"
                 "fsub.d ft4, ft1, %[current_mean]\n"
-                "fmul.d ft4, ft4, ft3\n"
-                "fadd.d %[sum_0], ft3, %[sum_0] \n"
-                "fadd.d %[dotp_0], ft4, %[dotp_0]\n"
+                "fadd.d %[sum_0], ft0, %[sum_0] \n"
+                "fmadd.d %[dotp_0], ft4, ft0,%[dotp_0]\n"
                 "0:\n"
                 : [sum_0] "+fr"(sum_0), [sum_1] "+fr"(sum_1),
                   [sum_2] "+fr"(sum_2), [dotp_0] "+fr"(dotp_0),
@@ -2082,6 +2070,7 @@ batchnorm_backward_training_tile_fp64_looped_1(
     } while (work_in_tile != 0);
     // notify last tile done
     snrt_ssr_disable();
+    snrt_ssr_repeat(SNRT_SSR_DM0, 1);
     snrt_cluster_hw_barrier();
 }
 

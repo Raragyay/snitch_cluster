@@ -246,7 +246,7 @@ batchnorm_forward_tile_fp64_looped(
                 :
                 [buf_flag] "+r"(buf_flag), [gamma_scratch] "+r"(gamma_scratch),
                 [beta_scratch] "+r"(beta_scratch),
-                [work_in_tile] "=r"(work_in_tile), [prev_work] "+r"(prev_work),
+                [work_in_tile] "+r"(work_in_tile), [prev_work] "+r"(prev_work),
                 [work_div_1_sub_1] "=r"(work_sub_1),
                 [ifmap_scratch] "+r"(ifmap_scratch),
                 [ofmap_scratch] "+r"(ofmap_scratch)
@@ -747,10 +747,10 @@ batchnorm_backward_tile_fp64_looped(
                   [invstd_scratch] "+r"(invstd_scratch),
                   [weight_scratch] "+r"(weight_scratch),
                   [running_mean_scratch] "+r"(running_mean_scratch),
-                  [work_in_tile] "=r"(work_in_tile),
+                  [work_in_tile] "+r"(work_in_tile),
                   [next_work_mod_2] "=r"(next_work_mod_2),
                   [prev_work] "+r"(prev_work), [frep] "+r"(frep),
-                  [work_div_2_sub_1] "=r"(work_div_2_sub_1),
+                  [work_div_2_sub_1] "+r"(work_div_2_sub_1),
                   [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
                   [grad_ifmap_scratch] "+r"(grad_ifmap_scratch),
                   [ifmap_scratch] "+r"(ifmap_scratch)
@@ -1278,10 +1278,10 @@ batchnorm_backward_tile_fp32_looped(
                   [invstd_scratch] "+r"(invstd_scratch),
                   [weight_scratch] "+r"(weight_scratch),
                   [running_mean_scratch] "+r"(running_mean_scratch),
-                  [work_in_tile] "=r"(work_in_tile),
+                  [work_in_tile] "+r"(work_in_tile),
                   [next_work_mod_2] "=r"(next_work_mod_2),
                   [prev_work] "+r"(prev_work), [frep] "+r"(frep),
-                  [work_div_2_sub_1] "=r"(work_div_2_sub_1),
+                  [work_div_2_sub_1] "+r"(work_div_2_sub_1),
                   [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
                   [grad_ifmap_scratch] "+r"(grad_ifmap_scratch),
                   [ifmap_scratch] "+r"(ifmap_scratch)
@@ -1898,6 +1898,7 @@ batchnorm_backward_training_tile_fp64_looped_1(
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             // Can only manual unroll 5 times since the max for frep is 16
+            // DUMP(work_div_3_sub_1);
             if (frep) {
                 asm volatile(
                     "frep.o %[n_frep], 15, 0, 0 \n"
@@ -1985,10 +1986,10 @@ batchnorm_backward_training_tile_fp64_looped_1(
                 "2:\n"
                 : [buf_flag] "+r"(buf_flag),
                   [current_mean_scratch] "+r"(current_mean_scratch),
-                  [work_in_tile] "=r"(work_in_tile),
+                  [work_in_tile] "+r"(work_in_tile),
                   [next_work_mod_3] "=r"(next_work_mod_3),
                   [prev_work] "+r"(prev_work), [frep] "+r"(frep),
-                  [work_div_3_sub_1] "=r"(work_div_3_sub_1),
+                  [work_div_3_sub_1] "+r"(work_div_3_sub_1),
                   [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
                   [ifmap_scratch] "+r"(ifmap_scratch)
                 : [i] "r"(i),
@@ -2451,10 +2452,10 @@ batchnorm_backward_training_tile_fp64_looped_2(
                   [current_mean_scratch] "+r"(current_mean_scratch),
                   [k_scratch] "+r"(k_scratch),
                   [grad_mean_scratch] "+r"(grad_mean_scratch),
-                  [work_in_tile] "=r"(work_in_tile),
+                  [work_in_tile] "+r"(work_in_tile),
                   [next_work_mod_4] "=r"(next_work_mod_4),
                   [prev_work] "+r"(prev_work), [frep] "+r"(frep),
-                  [work_div_4_sub_1] "=r"(work_div_4_sub_1),
+                  [work_div_4_sub_1] "+r"(work_div_4_sub_1),
                   [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
                   [grad_ifmap_scratch] "+r"(grad_ifmap_scratch),
                   [ifmap_scratch] "+r"(ifmap_scratch)

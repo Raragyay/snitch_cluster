@@ -1453,5 +1453,7 @@ static inline void batchnorm_backward_training(
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_ifmap, grad_ifmap,
                           C * num_points * sizeof(double));
+        snrt_dma_wait_all();
     }
+    snrt_cluster_hw_barrier();
 }

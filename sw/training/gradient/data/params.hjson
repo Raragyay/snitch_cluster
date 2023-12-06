@@ -1,8 +1,15 @@
 // Parameters for gradient update
 
 {
+<<<<<<< HEAD
     M:96,
     N:97,
     K:96,
     prec: 32,
+=======
+    M:16,
+    N:16,
+    K:16,
+    prec: 64,
+>>>>>>> bb3afb217013a6e23f3dd483bc28ef858ac101be
 }

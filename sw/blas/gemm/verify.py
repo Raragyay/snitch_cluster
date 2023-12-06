@@ -37,7 +37,8 @@ def main():
     a = np.array(bytes_to_float(elf.get_symbol_contents('a'), prec='64'))
     b = np.array(bytes_to_float(elf.get_symbol_contents('b'), prec='64'))
     c = np.array(bytes_to_float(elf.get_symbol_contents('c'), prec='64'))
-    beta = bytes_to_int(elf.get_symbol_contents('BETA'), prec='32', signedness='unsigned')[0]
+    alpha = bytes_to_float(elf.get_symbol_contents('ALPHA'), prec='64')
+    beta = bytes_to_float(elf.get_symbol_contents('BETA'), prec='64')
     m = bytes_to_int(elf.get_symbol_contents('M'), prec='32', signedness='unsigned')[0]
     n = bytes_to_int(elf.get_symbol_contents('N'), prec='32', signedness='unsigned')[0]
     k = bytes_to_int(elf.get_symbol_contents('K'), prec='32', signedness='unsigned')[0]
@@ -59,7 +60,7 @@ def main():
     c = np.reshape(c, (m, n))
 
     # Verify results
-    c_golden = golden_model(1, a, b, beta, c).flatten()
+    c_golden = golden_model(alpha, a, b, beta, c).flatten()
 
     absolute_err = np.absolute(c_golden - c_actual)
     fail = np.any(absolute_err > ERR_THRESHOLD)

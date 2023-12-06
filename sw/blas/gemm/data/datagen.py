@@ -92,7 +92,7 @@ def emit_header(**kwargs):
             * (1.0 + mantissa_b.astype(np.double) / (2**2))
         _c = ((-1.0)**sign_c.astype(np.double))*(2.0**(exponent_c.astype(np.double)-15.0)) \
             * (1.0 + mantissa_c.astype(np.double) / (2**2))
-        result = golden_model(1, _a, _b, kwargs['beta'], _c)
+        result = golden_model(kwargs['alpha'], _a, _b, kwargs['beta'], _c)
         a = sign_a << 7 | exponent_a << FP8_FORMATS['fp8']['mant'] | mantissa_a
         b = sign_b << 7 | exponent_b << FP8_FORMATS['fp8']['mant'] | mantissa_b
         c = sign_c << 7 | exponent_c << FP8_FORMATS['fp8']['mant'] | mantissa_c
@@ -100,7 +100,7 @@ def emit_header(**kwargs):
         a = np.random.rand(M, K).astype(dtype)
         b = np.random.rand(K, N).astype(dtype)
         c = np.random.rand(M, N).astype(dtype)
-        result = golden_model(1, a, b, kwargs['beta'], c)
+        result = golden_model(kwargs['alpha'], a, b, kwargs['beta'], c)
 
     # Store matrices in transposed form if requested
     a = a.T if kwargs['ta'] else a
@@ -112,7 +112,8 @@ def emit_header(**kwargs):
     data_str += [format_scalar_definition('uint32_t', 'K', K)]
     data_str += [format_scalar_definition('uint32_t', 'TA', int(kwargs['ta']))]
     data_str += [format_scalar_definition('uint32_t', 'TB', int(kwargs['tb']))]
-    data_str += [format_scalar_definition('uint32_t', 'BETA', kwargs['beta'])]
+    data_str += [format_scalar_definition(C_TYPES[str(kwargs['prec'])], 'ALPHA', kwargs['alpha'])]
+    data_str += [format_scalar_definition(C_TYPES[str(kwargs['prec'])], 'BETA', kwargs['beta'])]
     data_str += [format_scalar_definition('uint32_t', 'dtype_size', kwargs['prec']//8)]
     data_str += [format_scalar_definition('uint32_t', 'expand', kwargs['expand'])]
     data_str += [format_scalar_definition('uint32_t', 'm_tiles', kwargs['m_tiles'])]

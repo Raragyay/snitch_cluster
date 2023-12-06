@@ -14,7 +14,7 @@ SECTION  ?=
 
 APP     ?= gemm
 SRCS    ?= $(realpath $(SRC_DIR)/main.c)
-INCDIRS ?= $(DATA_DIR) $(SRC_DIR)
+INCDIRS ?= $(DATA_DIR) $(SRC_DIR) ../$(MK_DIR)/
 
 DATAGEN_PY = $(DATA_DIR)/datagen.py
 DATA_H     = $(DATA_DIR)/data.h

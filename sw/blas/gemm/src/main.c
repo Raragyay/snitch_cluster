@@ -16,7 +16,7 @@
 int main() {
     int retcode = gemm(dtype_size, expand, 1, parallelize_m, parallelize_k,
                        m_tiles, n_tiles, k_tiles, 1, 1, 1, TA, TB, M, N, K,
-                       1, a, b, BETA, c);
+                       ALPHA, a, b, BETA, c);
 
 // TODO: currently only works for single cluster otherwise need to
 //       synchronize all cores here

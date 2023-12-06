@@ -20,7 +20,15 @@ from data_utils import bytes_to_float, bytes_to_int  # noqa: E402
 
 
 ERR_THRESHOLD = 0.001
-PREC = '64'
+PREC = '32'
+
+NUMPY_TYPES = {
+    '64': np.double,
+    '32': np.single,
+    '16': np.half,
+    '8': np.ubyte
+}
+
 
 def main():
     # Run simulation and get outputs
@@ -29,7 +37,7 @@ def main():
                                         snitch_bin=args.snitch_bin,
                                         symbols_bin=args.symbols_bin,
                                         log=args.log,
-                                        output_uids=['GRAD_A', 'GRAD_B',"stalls_grad_A","stalls_grad_B"])
+                                        output_uids=['GRAD_A', 'GRAD_B'])
     grad_A_actual = np.array(bytes_to_float(raw_results['GRAD_A'], prec=PREC))
     grad_B_actual = np.array(bytes_to_float(raw_results['GRAD_B'], prec=PREC))
     actuals = np.concatenate((grad_A_actual,grad_B_actual))
@@ -48,21 +56,23 @@ def main():
     N = bytes_to_int(elf.get_symbol_contents('N'), prec='32', signedness='unsigned')[0]
     K = bytes_to_int(elf.get_symbol_contents('K'), prec='32', signedness='unsigned')[0]
 
-    A = np.reshape(A, (M,K))
-    B = np.reshape(B, (K,N))
-    GRAD_C = np.reshape(GRAD_C, (M,N))
+    dtype = NUMPY_TYPES[PREC]
+    A = np.reshape(A, (M,K)).astype(dtype)
+    B = np.reshape(B, (K,N)).astype(dtype)
+    GRAD_C = np.reshape(GRAD_C, (M,N)).astype(dtype)
 
-    stalls_grad_A = np.array(bytes_to_int(raw_results['stalls_grad_A'], prec='32', signedness='unsigned'))
-    stalls_grad_B = np.array(bytes_to_int(raw_results['stalls_grad_B'], prec='32', signedness='unsigned'))
-
+    print("M",M,"N",N,"K",K)
     #print("A\n",np.transpose(A))    
-    #print("GRAD_C:\n", GRAD_C)
-    #print("B:\n",np.transpose(B))
+    print("GRAD_C:\n", GRAD_C)
+    print("B:\n",np.transpose(B))
 
     # Verify results
+
     grad_A_golden, grad_B_golden = golden_model(alpha, A,B,GRAD_C)
     goldens = np.concatenate((grad_A_golden.flatten(),grad_B_golden.flatten()))
 
+    goldens = grad_A_golden.flatten()
+    actuals = grad_A_actual
     
 
     #absolute_err = np.absolute(  actuals - goldens )
@@ -74,8 +84,8 @@ def main():
                                          Path.cwd() / 'gradient_results.csv')
     else:
         print("SUCCESS\n")
-        # verification.dump_results_to_csv([actuals, goldens, absolute_err],
-        #                                  Path.cwd() / 'gradient_results.csv')
+        verification.dump_results_to_csv([actuals, goldens, absolute_err],
+                                          Path.cwd() / 'gradient_results.csv')
     return int(fail)
 
 

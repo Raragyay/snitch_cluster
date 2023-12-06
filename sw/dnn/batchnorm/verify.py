@@ -15,6 +15,7 @@ from data.golden_models import (
     golden_model_backward,
     golden_model_backward_training,
     golden_model_forward_eval,
+    golden_model_forward_training,
 )
 from data.datagen_constants import (
     ifmap_uid,
@@ -188,6 +189,53 @@ def verify_forward_eval(elf):
     return prec, model_kwargs, simulation_output_defs, golden_model_forward_eval
 
 
+def verify_forward_training(elf):
+    layer_struct = {
+        "CI": "I",
+        "IH": "I",
+        "IW": "I",
+        "ifmap": "I",
+        "ofmap": "I",
+        "running_mean": "I",
+        "running_var": "I",
+        "weight": "I",
+        "bias": "I",
+        "eps": "f",
+        "momentum": "f",
+        "dtype": "I",
+    }
+    layer = bytes_to_struct(
+        elf.get_symbol_contents(struct_decls[BatchNormMode.FORWARD_TRAINING][1]),
+        layer_struct,
+    )
+
+    C, H, W, eps, dtype, momentum = itemgetter(
+        "CI", "IH", "IW", "eps", "dtype", "momentum"
+    )(layer)
+    prec = PRECISION_T[dtype]
+
+    input_tensor_shapes = [
+        (ifmap_uid, (1, H, W, C)),
+        (running_mean_uid, (C,)),
+        (running_var_uid, (C,)),
+        (weight_uid, (C,)),
+        (bias_uid, (C,)),
+    ]
+    model_kwargs = extract_torch_tensors_from_elf(elf, prec, input_tensor_shapes)
+    model_kwargs["eps"] = eps
+    model_kwargs["dtype"] = floating_point_torch_type(prec)
+    model_kwargs["momentum"] = momentum
+
+    # the order of this is the order that it should appear in the model
+    simulation_output_defs = [
+        (ofmap_uid, (1, H, W, C)),
+        (running_mean_uid, (C,)),
+        (running_var_uid, (C,)),
+    ]
+
+    return prec, model_kwargs, simulation_output_defs, golden_model_forward_training
+
+
 def verify_backward_eval(elf):
     backward_layer_struct = {
         "CI": "I",
@@ -301,7 +349,12 @@ def main():
     is_training = bytes_to_int(elf.get_symbol_contents("is_training"))[0]
 
     if is_forward and is_training:
-        raise NotImplementedError
+        (
+            prec,
+            golden_model_inputs,
+            simulation_output_defs,
+            model_fn,
+        ) = verify_forward_training(elf)
     elif is_forward and not is_training:
         (
             prec,

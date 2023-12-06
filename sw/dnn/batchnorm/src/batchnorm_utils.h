@@ -277,6 +277,174 @@ batchnorm_forward_tile_fp64_looped(
     snrt_cluster_hw_barrier();
 }
 
+static inline void __attribute__((always_inline))
+batchnorm_collect_statistics_fp64_no_loop(
+    const double* ifmap_scratch, double* current_mean_scratch,
+    double* current_var_scratch,
+    uint32_t num_points,  // of all batches. represents N in computation of mean
+                          // and var
+    uint32_t num_bytes_per_point,
+    uint32_t num_points_work_for_core,  // requires: > 0
+    uint32_t work_div_4_sub_1, uint32_t work_mod_4,
+    uint32_t num_channels_to_process,  //  requires: > 0
+    uint32_t channel_stride) {
+    // access pattern: iterate over the different channels,
+    //   then over the different points
+    // Split work over channels to maximize efficacy of frep and avoid tcdm
+    // contention. outside loop: channels inside loop: points
+    snrt_ssr_loop_3d(
+        SNRT_SSR_DM0,
+        num_points_work_for_core,  // dimension of inner loop
+        2,                         // repeat values once
+        num_channels_to_process,   // dimension of outer loop
+        num_bytes_per_point,       // stride per inner loop iteration: 1 point
+        0,                         // repeat values once per channel
+        channel_stride * sizeof(double));  // stride per outer loop iteration
+
+    register volatile uint32_t i =
+        0;  // updated during frep for pseudo-dual issue
+    register uint32_t frep = num_points_work_for_core >= 4;
+
+    register double ZERO asm("ft9");  // can consider fcvt instead
+    asm volatile("fcvt.d.w %[ZERO], zero\n"
+                 : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
+    register double sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+    register double num_points_double = num_points;
+    snrt_cluster_hw_barrier();
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, ifmap_scratch);
+    snrt_ssr_enable();
+    // do 1 loop
+    do {  // while (i < num_channels_to_process)
+        register double mean;
+        if (frep) {
+            asm volatile(
+                "frep.o %[n_frep], 4, 0, 0 \n"
+                "fadd.d %[sum0], ft0, %[sum0]\n"
+                "fadd.d %[sum1], ft0, %[sum1]\n"
+                "fadd.d %[sum2], ft0, %[sum2]\n"
+                "fadd.d %[sum3], ft0, %[sum3]\n"
+                : [sum0] "+fr"(sum0), [sum1] "+fr"(sum1), [sum2] "+fr"(sum2),
+                  [sum3] "+fr"(sum3)
+                : [n_frep] "r"(work_div_4_sub_1)  // we repeat n_frep+1 times
+                : "ft0", "ft1", "ft2");
+        }
+
+        register uint32_t channel_stride_in_bytes;
+        asm volatile(
+            "slli %[channel_stride_in_bytes], %[channel_stride], 3\n"  // log_2(sizeof(double))
+            "beqz %[i], 1f\n"
+            "add %[current_mean_scratch], %[current_mean_scratch],%[channel_stride_in_bytes]\n"
+            "add %[current_var_scratch], %[current_var_scratch],%[channel_stride_in_bytes]\n"
+            "1:\n"
+            "addi %[i], %[i], 1\n"
+            : [current_mean_scratch] "+r"(current_mean_scratch),
+              [current_var_scratch] "+r"(current_var_scratch), [i] "+r"(i),
+              [channel_stride_in_bytes] "=&r"(channel_stride_in_bytes)
+            : [channel_stride] "r"(channel_stride),
+              [num_channels_to_process] "r"(num_channels_to_process)
+            : "ft0", "ft1", "ft2");
+
+        register uint32_t mod_temp;
+        asm volatile(
+            "beqz %[work_mod_4], 0f\n"              // mod is 0
+            "andi %[mod_temp], %[work_mod_4], 1\n"  // is last bit 1? if no,
+                                                    // then mod is 2
+            "beqz %[mod_temp], 2f\n"                // jump to 2 if no
+            "andi %[mod_temp], %[work_mod_4], 2\n"  // is last bit 1? if no,
+                                                    // then mod is 1
+            "beqz %[mod_temp], 1f\n"                // jump to 1 if no
+            "3:\n"
+            "fadd.d %[sum0], ft0, %[sum0]\n"
+            "fadd.d %[sum1], ft0, %[sum1]\n"
+            "fadd.d %[sum2], ft0, %[sum2]\n"
+            "j 0f\n"
+            "2:\n"
+            "fadd.d %[sum0], ft0, %[sum0]\n"
+            "fadd.d %[sum1], ft0, %[sum1]\n"
+            "j 0f\n"
+            "1:\n"
+            "fadd.d %[sum0], ft0, %[sum0]\n"
+            "0:\n"
+            "fadd.d %[sum2], %[sum2], %[sum3]\n"
+            "fadd.d %[sum0], %[sum0], %[sum1]\n"
+            "fsgnj.d %[sum3], %[ZERO], %[ZERO]\n"
+            "fsgnj.d %[sum1], %[ZERO], %[ZERO]\n"
+            "fadd.d %[sum0], %[sum0], %[sum2]\n"
+            "fsgnj.d %[sum2], %[ZERO], %[ZERO]\n"
+            "fdiv.d %[mean], %[sum0], %[num_points_double]\n"
+            "fsgnj.d %[sum0], %[ZERO], %[ZERO]\n"
+            : [mod_temp] "=r"(mod_temp), [sum0] "+fr"(sum0), [sum1] "+fr"(sum1),
+              [sum2] "+fr"(sum2), [sum3] "+fr"(sum3), [mean] "=fr"(mean)
+            : [work_mod_4] "r"(work_mod_4), [ZERO] "fr"(ZERO),
+              [num_points_double] "fr"(num_points_double)
+            : "ft0", "ft1", "ft2");
+        if (frep) {
+            asm volatile(
+                "frep.o %[n_frep], 8, 0, 0 \n"
+                "fsub.d ft3, ft0, %[mean]\n"
+                "fsub.d ft4, ft0, %[mean]\n"
+                "fsub.d ft5, ft0, %[mean]\n"
+                "fsub.d ft6, ft0, %[mean]\n"
+                "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
+                "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+                "fmadd.d %[sum2], ft5, ft4, %[sum2]\n"
+                "fmadd.d %[sum3], ft6, ft4, %[sum3]\n"
+                : [sum0] "+fr"(sum0), [sum1] "+fr"(sum1), [sum2] "+fr"(sum2),
+                  [sum3] "+fr"(sum3)
+                : [n_frep] "r"(work_div_4_sub_1),  // we repeat n_frep+1 times
+                  [mean] "fr"(mean)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7");
+        }
+        register double pop_variance;
+        asm volatile(
+            "beqz %[work_mod_4], 0f\n"              // mod is 0
+            "andi %[mod_temp], %[work_mod_4], 1\n"  // is last bit 1? if no,
+                                                    // then mod is 2
+            "beqz %[mod_temp], 2f\n"                // jump to 2 if no
+            "andi %[mod_temp], %[work_mod_4], 2\n"  // is last bit 1? if no,
+                                                    // then mod is 1
+            "beqz %[mod_temp], 1f\n"                // jump to 1 if no
+            "3:\n"
+            "fsub.d ft3, ft0, %[mean]\n"
+            "fsub.d ft4, ft0, %[mean]\n"
+            "fsub.d ft5, ft0, %[mean]\n"
+            "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
+            "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+            "fmadd.d %[sum2], ft5, ft4, %[sum2]\n"
+            "j 0f\n"
+            "2:\n"
+            "fsub.d ft3, ft0, %[mean]\n"
+            "fsub.d ft4, ft0, %[mean]\n"
+            "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
+            "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+            "j 0f\n"
+            "1:\n"
+            "fsub.d ft3, ft0, %[mean]\n"
+            "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
+            "0:\n"
+            "fadd.d %[sum2], %[sum2], %[sum3]\n"
+            "fadd.d %[sum0], %[sum0], %[sum1]\n"
+            "fsgnj.d %[sum3], %[ZERO], %[ZERO]\n"
+            "fsgnj.d %[sum1], %[ZERO], %[ZERO]\n"
+            "fadd.d %[sum0], %[sum0], %[sum2]\n"
+            "fsgnj.d %[sum2], %[ZERO], %[ZERO]\n"
+            "fdiv.d %[pop_variance], %[sum0], %[num_points_double]\n"
+            "fsgnj.d %[sum0], %[ZERO], %[ZERO]\n"
+            "fsd %[mean], 0(%[current_mean_scratch])\n"
+            "fsd %[pop_variance], 0(%[current_var_scratch])\n"
+            : [mod_temp] "=&r"(mod_temp), [sum0] "+fr"(sum0), [sum1] "+fr"(sum1),
+              [sum2] "+fr"(sum2), [sum3] "+fr"(sum3),
+              [pop_variance] "=&fr"(pop_variance)
+            : [work_mod_4] "r"(work_mod_4), [ZERO] "fr"(ZERO),
+              [num_points_double] "fr"(num_points_double), [mean] "fr"(mean),
+              [current_mean_scratch] "r"(current_mean_scratch),
+              [current_var_scratch] "r"(current_var_scratch)
+            : "ft0", "ft1", "ft2");
+    } while (i < num_channels_to_process);
+    // don't need to fpu_fence since last 3 instructions are inconsequential
+    snrt_ssr_disable();
+}
+
 static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
     batchnorm_layer_t* l, uint32_t num_doubles_per_aligned_point,
     uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,

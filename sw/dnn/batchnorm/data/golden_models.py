@@ -51,6 +51,19 @@ def golden_model_forward_eval(
     return bn(ifmap)
 
 
+def golden_model_forward_training(
+    ifmap, eps, running_mean, running_var, weight, bias, momentum, *, dtype
+) -> torch.Tensor:
+    n, ci, ih, iw = ifmap.shape
+    bn = torch.nn.BatchNorm2d(ci, eps, momentum=momentum, dtype=dtype)
+    bn.weight = torch.nn.Parameter(weight)
+    bn.bias = torch.nn.Parameter(bias)
+    bn.running_mean = running_mean
+    bn.running_var = running_var
+    ofmap = bn(ifmap)
+    return ofmap, bn.running_mean, bn.running_var
+
+
 @upcast_half_or_quarter_precision_to_float32
 def golden_model_backward(
     ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, *, dtype

@@ -22,8 +22,8 @@ typedef struct {
     uint32_t CI;
     uint32_t IH;
     uint32_t IW;
-    // uint32_t TILE_CI;
-    double const *ifmap;
+
+    const double *ifmap;
 
     double *ofmap;
 
@@ -43,11 +43,11 @@ typedef struct {
     uint32_t IH;
     uint32_t IW;
 
-    double const *ifmap;
-    double const *grad_ofmap;
-    double const *running_mean;
-    double const *running_var;
-    double const *weight;
+    const double *ifmap;
+    const double *grad_ofmap;
+    const double *running_mean;
+    const double *running_var;
+    const double *weight;
 
     double *grad_ifmap;
     double *grad_weight;

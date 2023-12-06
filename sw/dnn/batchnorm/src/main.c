@@ -8,7 +8,7 @@
 #include "data.h"
 int main() {
     if (is_forward && is_training) {
-        printf("Forward eval training not supported yet");
+        batchnorm_forward_training_multicore_fp64(&forward_training_layer, temp);
         return 1;
     } else if (is_forward && !is_training) {
         batchnorm_forward_multicore_fp64(&forward_eval_layer);

@@ -18,13 +18,16 @@
 
 #define DMA_ATTRIBS 1
 #define DMA_INDICES 1
-#define USE_SSR_FREP_1D 0
+#define USE_SSR_FREP_1D 1
 #define USE_SSR_FREP_2D 1
 #define USE_SSR_FREP_3D 1
 #define USE_SSR_FREP_ALL 0
 #define USE_TILING 1
 
-#define BASE_USABLE_CACHE (8192*2)
+#define ENABLE_BENCHMARKING 1
+
+// Assume we have ~100kb of free cache
+#define BASE_USABLE_CACHE 100000
 
 // number of usable bytes in l1
 #define USABLE_CACHE BASE_USABLE_CACHE
@@ -78,6 +81,7 @@ void ssr_asm_with_index(int* out_idx, int total_iter) {
 void ssr_asm_no_index(int);
 
 void ssr_asm_no_index(int n_iter_minus_two) {
+
   if (n_iter_minus_two == 0) {
     asm volatile( 
       "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
@@ -118,7 +122,7 @@ void ssr_asm_no_index(int n_iter_minus_two) {
   //   "fmax.d ft3, ft3, ft0\n"
   //   "fadd.d ft1, %[zero], ft3\n" /* store the final value */
   //   :
-  //   : [zero] "f"(0.0), [n_frep] "r"(total_iter) /* loading initial val takes 1 read */
+  //   : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two) /* loading initial val takes 1 read */
   //   : "ft0", "ft1", "ft2", "ft3", "memory"
   // );
 }
@@ -226,7 +230,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   #if MAXPOOL_DIM == 1
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
     int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
-    // if (compute_id == 1) printf("%d * %d * %d = %d\n", attribs->output_shape[0], attribs->output_shape[1], attribs->output_shape[2], total_outs);
     int elems_per_matrix = attribs->input_shape[2];
     int outs_per_matrix = attribs->output_shape[2];
   #elif MAXPOOL_DIM == 2
@@ -237,12 +240,18 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   #elif MAXPOOL_DIM == 3
     int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
     int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
-    int elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3] * attribs->output_shape[4];
+    int elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
     int outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
   #endif
 
   #if !USE_TILING
+  #if ENABLE_BENCHMARKING
+  snrt_mcycle();
+  #endif
   MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
+  #if ENABLE_BENCHMARKING
+  snrt_mcycle();
+  #endif
   #else
 
   #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
@@ -253,7 +262,14 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   
   int total_channels = attribs->input_shape[0] * attribs->input_shape[1];
   if (bytes_per_batch * total_channels <= USABLE_CACHE) {
+    #if ENABLE_BENCHMARKING
+    snrt_mcycle();
+    #endif
     MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
+    #if ENABLE_BENCHMARKING
+    snrt_mcycle();
+    #endif
+
     return;
   }
 
@@ -262,76 +278,27 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   // whether we should use the second half of available cache
   int use_second = 0;
 
-  #if MAXPOOL_DIM == 1
+  int batches_per_cache = HALF_CACHE / bytes_per_batch;
+  // We tile one matrix at a time.
+  // Tiling partial matrices is quite complicated due to stride/dilation/padding parameters.
+  if (batches_per_cache == 0) {
+    printf("Error: Cache must handle at least one matrix.\n");
+    return;
+  }
+  int elems_per_cache = batches_per_cache * elems_per_matrix;
+  int outs_per_cache = batches_per_cache * outs_per_matrix;
 
-    int batches_per_cache = HALF_CACHE / bytes_per_batch;
-    if (batches_per_cache == 0) {
-      printf("Error: Cache must handle at least one matrix.\n");
-    }
-    int elems_per_cache = batches_per_cache * elems_per_matrix;
-    int outs_per_cache = batches_per_cache * outs_per_matrix;
+  int num_caches = ceil_div(total_channels, batches_per_cache);
 
-    int num_caches = ceil_div(total_channels, batches_per_cache);
+  if (snrt_is_dm_core()) {
+    snrt_dma_start_1d(first_ptr, in, elems_per_cache * sizeof(double));
+  }
 
-    if (snrt_is_dm_core()) {
-      snrt_dma_start_1d(first_ptr, in, elems_per_cache * sizeof(double));
-    }
-
-    char* this_ptr;
-    char* other_ptr;
-    char* idx_ptr;
-    int i;
-    for (i = 1; i < num_caches - 1; ++i) {
-      use_second = !use_second;
-      this_ptr = use_second ? second_ptr : first_ptr;
-      other_ptr = use_second ? first_ptr : second_ptr;
-      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
-        #if DMA_INDICES
-        idx_ptr = other_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
-        #else
-        idx_ptr = idx + outs_per_cache * (i - 1);
-        #endif
-      #endif
-
-      if (snrt_is_dm_core()) {
-
-        // load input data into this_ptr
-        snrt_dma_start_1d(this_ptr, ((double*) in) + elems_per_cache * i, elems_per_cache * sizeof(double));
-
-        snrt_dma_wait_all();
-
-        snrt_cluster_hw_barrier(); // 1: wait for computation to finish in other_ptr
-
-        // write output from other_ptr
-        snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
-          ((double*) other_ptr) + elems_per_cache,
-          outs_per_cache * sizeof(double));
-
-        #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-        snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
-          idx_ptr,
-          outs_per_cache * sizeof(int));
-        #endif
-
-      }
-      if (snrt_is_compute_core()) {
-
-        // do computation on data in other_ptr
-        MAXPOOL_FN_1D(attribs,
-          (double*) other_ptr,
-          ((double*) other_ptr) + elems_per_cache,
-          (int*) idx_ptr,
-          compute_id,
-          compute_num,
-          outs_per_cache);
-
-        snrt_cluster_hw_barrier(); // 1
-
-      }
-    }
-
-    // unroll the last iter since it might not be a full batch
-    // we are guaranteed at least 2 batches since 1 batch inputs fallback to the untiled version
+  char* this_ptr;
+  char* other_ptr;
+  char* idx_ptr = NULL;
+  int i;
+  for (i = 1; i < num_caches - 1; ++i) {
     use_second = !use_second;
     this_ptr = use_second ? second_ptr : first_ptr;
     other_ptr = use_second ? first_ptr : second_ptr;
@@ -343,15 +310,10 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       #endif
     #endif
 
-    int batches_left = (total_channels - (batches_per_cache * (num_caches - 1)));
-    int ins_left = batches_left * elems_per_matrix;
-    int outs_left = batches_left * outs_per_matrix;
     if (snrt_is_dm_core()) {
 
       // load input data into this_ptr
-      snrt_dma_start_1d(this_ptr,
-        ((double*) in) + elems_per_cache * i,
-        ins_left * sizeof(double));
+      snrt_dma_start_1d(this_ptr, ((double*) in) + elems_per_cache * i, elems_per_cache * sizeof(double));
 
       snrt_dma_wait_all();
 
@@ -361,39 +323,18 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
         ((double*) other_ptr) + elems_per_cache,
         outs_per_cache * sizeof(double));
-
       #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
       snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
         idx_ptr,
         outs_per_cache * sizeof(int));
       #endif
-
-      snrt_cluster_hw_barrier(); // 2: wait for computation to finish in this_ptr
-
-      snrt_dma_start_1d(((double*) out) + outs_per_cache * i,
-        ((double*) this_ptr) + elems_per_cache,
-        outs_left * sizeof(double));
-      
-      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
-        #if DMA_INDICES
-        idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
-        #else
-        idx_ptr = idx + outs_per_cache * i;
-        #endif
-      #endif
-
-      #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-      snrt_dma_start_1d(((int*) idx) + outs_per_cache * i,
-        idx_ptr,
-        outs_left * sizeof(int));
-      #endif
-
-      snrt_cluster_hw_barrier(); // 3: all done
-
     }
     if (snrt_is_compute_core()) {
-
       // do computation on data in other_ptr
+      #if ENABLE_BENCHMARKING
+      snrt_mcycle();
+      #endif
+      #if MAXPOOL_DIM == 1
       MAXPOOL_FN_1D(attribs,
         (double*) other_ptr,
         ((double*) other_ptr) + elems_per_cache,
@@ -401,39 +342,172 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
         compute_id,
         compute_num,
         outs_per_cache);
-
-      snrt_cluster_hw_barrier(); // 1
-
-      // do remaining computation in this_ptr
-
-      #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
-        #if DMA_INDICES
-        idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
-        #else
-        idx_ptr = idx + outs_per_cache * i;
-        #endif
-      #endif
-
-      MAXPOOL_FN_1D(attribs,
-        (double*) this_ptr,
-        ((double*) this_ptr) + elems_per_cache,
+      #elif MAXPOOL_DIM == 2
+      MAXPOOL_FN_2D(attribs,
+        (double*) other_ptr,
+        ((double*) other_ptr) + elems_per_cache,
         (int*) idx_ptr,
         compute_id,
         compute_num,
-        outs_left);
+        outs_per_cache);
+      #else
+      MAXPOOL_FN_3D(attribs,
+        (double*) other_ptr,
+        ((double*) other_ptr) + elems_per_cache,
+        (int*) idx_ptr,
+        compute_id,
+        compute_num,
+        outs_per_cache);
+      #endif
+      #if ENABLE_BENCHMARKING
+      snrt_mcycle();
+      #endif
 
-      snrt_fpu_fence();
-      snrt_cluster_hw_barrier(); // 2
-
-      snrt_cluster_hw_barrier(); // 3: all done
+      snrt_cluster_hw_barrier(); // 1
 
     }
+  }
 
-  #elif MAXPOOL_DIM == 2
-
-  #elif MAXPOOL_DIM == 3
-
+  // unroll the last iter since it might not be a full batch
+  // we are guaranteed at least 3 batches since <3 batch inputs fallback to the untiled version
+  use_second = !use_second;
+  this_ptr = use_second ? second_ptr : first_ptr;
+  other_ptr = use_second ? first_ptr : second_ptr;
+  #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+    #if DMA_INDICES
+    idx_ptr = other_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+    #else
+    idx_ptr = idx + outs_per_cache * (i - 1);
+    #endif
   #endif
+
+  int batches_left = (total_channels - (batches_per_cache * (num_caches - 1)));
+  int ins_left = batches_left * elems_per_matrix;
+  int outs_left = batches_left * outs_per_matrix;
+  if (snrt_is_dm_core()) {
+    // load input data into this_ptr
+    snrt_dma_start_1d(this_ptr,
+      ((double*) in) + elems_per_cache * i,
+      ins_left * sizeof(double));
+
+    snrt_dma_wait_all();
+
+    snrt_cluster_hw_barrier(); // 1: wait for computation to finish in other_ptr
+
+    // write output from other_ptr
+    snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
+      ((double*) other_ptr) + elems_per_cache,
+      outs_per_cache * sizeof(double));
+    #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
+    snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
+      idx_ptr,
+      outs_per_cache * sizeof(int));
+    #endif
+    snrt_cluster_hw_barrier(); // 2: wait for computation to finish in this_ptr
+
+    snrt_dma_start_1d(((double*) out) + outs_per_cache * i,
+      ((double*) this_ptr) + elems_per_cache,
+      outs_left * sizeof(double));
+    #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+      #if DMA_INDICES
+      idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+      #else
+      idx_ptr = idx + outs_per_cache * i;
+      #endif
+    #endif
+
+    #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
+    snrt_dma_start_1d(((int*) idx) + outs_per_cache * i,
+      idx_ptr,
+      outs_left * sizeof(int));
+    #endif
+    snrt_cluster_hw_barrier(); // 3: all done
+
+  }
+  if (snrt_is_compute_core()) {
+    #if ENABLE_BENCHMARKING
+    snrt_mcycle();
+    #endif
+    // do computation on data in other_ptr
+    #if MAXPOOL_DIM == 1
+    MAXPOOL_FN_1D(attribs,
+      (double*) other_ptr,
+      ((double*) other_ptr) + elems_per_cache,
+      (int*) idx_ptr,
+      compute_id,
+      compute_num,
+      outs_per_cache);
+    #elif MAXPOOL_DIM == 2
+    MAXPOOL_FN_2D(attribs,
+      (double*) other_ptr,
+      ((double*) other_ptr) + elems_per_cache,
+      (int*) idx_ptr,
+      compute_id,
+      compute_num,
+      outs_per_cache);
+    #else
+    MAXPOOL_FN_3D(attribs,
+      (double*) other_ptr,
+      ((double*) other_ptr) + elems_per_cache,
+      (int*) idx_ptr,
+      compute_id,
+      compute_num,
+      outs_per_cache);
+    #endif
+    #if ENABLE_BENCHMARKING
+    snrt_mcycle();
+    #endif
+
+    snrt_cluster_hw_barrier(); // 1
+
+    // do remaining computation in this_ptr
+
+    #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
+      #if DMA_INDICES
+      idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+      #else
+      idx_ptr = idx + outs_per_cache * i;
+      #endif
+    #endif
+
+    #if ENABLE_BENCHMARKING
+    snrt_mcycle();
+    #endif
+    #if MAXPOOL_DIM == 1
+    MAXPOOL_FN_1D(attribs,
+      (double*) this_ptr,
+      ((double*) this_ptr) + elems_per_cache,
+      (int*) idx_ptr,
+      compute_id,
+      compute_num,
+      outs_left);
+    #elif MAXPOOL_DIM == 2
+    MAXPOOL_FN_2D(attribs,
+      (double*) this_ptr,
+      ((double*) this_ptr) + elems_per_cache,
+      (int*) idx_ptr,
+      compute_id,
+      compute_num,
+      outs_left);
+    #else
+    MAXPOOL_FN_3D(attribs,
+      (double*) this_ptr,
+      ((double*) this_ptr) + elems_per_cache,
+      (int*) idx_ptr,
+      compute_id,
+      compute_num,
+      outs_left);
+    #endif
+    #if ENABLE_BENCHMARKING
+    snrt_mcycle();
+    #endif
+
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier(); // 2
+
+    snrt_cluster_hw_barrier(); // 3: all done
+
+  }
 
   #endif
 
@@ -486,7 +560,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
       #endif
       continue;
     }
-    // printf("iter: %d %d %d\n", n_iter, hstart, hend);
+
     snrt_ssr_loop_1d(SNRT_SSR_DM0, n_iter, sizeof(double) * attr->dilations[0]);
     snrt_ssr_loop_1d(SNRT_SSR_DM1, 1, 0); // value output
 
@@ -498,10 +572,12 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
     ssr_asm_with_index(&h_index, n_iter - 1);
     snrt_ssr_disable();
+    snrt_fpu_fence();
     idx[y_d + ph] = hstart + h_index * attr->dilations[0];
     #else
     ssr_asm_no_index(n_iter - 2);
     snrt_ssr_disable();
+    snrt_fpu_fence();
     #endif
 
     #else
@@ -511,7 +587,6 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     for (int h = hstart; h < hend; h += attr->dilations[0]) {
       // if (h < 0) continue;
       // if (h >= height) break;
-      // if (start_step == 0) printf("val: %lf, idx: %d\n", in[x_d + h], x_d + h);
       if (!Yh_init || in[x_d + h] > Yh) {
         Yh = in[x_d + h];
         Yh_init = 1;
@@ -522,7 +597,6 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     }
 
     out[y_d + ph] = Yh;
-    // if (start_step == 7) printf("res: %lf, idx: %d\n", Yh, y_d + ph);
     #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
     idx[y_d + ph] = h_index;
     #endif
@@ -612,6 +686,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
       ssr_asm_with_index(&max_index, n_iter_h * n_iter_w - 1);
       snrt_ssr_disable();
+      snrt_fpu_fence();
 
       int h_index = max_index / n_iter_w * attr->dilations[0] + hstart;
       int w_index = (max_index % n_iter_w) * attr->dilations[1] + wstart;
@@ -625,7 +700,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
       #else
         ssr_asm_no_index(n_iter_h * n_iter_w - 2);
         snrt_ssr_disable();
-
+        snrt_fpu_fence();
       #endif
 
     #else
@@ -773,26 +848,28 @@ void MAXPOOL_FN_3D(maxpool_attributes* attr,
 
       #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
 
-      ssr_asm_with_index(&max_index, n_iter_d * n_iter_h * n_iter_w - 1);
-      snrt_ssr_disable();
+        ssr_asm_with_index(&max_index, n_iter_d * n_iter_h * n_iter_w - 1);
+        snrt_ssr_disable();
+        snrt_fpu_fence();
 
-      // int h_index = max_index / (n_iter_w * n_iter_d) * attr->dilations[0] + hstart;
-      // max_index -= ph * pooled_width * pooled_depth;
-      // int w_index = (max_index / n_iter_d) * attr->dilations[1] + wstart;
-      // int d_index = (max_index % n_iter_d) * attr->dilations[2] + dstart;
-      int h_index = (max_index / (n_iter_w * n_iter_d)) * attr->dilations[0] + hstart;
-      int w_index = ((max_index / n_iter_d) % n_iter_w) * attr->dilations[1] + wstart;
-      int d_index = (max_index % n_iter_d) * attr->dilations[2] + dstart;
+        // int h_index = max_index / (n_iter_w * n_iter_d) * attr->dilations[0] + hstart;
+        // max_index -= ph * pooled_width * pooled_depth;
+        // int w_index = (max_index / n_iter_d) * attr->dilations[1] + wstart;
+        // int d_index = (max_index % n_iter_d) * attr->dilations[2] + dstart;
+        int h_index = (max_index / (n_iter_w * n_iter_d)) * attr->dilations[0] + hstart;
+        int w_index = ((max_index / n_iter_d) % n_iter_w) * attr->dilations[1] + wstart;
+        int d_index = (max_index % n_iter_d) * attr->dilations[2] + dstart;
 
-      #ifdef MAXPOOL_COL_MAJOR
-      idx[y_d + pool_index] = h_index + w_index * height + d_index * height * width;
-      #else
-      idx[y_d + pool_index] = h_index * width * depth + w_index * depth + d_index;
-      #endif
+        #ifdef MAXPOOL_COL_MAJOR
+        idx[y_d + pool_index] = h_index + w_index * height + d_index * height * width;
+        #else
+        idx[y_d + pool_index] = h_index * width * depth + w_index * depth + d_index;
+        #endif
 
       #else
         ssr_asm_no_index(n_iter_d * n_iter_h * n_iter_w - 2);
         snrt_ssr_disable();
+        snrt_fpu_fence();
 
       #endif
 

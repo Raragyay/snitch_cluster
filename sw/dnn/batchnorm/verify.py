@@ -154,8 +154,10 @@ def verify_forward_eval(elf):
         "TILE_CI": "I",
         "ifmap": "I",
         "ofmap": "I",
-        "beta": "I",
-        "gamma": "I",
+        "running_mean": "I",
+        "running_var": "I",
+        "weight": "I",
+        "bias": "I",
         "eps": "f",
         "dtype": "I",
     }

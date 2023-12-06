@@ -144,9 +144,6 @@ def get_forward_eval_tensors(
     **kwargs,
 ):
     with torch.no_grad():
-        # Parameters to simplify calculation for core.
-        gamma = weight / torch.sqrt(running_var + eps)
-        beta = bias - running_mean * gamma
         ofmap = golden_model_forward_eval(
             ifmap, eps, running_mean, running_var, weight, bias, dtype=torch_dtype
         )
@@ -158,14 +155,16 @@ def get_forward_eval_tensors(
             "TILE_CI": TILE_CI,
             "ifmap": ifmap_uid,
             "ofmap": ofmap_uid,
-            "beta": beta_uid,
-            "gamma": gamma_uid,
+            "running_mean": running_mean_uid,
+            "running_var": running_var_uid,
+            "weight": weight_uid,
+            "bias": bias_uid,
             "eps": eps,
             "dtype": PRECISION_T[prec],
         }
 
         return (
-            {gamma_uid: gamma, beta_uid: beta},
+            {},
             {ofmap_uid: ofmap},
             get_struct_definition(BatchNormMode.FORWARD_EVAL, layer_cfg),
         )
@@ -188,7 +187,14 @@ def get_backward_eval_tensors(
     # we just need the shape, so just use ifmap instead of recomputing ofmap
     grad_ofmap = torch.randn_like(ifmap, dtype=torch_dtype, requires_grad=False)
     grad_ifmap, grad_weight, grad_bias = golden_model_backward(
-        ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype=torch_dtype
+        ifmap,
+        grad_ofmap,
+        weight,
+        bias,
+        running_mean,
+        running_var,
+        eps,
+        dtype=torch_dtype,
     )
 
     layer_cfg = {

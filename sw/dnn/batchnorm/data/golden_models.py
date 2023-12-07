@@ -7,7 +7,7 @@ import torch
 def upcast_half_or_quarter_precision_to_float32(model_fn):
     @wraps(model_fn)
     def wrapper_fn(*args, dtype, **kwargs):
-        if dtype.itemsize < torch.float32.itemsize:
+        if torch.finfo(dtype).bits < torch.finfo(torch.float32).bits:
             print("upcasting precision to float32")
             upcasted_args = []
             for arg in args:

@@ -457,9 +457,9 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
     const uint32_t unroll = 8;
     const double alp = *ALPHA;
     const double bet = *BETA / alp;
-    const uint32_t int_bet = (uint32_t) *BETA;
+    const uint32_t zero_beta = bet == 0.0;
+    const uint32_t one_beta = bet == 1.0;
     register double ZERO = 0.0;
-    register uint32_t ONE = 1.0;
 
     // SSR strides and bounds only have to be configured
     // once in the beginning
@@ -513,44 +513,11 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
         for (uint32_t n0 = 0; n0 < n_u; n0++) {
             double c[unroll];
 
-            // Load intermediate result
-            // if (bet) {
-            //     if (bet == 1) {
-            //     c[0] = C[m * ldC + n + 0];
-            //     c[1] = C[m * ldC + n + 1];
-            //     c[2] = C[m * ldC + n + 2];
-            //     c[3] = C[m * ldC + n + 3];
-            //     c[4] = C[m * ldC + n + 4];
-            //     c[5] = C[m * ldC + n + 5];
-            //     c[6] = C[m * ldC + n + 6];
-            //     c[7] = C[m * ldC + n + 7];
-            //     } else {
-            //     c[0] = bet * C[m * ldC + n + 0];
-            //     c[1] = bet * C[m * ldC + n + 1];
-            //     c[2] = bet * C[m * ldC + n + 2];
-            //     c[3] = bet * C[m * ldC + n + 3];
-            //     c[4] = bet * C[m * ldC + n + 4];
-            //     c[5] = bet * C[m * ldC + n + 5];
-            //     c[6] = bet * C[m * ldC + n + 6];
-            //     c[7] = bet * C[m * ldC + n + 7];
-
-            //     }
-            // } else {
-            //     c[0] = 0.0;
-            //     c[1] = 0.0;
-            //     c[2] = 0.0;
-            //     c[3] = 0.0;
-            //     c[4] = 0.0;
-            //     c[5] = 0.0;
-            //     c[6] = 0.0;
-            //     c[7] = 0.0;
-            // }
 
             snrt_ssr_enable();
             asm volatile(
-                "beqz %[int_beta], 1f\n"
-                "sub a0,%[int_beta],%[ONE]\n"
-                "beqz a0, 2f\n"
+                "bnez %[zero_beta], 1f\n"
+                "bnez %[one_beta], 2f\n"
 
                 "fld ft10, 0(%[sum_addr]) \n"
                 "fmul.d ft10, ft10, %[beta] \n"
@@ -622,19 +589,10 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
                 "fsd ft9, 56(%[sum_addr]) \n"
 
                 : 
-                : [ n_frep ] "r"(K - 1), [ unroll ] "i"(unroll), [ alpha ] "f"(alp), [ beta ] "f"(bet), [ int_beta ] "r"(int_bet), [ ZERO ] "f"(ZERO), [ ONE ] "r"(ONE), [ sum_addr ] "r"(C + m * ldC + n)
+                : [ n_frep ] "r"(K - 1), [ unroll ] "i"(unroll), [ alpha ] "f"(alp), [ beta ] "f"(bet), [ zero_beta ] "r"(zero_beta), [ one_beta ] "r"(one_beta), [ sum_addr ] "r"(C + m * ldC + n), [ ZERO ] "f"(ZERO)
                 : "ft0", "ft1", "ft10", "ft3", "ft5", "ft6", "ft7", "ft8", "ft9", "ft2", "a0");
             snrt_ssr_disable();
 
-            // Store results back
-            // C[m * ldC + n + 0] = alp * c[0];
-            // C[m * ldC + n + 1] = alp * c[1];
-            // C[m * ldC + n + 2] = alp * c[2];
-            // C[m * ldC + n + 3] = alp * c[3];
-            // C[m * ldC + n + 4] = alp * c[4];
-            // C[m * ldC + n + 5] = alp * c[5];
-            // C[m * ldC + n + 6] = alp * c[6];
-            // C[m * ldC + n + 7] = alp * c[7];
             n += unroll;
         }
 
@@ -643,8 +601,8 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
 
         for (; n < N; n++) {
             double c;
-            if (bet) {
-                if (bet == 1)
+            if (!zero_beta) {
+                if (one_beta)
                     c = C[m * ldC + n];
                 else
                     c = C[m * ldC + n] * bet;
@@ -1363,8 +1321,8 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
 // operands)
 void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 uint32_t transa, uint32_t transb, uint32_t m, uint32_t n,
-                uint32_t k, double alpha, void* a, uint32_t lda, void* b,
-                uint32_t ldb, double beta, void* c, uint32_t ldc) {
+                uint32_t k, void* alpha, void* a, uint32_t lda, void* b,
+                uint32_t ldb, void* beta, void* c, uint32_t ldc) {
     if (snrt_is_compute_core()) {
         const uint32_t compute_num = snrt_cluster_compute_core_num();
         const uint32_t compute_id = snrt_cluster_core_idx();
@@ -1385,7 +1343,7 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 gemm_fp64_complete(frac_m, n, k, (double*)a + offsetA,
                                     lda_strided,
                                     transa, (double*)b, ldb, transb, (double*)c +
-                                    offsetC, ldc_strided, &alpha, &beta, setup_ssr);
+                                    offsetC, ldc_strided, (double*)alpha, (double*)beta, setup_ssr);
                 // gemm_fp64_opt(frac_m, n, k, (double*)a + offsetA,
                 //                     lda_strided,
                 //                     transa, (double*)b, ldb, transb, (double*)c +
@@ -1396,10 +1354,10 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 //                    (double)beta);
                 break;
             case FP32:
-                gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
-                                   lda_strided, transa, (float*)b, ldb, transb,
-                                   (float*)c + offsetC, ldc_strided,
-                                   (float)beta);
+                // gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
+                //                    lda_strided, transa, (float*)b, ldb, transb,
+                //                    (float*)c + offsetC, ldc_strided,
+                //                    (float)beta);
                 // gemm_fp32_opt(frac_m, n, k, (float*)a + offsetA, lda_strided,
                 //             (float*)b, ldb, (float*)c + offsetC, ldc_strided,
                 //             &beta, setup_ssr);
@@ -1441,7 +1399,7 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
          uint32_t m_tiles, uint32_t n_tiles, uint32_t k_tiles,
          uint32_t load_a, uint32_t load_b, uint32_t load_c,
          uint32_t transa, uint32_t transb, uint32_t m,
-         uint32_t n, uint32_t k, double alpha, void* a, void* b, uint32_t beta,
+         uint32_t n, uint32_t k, void* alpha, void* a, void* b, void* beta,
          void* c) {
     // Calculate tile sizes
     uint32_t frac_m = m / m_tiles;
@@ -1541,11 +1499,13 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     // In the first K iteration we accumulate with the C matrix
                     // scaled by beta, in successive iterations we accumulate
                     // the previous partial result for the tile
-                    uint32_t beta_k;
+                    double one = 1;
+
+                    void* beta_k;
                     if (abs_k_tile_idx == 0) {
                         beta_k = beta;
                     } else {
-                        beta_k = 1;
+                        beta_k = &one;
                     }
 
                     sc_st_gemm(prec, expand, setup_ssr, transa, transb, frac_m,

@@ -5,11 +5,11 @@
 // Parameters for a GEMM
 
 {
-    M: 8,
-    N: 8,
-    K: 8,
-    alpha: 3,
-    beta: 2 ,
+    M: 16,
+    N: 16,
+    K: 16,
+    alpha: 3.07,
+    beta: 2.5,
     ta: false,
     tb: false, // must be true for SIMD
     prec: 64,

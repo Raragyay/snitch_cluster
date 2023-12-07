@@ -21,24 +21,25 @@ ERR_THRESHOLD = 0.001
 
 def main():
     # Run simulation and get outputs
+    precision = '64'
     args = verification.parse_args()
     raw_results = verification.simulate(sim_bin=args.sim_bin,
                                         snitch_bin=args.snitch_bin,
                                         symbols_bin=args.symbols_bin,
                                         log=args.log,
                                         output_uids=['c'])
-    c_actual = np.array(bytes_to_float(raw_results['c'], prec='64'))
+    c_actual = np.array(bytes_to_float(raw_results['c'], prec=precision))
 
     # Extract input operands from ELF file
     if args.symbols_bin:
         elf = Elf(args.symbols_bin)
     else:
         elf = Elf(args.snitch_bin)
-    a = np.array(bytes_to_float(elf.get_symbol_contents('a'), prec='64'))
-    b = np.array(bytes_to_float(elf.get_symbol_contents('b'), prec='64'))
-    c = np.array(bytes_to_float(elf.get_symbol_contents('c'), prec='64'))
-    alpha = bytes_to_float(elf.get_symbol_contents('ALPHA'), prec='64')
-    beta = bytes_to_float(elf.get_symbol_contents('BETA'), prec='64')
+    a = np.array(bytes_to_float(elf.get_symbol_contents('a'), prec=precision))
+    b = np.array(bytes_to_float(elf.get_symbol_contents('b'), prec=precision))
+    c = np.array(bytes_to_float(elf.get_symbol_contents('c'), prec=precision))
+    alpha = bytes_to_float(elf.get_symbol_contents('ALPHA'), prec=precision)
+    beta = bytes_to_float(elf.get_symbol_contents('BETA'), prec=precision)
     m = bytes_to_int(elf.get_symbol_contents('M'), prec='32', signedness='unsigned')[0]
     n = bytes_to_int(elf.get_symbol_contents('N'), prec='32', signedness='unsigned')[0]
     k = bytes_to_int(elf.get_symbol_contents('K'), prec='32', signedness='unsigned')[0]

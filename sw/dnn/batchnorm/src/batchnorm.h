@@ -384,7 +384,73 @@ static inline void batchnorm_forward_training_multicore_fp64(
             snrt_cluster_hw_barrier();
         }
     } else {
-        // TODO: looped version
+        if (snrt_is_dm_core()) {
+            // buf flag should be 1 at this point
+            batchnorm_collect_statistics_dma_main_loop_fp_agnostic(
+                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                work_in_tile, dm_comm, 4, tile_size_in_points,
+                tile_stride_in_doubles, ifmap_scratch, buf_flag);
+
+            // reset buf flag and reload
+            buf_flag = 0;
+            dm_comm->num_points_work_in_tile = work_in_tile;
+            // TODO: figure out what mod to do
+            dm_comm->work_mod_4 = work_mod_4;
+            dm_comm->work_div_4_sub_1 =
+                work_div_4_sub_1;  // this is the frep value
+            snrt_dma_start_1d(ifmap_scratch, l->ifmap,
+                              work_in_tile * C * sizeof(double));
+            buf_flag = !buf_flag;
+        } else {
+            if (num_channels_work_for_core == 0) {
+                // start up first tile
+                snrt_cluster_hw_barrier();
+                uint32_t dm_comm_work_in_tile = work_in_tile;
+                while (dm_comm_work_in_tile != 0) {
+                    // wait for dma to compute result and signify work is done
+                    snrt_cluster_hw_barrier();
+                    dm_comm_work_in_tile = dm_comm->num_points_work_in_tile;
+                    // "signal" work is done
+                    snrt_cluster_hw_barrier();
+                }
+            } else {
+                batchnorm_collect_mean_statistics_tile_fp64_looped(
+                    &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id], num_points,
+                    C * sizeof(double), work_in_tile, work_div_4_sub_1,
+                    work_mod_4, tile_stride_in_doubles,
+                    num_channels_work_for_core, num_compute_cores, dm_comm);
+            }
+        }
+
+        if (snrt_is_dm_core()) {
+            // buf flag should be 1 at this point
+            batchnorm_collect_statistics_dma_main_loop_fp_agnostic(
+                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                work_in_tile, dm_comm, 4, tile_size_in_points,
+                tile_stride_in_doubles, ifmap_scratch, buf_flag);
+        } else {
+            if (num_channels_work_for_core == 0) {
+                // start up first tile
+                snrt_cluster_hw_barrier();
+                uint32_t dm_comm_work_in_tile = work_in_tile;
+                while (dm_comm_work_in_tile != 0) {
+                    // wait for dma to compute result and signify work is done
+                    snrt_cluster_hw_barrier();
+                    dm_comm_work_in_tile = dm_comm->num_points_work_in_tile;
+                    // "signal" work is done
+                    snrt_cluster_hw_barrier();
+                }
+            } else {
+                batchnorm_collect_var_statistics_tile_fp64_looped(
+                    &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id],
+                    &current_var_scratch[compute_id], num_points,
+                    C * sizeof(double), work_in_tile, work_div_4_sub_1,
+                    work_mod_4, tile_stride_in_doubles,
+                    num_channels_work_for_core, num_compute_cores, dm_comm);
+            }
+        }
     }
 
     // need to collect current_mean = sum(x) / N
@@ -431,8 +497,9 @@ static inline void batchnorm_forward_training_multicore_fp64(
             // Reduce the four variables running_mean, running_var, weight, bias
             // into an fmadd for main loop see
             // https://github.com/pytorch/pytorch/blob/3acaf8564da4c2f0faaea33ce4572ad9b3715b47/aten/src/ATen/native/cpu/batch_norm_kernel.cpp#L45-L55
-            // Moreover, update statistics for running_mean and running_var. 
-            // Use unbiased estimator for updating statistic, but biased estimator for gamma/beta
+            // Moreover, update statistics for running_mean and running_var.
+            // Use unbiased estimator for updating statistic, but biased
+            // estimator for gamma/beta
             asm volatile(
                 "frep.o %[n_frep], 9, 0, 0 \n"
                 // current_var + eps
@@ -466,7 +533,6 @@ static inline void batchnorm_forward_training_multicore_fp64(
             snrt_ssr_repeat(SNRT_SSR_DM0, 1);
             __builtin_ssr_barrier(SNRT_SSR_DM1);
             snrt_ssr_disable();
-
         }
     }
     // calc gamma beta, dma loads in first tile for ofmap
@@ -510,10 +576,11 @@ static inline void batchnorm_forward_training_multicore_fp64(
             if (num_channels_work_for_core == 0) {
                 // start up first tile
                 snrt_cluster_hw_barrier();
-                while (work_in_tile != 0) {
+                uint32_t dm_comm_work_in_tile = work_in_tile;
+                while (dm_comm_work_in_tile != 0) {
                     // wait for dma to compute result and signify work is done
                     snrt_cluster_hw_barrier();
-                    work_in_tile = dm_comm->num_points_work_in_tile;
+                    dm_comm_work_in_tile = dm_comm->num_points_work_in_tile;
                     // "signal" work is done
                     snrt_cluster_hw_barrier();
                 }
@@ -538,8 +605,6 @@ static inline void batchnorm_forward_training_multicore_fp64(
     // wait for all transactions to complete
     uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(temp, current_mean_scratch, C * sizeof(double));
-        snrt_dma_start_1d(temp + C, current_var_scratch, C * sizeof(double));
         snrt_dma_start_1d(l->running_var, running_var_scratch,
                           C * sizeof(double));
         snrt_dma_start_1d(l->running_mean, running_mean_scratch,

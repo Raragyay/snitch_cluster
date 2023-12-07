@@ -6,6 +6,7 @@
 # Tim Fischer <fischeti@iis.ee.ethz.ch>
 # Viviane Potocnik <vivianep@iis.ee.ethz.ch>
 # Luca Colagrande <colluca@iis.ee.ethz.ch>
+# Arthur Chen <archen@student.ethz.ch>
 
 import argparse
 import pathlib
@@ -20,6 +21,7 @@ from golden_models import (
     golden_model_backward,
     golden_model_backward_training,
     golden_model_forward_eval,
+    golden_model_forward_training,
 )
 from datagen_constants import (
     impl_opt_level_uid,
@@ -144,9 +146,6 @@ def get_forward_eval_tensors(
     **kwargs,
 ):
     with torch.no_grad():
-        # Parameters to simplify calculation for core.
-        gamma = weight / torch.sqrt(running_var + eps)
-        beta = bias - running_mean * gamma
         ofmap = golden_model_forward_eval(
             ifmap, eps, running_mean, running_var, weight, bias, dtype=torch_dtype
         )
@@ -158,16 +157,63 @@ def get_forward_eval_tensors(
             "TILE_CI": TILE_CI,
             "ifmap": ifmap_uid,
             "ofmap": ofmap_uid,
-            "beta": beta_uid,
-            "gamma": gamma_uid,
+            "running_mean": running_mean_uid,
+            "running_var": running_var_uid,
+            "weight": weight_uid,
+            "bias": bias_uid,
             "eps": eps,
             "dtype": PRECISION_T[prec],
         }
 
         return (
-            {gamma_uid: gamma, beta_uid: beta},
+            {},
             {ofmap_uid: ofmap},
             get_struct_definition(BatchNormMode.FORWARD_EVAL, layer_cfg),
+        )
+
+
+def get_forward_training_tensors(
+    H,
+    W,
+    C,
+    ifmap,
+    running_mean,
+    running_var,
+    weight,
+    bias,
+    eps,
+    prec,
+    momentum,
+    torch_dtype,
+    **kwargs,
+):
+    if momentum is None: 
+        raise ValueError("No momentum was given for forward training")
+    with torch.no_grad():
+        ofmap, *_ = golden_model_forward_training(
+            ifmap, eps, running_mean, running_var, weight, bias, momentum,  dtype=torch_dtype
+        )
+
+        layer_cfg = {
+            "CI": C,
+            "IH": H,
+            "IW": W,
+            "ifmap": ifmap_uid,
+            "ofmap": ofmap_uid,
+            # "current_mean"
+            "running_mean": running_mean_uid,
+            "running_var": running_var_uid,
+            "weight": weight_uid,
+            "bias": bias_uid,
+            "eps": eps,
+            "momentum": momentum,
+            "dtype": PRECISION_T[prec],
+        }
+
+        return (
+            {},
+            {ofmap_uid: ofmap},
+            get_struct_definition(BatchNormMode.FORWARD_TRAINING, layer_cfg),
         )
 
 
@@ -188,7 +234,14 @@ def get_backward_eval_tensors(
     # we just need the shape, so just use ifmap instead of recomputing ofmap
     grad_ofmap = torch.randn_like(ifmap, dtype=torch_dtype, requires_grad=False)
     grad_ifmap, grad_weight, grad_bias = golden_model_backward(
-        ifmap, grad_ofmap, weight, bias, running_mean, running_var, eps, dtype=torch_dtype
+        ifmap,
+        grad_ofmap,
+        weight,
+        bias,
+        running_mean,
+        running_var,
+        eps,
+        dtype=torch_dtype,
     )
 
     layer_cfg = {
@@ -277,6 +330,7 @@ def emit_header(**kwargs):
     ctype = data_utils.floating_point_ctype(prec)
 
     eps = kwargs["eps"]
+    momentum = kwargs.get("momentum", None)
 
     running_mean = torch.randn(
         C,
@@ -327,13 +381,18 @@ def emit_header(**kwargs):
         "H": H,
         "W": W,
         "C": C,
+        "momentum": momentum
     }
 
     mode_specific_inputs: Dict[str, torch.Tensor] = None
     mode_specific_outputs: Dict[str, torch.Tensor] = None
     struct_def: str = None
     if is_forward and is_training:
-        raise ValueError("Training model not implemented yet for forward pass.")
+        (
+            mode_specific_inputs,
+            mode_specific_outputs,
+            struct_def,
+        ) = get_forward_training_tensors(**base_tensors, **config_params)
     elif is_forward and not is_training:
         (
             mode_specific_inputs,

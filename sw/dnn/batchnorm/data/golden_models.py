@@ -7,7 +7,7 @@ import torch
 def upcast_half_or_quarter_precision_to_float32(model_fn):
     @wraps(model_fn)
     def wrapper_fn(*args, dtype, **kwargs):
-        if dtype.itemsize < torch.float32.itemsize:
+        if torch.finfo(dtype).bits < torch.finfo(torch.float32).bits:
             print("upcasting precision to float32")
             upcasted_args = []
             for arg in args:
@@ -49,6 +49,19 @@ def golden_model_forward_eval(
     bn.running_var = running_var
     bn.eval()
     return bn(ifmap)
+
+
+def golden_model_forward_training(
+    ifmap, eps, running_mean, running_var, weight, bias, momentum, *, dtype
+) -> torch.Tensor:
+    n, ci, ih, iw = ifmap.shape
+    bn = torch.nn.BatchNorm2d(ci, eps, momentum=momentum, dtype=dtype)
+    bn.weight = torch.nn.Parameter(weight)
+    bn.bias = torch.nn.Parameter(bias)
+    bn.running_mean = running_mean
+    bn.running_var = running_var
+    ofmap = bn(ifmap)
+    return ofmap, bn.running_mean, bn.running_var
 
 
 @upcast_half_or_quarter_precision_to_float32

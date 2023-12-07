@@ -8,6 +8,8 @@ alias maxpool="bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf"
 
 alias verify="python3 ../../sw/onnx/maxpool/verify.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"
 
+alias verify1="python3 ../../sw/onnx/maxpool/verify1d.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"
+
 alias verify2="python3 ../../sw/onnx/maxpool/verify2d.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"
 
 alias verifyall="python3 ../../sw/onnx/maxpool/verifyall.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"

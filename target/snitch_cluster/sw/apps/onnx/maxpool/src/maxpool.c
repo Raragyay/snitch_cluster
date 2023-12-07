@@ -1,9 +1,10 @@
 #include "maxpool.h"
 #include "snrt.h"
 
-#include "benchmark_all.h"
-// #include "data.h"
+// #include "benchmark_all.h"
+// #include "data1.h"
 // #include "data_all.h"
+#include "data.h"
 
 #define ENABLE_1D 0
 #define ENABLE_2D 0
@@ -59,7 +60,7 @@ int main() {
     .strides = {2, 4, -1}
   };
   maxpool_attributes attr_3d = {
-    .n_dim = 2,
+    .n_dim = 3,
     .input_shape = {8, 1, 2, 2, 2},
     .output_shape = {0},
     .auto_pad = NOTSET,
@@ -74,52 +75,62 @@ int main() {
   int matrix_size = 8;
 
   // Go until 4096 = 64x64 matrix elements
-  for (int i = 0; i < 11; ++i) {
-    compute_output_shape(&attr_1d, attr_1d.output_shape);
-    compute_output_shape(&attr_2d, attr_2d.output_shape);
-    compute_output_shape(&attr_3d, attr_3d.output_shape);
+  // With 100kb cache, tiling starts at matrix_size = 2048
+  // for (int i = 0; i < 10; ++i) {
+  //   compute_output_shape(&attr_1d, attr_1d.output_shape);
+  //   compute_output_shape(&attr_2d, attr_2d.output_shape);
+  //   compute_output_shape(&attr_3d, attr_3d.output_shape);
 
-    snrt_mcycle();
-    maxpool_f64_1d_no_index(&attr_1d,
-      ifmap,
-      output_loc);
-    snrt_mcycle();
+  //   snrt_mcycle();
 
-    snrt_mcycle();
-    maxpool_f64_2d_no_index(&attr_2d,
-      ifmap,
-      output_loc);
-    snrt_mcycle();
+  //   maxpool_f64_1d_no_index(&attr_1d,
+  //     ifmap,
+  //     output_loc);
 
-    snrt_mcycle();
-    maxpool_f64_3d_no_index(&attr_3d,
-      ifmap,
-      output_loc);
-    snrt_mcycle();
+  //   snrt_mcycle();
 
-    attr_1d.input_shape[2] *= 2;
-    attr_2d.input_shape[2 + (i % 2)] *= 2;
-    attr_3d.input_shape[2 + (i % 3)] *= 2;
+  //   maxpool_f64_2d_no_index(&attr_2d,
+  //     ifmap,
+  //     output_loc);
 
-  }
+  //   snrt_mcycle();
+
+  //   maxpool_f64_3d_no_index(&attr_3d,
+  //     ifmap,
+  //     output_loc);
+
+  //   snrt_mcycle();
+
+  //   attr_1d.input_shape[2] *= 2;
+  //   attr_2d.input_shape[2 + (i % 2)] *= 2;
+  //   attr_3d.input_shape[2 + (i % 3)] *= 2;
+
+  //   matrix_size *= 2;
+
+  // }
+
+  compute_output_shape(&attr1, attr1.output_shape);
+  maxpool_f64_1d_no_index(&attr1,
+      ifmap1,
+      output_loc1);
 
   // compute_output_shape(&attr1, attr1.output_shape);
   // maxpool_f64_1d_no_index(&attr1,
   //               ifmap1,
-  //               output_loc1,
-  //               idx_loc1);
-
+  //               output_loc1);
+  
   // compute_output_shape(&attr2, attr2.output_shape);
   // maxpool_f64_2d_no_index(&attr2,
   //               ifmap2,
-  //               output_loc2,
-  //               idx_loc2);
+  //               output_loc2);
 
   // compute_output_shape(&attr3, attr3.output_shape);
+  // uint32_t a = snrt_mcycle();
   // maxpool_f64_3d_no_index(&attr3,
   //               ifmap3,
-  //               output_loc3,
-  //               idx_loc3);
+  //               output_loc3);
+  // uint32_t b = snrt_mcycle();
+  // DUMP(b-a);
 
 
   #if ENABLE_NO_INDICES

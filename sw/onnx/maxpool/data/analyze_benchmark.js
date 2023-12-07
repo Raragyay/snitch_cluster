@@ -5,18 +5,47 @@ const files = fs.readdirSync("logs");
 
 const benchmarks = files.filter((file) => file.endsWith(".json")).slice(0, -1);
 
-let cycles = 0;
-let util = 0;
-let relUtil = 0;
+const datapoints = {};
+
+let key = 8;
+for (let i = 0; i < 10; ++i) {
+  datapoints[key] = {
+    one: {
+      dma: [],
+      compute: []
+    },
+    two: {
+      dma: [],
+      compute: []
+    },
+    three: {
+      dma: [],
+      compute: []
+    }
+  };
+  key *= 2;
+}
+
 for (const benchmark of benchmarks) {
   const data = JSON.parse(fs.readFileSync(`logs/${benchmark}`));
 
-  cycles += data[1].cycles;
-  util += data[1].fpss_fpu_occupancy;
-  relUtil += data[1].fpss_fpu_rel_occupancy;
-  
+  let cnt = 1;
+  key = 8;
+  for (let i = 0; i < 9; ++i) {
+    datapoints[key].one.dma.push(data[cnt++]);
+    datapoints[key].one.compute.push(data[cnt++]);
+    datapoints[key].one.dma.push(data[cnt++]);
+
+    datapoints[key].two.dma.push(data[cnt++]);
+    datapoints[key].two.compute.push(data[cnt++]);
+    datapoints[key].two.dma.push(data[cnt++]);
+    
+    datapoints[key].three.dma.push(data[cnt++]);
+    datapoints[key].three.compute.push(data[cnt++]);
+    datapoints[key].three.dma.push(data[cnt++]);
+    ++cnt;
+    key *= 2;
+  }
 }
 
-console.log(`cycles avg: ${cycles / 8}
-fpu util avg: ${util / 8}
-fpu rel util avg: ${relUtil / 8}`);
+fs.writeFileSync("results.json", JSON.stringify(datapoints));

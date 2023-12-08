@@ -1511,8 +1511,6 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
 // sizes and pointers are for the whole cluster computation. Within a cluster
 // the computation is parallelized by assigning distinct output rows to
 // distinct cores.
-// TODO: beta (and alpha) should be of floating-point type (same precision as
-// operands)
 void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 uint32_t transa, uint32_t transb, uint32_t m, uint32_t n,
                 uint32_t k, void* alpha, void* a, uint32_t lda, void* b,
@@ -1523,10 +1521,14 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
         // Compute cores work not on contiguous blocks but on strided rows
         uint32_t lda_strided = compute_num * lda;
+        if (transa)
+            lda_strided = lda;
         uint32_t ldc_strided = compute_num * ldc;
 
         // Compute cores access A and C at offsets of one row from each other
         uint32_t offsetA = compute_id * lda;
+        if (transa)
+            offsetA = compute_id;
         uint32_t offsetC = compute_id * ldc;
 
         // Compute fraction of C rows every core computes
@@ -1650,14 +1652,26 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 // Copy data in TCDM
                 if (snrt_is_dm_core()) {
                     if (load_a) {
-                        snrt_dma_load_2d_tile(local_a, a,
-                                              abs_m_tile_idx, abs_k_tile_idx,
-                                              frac_m, frac_k, k, prec);
+
+                        if (transa)
+                            snrt_dma_load_2d_tile(local_a, a,
+                                                abs_k_tile_idx, abs_m_tile_idx,
+                                                frac_k, frac_m, m, prec);
+                        else
+                            snrt_dma_load_2d_tile(local_a, a,
+                                                abs_m_tile_idx, abs_k_tile_idx,
+                                                frac_m, frac_k, k, prec);
+                        
                     }
                     if (load_b) {
-                        snrt_dma_load_2d_tile(local_b, b,
-                                              abs_k_tile_idx, n_tile,
-                                              frac_k, frac_n, n, prec);
+                        if (transb)
+                            snrt_dma_load_2d_tile(local_b, b,
+                                                n_tile, abs_k_tile_idx,
+                                                frac_n, frac_k, k, prec);
+                        else
+                            snrt_dma_load_2d_tile(local_b, b,
+                                                abs_k_tile_idx, n_tile,
+                                                frac_k, frac_n, n, prec);
                     }
                     // C tile is loaded only upon first iteration, then the C
                     // array will contain the partial results from the
@@ -1686,7 +1700,7 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     volatile uint32_t ldb = frac_n;
                     volatile uint32_t ldc = frac_n;
 
-                    // Transpose of A unsupported
+                    
                     if (transa) {
                         lda = frac_m;
                     }

@@ -71,11 +71,9 @@ static inline void end_perf_and_dump_single_core(
 #endif
 }
 
-static inline snrt_dma_txid_t initiate_dma_1d_or_2d(void* dst, void* src,
-                                                    size_t size,
-                                                    size_t dst_stride,
-                                                    size_t src_stride,
-                                                    size_t repeat, uint32_t is_1d) {
+static inline snrt_dma_txid_t initiate_dma_1d_or_2d(
+    void* dst, void* src, size_t size, size_t dst_stride, size_t src_stride,
+    size_t repeat, uint32_t is_1d) {
     if (is_1d) {
         return snrt_dma_start_1d(dst, src, size * repeat);
     } else {
@@ -495,10 +493,10 @@ batchnorm_collect_mean_statistics_tile_fp64_looped(
             if (frep) {
                 asm volatile(
                     "frep.o %[n_frep], 4, 0, 0 \n"
-                    "fadd.d %[sum0], ft0, %[sum0]\n"
-                    "fadd.d %[sum1], ft0, %[sum1]\n"
-                    "fadd.d %[sum2], ft0, %[sum2]\n"
                     "fadd.d %[sum3], ft0, %[sum3]\n"
+                    "fadd.d %[sum2], ft0, %[sum2]\n"
+                    "fadd.d %[sum1], ft0, %[sum1]\n"
+                    "fadd.d %[sum0], ft0, %[sum0]\n"
                     :
                     [sum0] "+fr"(sum0), [sum1] "+fr"(sum1), [sum2] "+fr"(sum2),
                     [sum3] "+fr"(sum3)
@@ -592,13 +590,13 @@ batchnorm_collect_mean_statistics_tile_fp64_looped(
                                                         // then mod is 1
                 "beqz %[mod_temp], 1f\n"                // jump to 1 if no
                 "3:\n"
-                "fadd.d %[sum0], ft0, %[sum0]\n"
-                "fadd.d %[sum1], ft0, %[sum1]\n"
                 "fadd.d %[sum2], ft0, %[sum2]\n"
+                "fadd.d %[sum1], ft0, %[sum1]\n"
+                "fadd.d %[sum0], ft0, %[sum0]\n"
                 "j 0f\n"
                 "2:\n"
-                "fadd.d %[sum0], ft0, %[sum0]\n"
                 "fadd.d %[sum1], ft0, %[sum1]\n"
+                "fadd.d %[sum0], ft0, %[sum0]\n"
                 "j 0f\n"
                 "1:\n"
                 "fadd.d %[sum0], ft0, %[sum0]\n"
@@ -623,9 +621,9 @@ batchnorm_collect_mean_statistics_tile_fp64_looped(
         current_mean_scratch -= channel_stride * (num_channels_to_process - 1);
         // don't need to fpu_fence since last 3 instructions are inconsequential
     } while (work_in_tile != 0);
-    snrt_fpu_fence();
     snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_to_process,
                      outer_loop_stride);
+    snrt_fpu_fence();
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, current_mean_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, current_mean_scratch);
 
@@ -695,14 +693,14 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
             if (frep) {
                 asm volatile(
                     "frep.o %[n_frep], 8, 0, 0 \n"
-                    "fsub.d ft3, ft0, %[mean]\n"
-                    "fsub.d ft4, ft0, %[mean]\n"
-                    "fsub.d ft5, ft0, %[mean]\n"
                     "fsub.d ft6, ft0, %[mean]\n"
-                    "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
-                    "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
-                    "fmadd.d %[sum2], ft5, ft5, %[sum2]\n"
+                    "fsub.d ft5, ft0, %[mean]\n"
+                    "fsub.d ft4, ft0, %[mean]\n"
+                    "fsub.d ft3, ft0, %[mean]\n"
                     "fmadd.d %[sum3], ft6, ft6, %[sum3]\n"
+                    "fmadd.d %[sum2], ft5, ft5, %[sum2]\n"
+                    "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+                    "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
                     :
                     [sum0] "+fr"(sum0), [sum1] "+fr"(sum1), [sum2] "+fr"(sum2),
                     [sum3] "+fr"(sum3)
@@ -804,18 +802,18 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
                                                         // then mod is 1
                 "beqz %[mod_temp], 1f\n"                // jump to 1 if no
                 "3:\n"
-                "fsub.d ft3, ft0, %[mean]\n"
-                "fsub.d ft4, ft0, %[mean]\n"
                 "fsub.d ft5, ft0, %[mean]\n"
-                "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
-                "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+                "fsub.d ft4, ft0, %[mean]\n"
+                "fsub.d ft3, ft0, %[mean]\n"
                 "fmadd.d %[sum2], ft5, ft5, %[sum2]\n"
+                "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+                "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
                 "j 0f\n"
                 "2:\n"
-                "fsub.d ft3, ft0, %[mean]\n"
                 "fsub.d ft4, ft0, %[mean]\n"
-                "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
+                "fsub.d ft3, ft0, %[mean]\n"
                 "fmadd.d %[sum1], ft4, ft4, %[sum1]\n"
+                "fmadd.d %[sum0], ft3, ft3, %[sum0]\n"
                 "j 0f\n"
                 "1:\n"
                 "fsub.d ft3, ft0, %[mean]\n"
@@ -843,9 +841,9 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
         current_var_scratch -= channel_stride * (num_channels_to_process - 1);
         // don't need to fpu_fence since last 3 instructions are inconsequential
     } while (work_in_tile != 0);
-    snrt_fpu_fence();
     snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_channels_to_process,
                      outer_loop_stride);
+    snrt_fpu_fence();
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, current_var_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, current_var_scratch);
 
@@ -1210,8 +1208,8 @@ batchnorm_backward_tile_fp64_looped(
     // inside loop: points
     uint32_t prev_work = work_in_tile;
     register uint32_t next_work_mod_2 = work_mod_2;
-    // use uint32_t for the uint32_t, otherwise the compiler will insert an `andi`
-    // for each uint32_t
+    // use uint32_t for the uint32_t, otherwise the compiler will insert an
+    // `andi` for each uint32_t
     register uint32_t frep = work_in_tile >= 2;
     register double ZERO asm("ft9");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
@@ -1552,11 +1550,6 @@ batchnorm_backward_fp32_no_loop(
     running_mean.f64 = running_mean_scratch->f64;
     // do 1 loop
     do {  // while (i < num_channels_to_process)
-        asm volatile(
-            "vfmul.s %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
-            : [weight_times_invstd] "+fr"(weight_times_invstd.f64)
-            : [invstd] "fr"(invstd.f64)
-            : "ft0", "ft1", "ft2");
 
         if (frep) {
             asm volatile(
@@ -1655,9 +1648,9 @@ batchnorm_backward_fp32_no_loop(
             // happened
             "fld %[invstd],0(%[invstd_scratch])\n"
             "fld %[weight_times_invstd],0(%[weight_scratch])\n"
+            "fld %[running_mean],0(%[running_mean_scratch])\n"
             "vfadd.s %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
             "vfadd.s %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
-            "fld %[running_mean],0(%[running_mean_scratch])\n"
             "vfsgnj.s %[grad_bias_1],%[ZERO],%[ZERO]\n"
             "vfsgnj.s %[grad_weight_1],%[ZERO],%[ZERO]\n"
             "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
@@ -1730,6 +1723,19 @@ batchnorm_backward_tile_fp32_looped(
     snrt_ssr_repeat(SNRT_SSR_DM0, 3);
 
     snrt_ssr_enable();
+
+    register v2s grad_weight_0 = ZERO;
+    register v2s grad_weight_1 = ZERO;
+    register v2s grad_weight_2 = ZERO;
+    register v2s grad_bias_0 = ZERO;
+    register v2s grad_bias_1 = ZERO;
+    register v2s grad_bias_2 = ZERO;
+    register v2s invstd;
+    invstd.f64 = invstd_scratch->f64;
+    register v2s weight_times_invstd;
+    weight_times_invstd.f64 = weight_scratch->f64;
+    register v2s running_mean;
+    running_mean.f64 = running_mean_scratch->f64;
     // thought: how to minimize # flops?
     // dy is used for: grad_bias: grad_bias[C] += dy
     //                 grad_ifmap: grad_ifmap[C] =
@@ -1752,30 +1758,12 @@ batchnorm_backward_tile_fp32_looped(
     do {  //
         register volatile uint32_t i =
             0;  // updated during frep for pseudo-dual issue
-        register v2s grad_weight_0 = ZERO;
-        register v2s grad_weight_1 = ZERO;
-        register v2s grad_weight_2 = ZERO;
-        register v2s grad_bias_0 = ZERO;
-        register v2s grad_bias_1 = ZERO;
-        register v2s grad_bias_2 = ZERO;
-        register v2s invstd;
-        invstd.f64 = invstd_scratch->f64;
         snrt_cluster_hw_barrier();
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
         snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
-        register v2s weight_times_invstd;
-        weight_times_invstd.f64 = weight_scratch->f64;
-        register v2s running_mean;
-        running_mean.f64 = running_mean_scratch->f64;
         // do 1 loop
         do {  // while (i < num_channels_to_process)
-            asm volatile(
-                "vfmul.s %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
-                : [weight_times_invstd] "+fr"(weight_times_invstd.f64)
-                : [invstd] "fr"(invstd.f64)
-                : "ft0", "ft1", "ft2");
-
             if (frep) {
                 asm volatile(
                     "frep.o %[n_frep], 10, 0, 0 \n"
@@ -1970,17 +1958,17 @@ batchnorm_backward_tile_fp32_looped(
             asm volatile(
                 "fld %[temp_grad_bias], 0(%[grad_bias_scratch])\n"
                 "fld %[temp_grad_weight], 0(%[grad_weight_scratch])\n"
-                "vfadd.s %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
-                "vfadd.s %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
+                "fld %[invstd],0(%[invstd_scratch])\n"
+                "vfadd.s %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
+                "vfadd.s %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
                 // interleave 0 resetting and loading between fadd latency
                 // don't need to synchronize here because the integer core can't
                 // issue these instructions until the previous increments have
                 // happened
-                "fld %[invstd],0(%[invstd_scratch])\n"
                 "fld %[weight_times_invstd],0(%[weight_scratch])\n"
-                "vfadd.s %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
-                "vfadd.s %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
                 "fld %[running_mean],0(%[running_mean_scratch])\n"
+                "vfadd.s %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
+                "vfadd.s %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
                 "vfsgnj.s %[grad_bias_1],%[ZERO],%[ZERO]\n"
                 "vfsgnj.s %[grad_weight_1],%[ZERO],%[ZERO]\n"
                 "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
@@ -2004,13 +1992,13 @@ batchnorm_backward_tile_fp32_looped(
                 : "ft0", "ft1", "ft2");
         } while (i < num_doubles_work_for_core_per_point);
         // don't need to fpu_fence since last 3 instructions are inconsequential
-        __builtin_ssr_barrier(SNRT_SSR_DM1);
 
         work_mod_2 = next_work_mod_2;
         grad_weight_scratch -=
             channel_stride * (num_doubles_work_for_core_per_point - 1);
         grad_bias_scratch -=
             channel_stride * (num_doubles_work_for_core_per_point - 1);
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
     } while (work_in_tile != 0);
     // Signal that last tile is done
     snrt_ssr_disable();
@@ -2729,7 +2717,8 @@ batchnorm_backward_training_tile_fp64_no_loop_2(
     const double* k_scratch, const double* grad_mean_scratch, uint32_t C,
     uint32_t num_points_work_for_core_in_tile, uint32_t work_mod_4,
     uint32_t work_div_4_sub_1, uint32_t num_channels_to_process,
-    uint32_t channel_stride, uint32_t is_first_iteration, uint32_t force_configure) {
+    uint32_t channel_stride, uint32_t is_first_iteration,
+    uint32_t force_configure) {
     if (is_first_iteration || force_configure) {
         snrt_ssr_loop_2d(
             SNRT_SSR_DM_ALL,

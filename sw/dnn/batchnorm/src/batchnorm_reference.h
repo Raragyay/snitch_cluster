@@ -271,9 +271,9 @@ static inline void batchnorm_backward_single_core_opt_fp32(
 
     // dataflow:
     v2s *ptr = (v2s *)snrt_l1_start_addr();
-    v2s *weight_scratch = ptr;
-    ptr += num_doubles_per_point;
     v2s *invstd_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *weight_scratch = ptr;
     ptr += num_doubles_per_point;
     v2s *running_mean_scratch = ptr;
     ptr += num_doubles_per_point;
@@ -305,11 +305,15 @@ static inline void batchnorm_backward_single_core_opt_fp32(
         // Q: is it better to wait then initiate the rest? we'll see
         running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
                                              num_bytes_per_packed_point);
-        snrt_dma_wait(running_var_load);
+        weight_load = snrt_dma_start_1d(weight_scratch, l->weight,
+                                        num_bytes_per_packed_point);
+        running_mean_load = snrt_dma_start_1d(
+            running_mean_scratch, l->running_mean, num_bytes_per_packed_point);
+        snrt_dma_wait_all();
     } else if (compute_id == 0) {
         // PRECONFIGURE: operations on arrays of size C, split by core.
-        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_doubles_per_point,
-                         sizeof(double));
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, 2, num_doubles_per_point,
+                         num_bytes_per_aligned_point, sizeof(double));
     }
     uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
@@ -317,10 +321,6 @@ static inline void batchnorm_backward_single_core_opt_fp32(
     // compute invstd, load weight and running_mean in
     uint32_t start_invstd_calc = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        weight_load = snrt_dma_start_1d(weight_scratch, l->weight,
-                                        num_bytes_per_packed_point);
-        running_mean_load = snrt_dma_start_1d(
-            running_mean_scratch, l->running_mean, num_bytes_per_packed_point);
         // load first tile in. We can do this here because sqrt/div are really
         // slow.
         grad_ofmap_load = initiate_dma_1d_or_2d(
@@ -334,18 +334,22 @@ static inline void batchnorm_backward_single_core_opt_fp32(
 
         snrt_dma_wait_all();
     } else if (compute_id == 0) {
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, invstd_scratch);
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, invstd_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, invstd_scratch);
         register float eps = l->eps;
         register float ONE = 1;
         snrt_ssr_enable();
         // unrolling does not help because fsqrt and fdiv are not pipelined
         asm volatile(
             "vfcpka.s.s %[ONE],%[ONE],%[ONE]\n"  // duplicate the 1
-            "frep.o %[n_frep], 3, 0, 0 \n"
+            "frep.o %[n_frep], 5, 0, 0 \n"
             "vfadd.r.s ft3, ft0, %[eps]\n"
             "vfsqrt.s ft3, ft3\n"
-            "vfdiv.s ft1, %[ONE], ft3\n"
+            "vfdiv.s ft3, %[ONE], ft3\n"
+            // write back invstd
+            "vfsgnj.s ft1, ft3, ft3\n"
+            // write back weight * invstd
+            "vfmul.s ft1, ft0, ft3\n"
             : [ONE] "+fr"(ONE)
             : [eps] "fr"(eps),
               [n_frep] "r"(num_doubles_per_point -

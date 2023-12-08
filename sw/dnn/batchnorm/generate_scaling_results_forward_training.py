@@ -17,11 +17,12 @@ base_config = {
     "prec": 64,
     "impl_opt_level": "MULTICORE_OPT",
     "is_forward": True,
-    "is_training": False,
+    "is_training": True,
+    "momentum": 0.1,
 }
 
 
-def format_size(C, H, W, tile_ci=None):
+def format_size(C, H, W, tile_ci=None, momentum=0.1):
     return {
         "input_dim": {
             "channels": C,
@@ -29,6 +30,7 @@ def format_size(C, H, W, tile_ci=None):
             "width": W,
         },
         "tile_ci": C if tile_ci is None else tile_ci,
+        "momentum": momentum
     }
 
 
@@ -37,8 +39,12 @@ config_path = base_path.parent / "data" / "params.hjson"
 target_snitch_cluster_path = (
     base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 )
-ofmap_errors_path = (
-    base_path.parent / "batchnorm_verify_results" / "ofmap.csv"
+ofmap_errors_path = base_path.parent / "batchnorm_verify_results" / "ofmap.csv"
+running_mean_errors_path = (
+    base_path.parent / "batchnorm_verify_results" / "running_mean.csv"
+)
+running_var_errors_path = (
+    base_path.parent / "batchnorm_verify_results" / "running_var.csv"
 )
 
 columns = [
@@ -53,14 +59,12 @@ columns = [
     "fpss_fpu_occupancy",
     "total_ipc",
     "main_loop_snitch_occupancy",
-    "ofmap_max_abs_err", 
+    "ofmap_max_abs_err",
     "ofmap_max_rel_err",
-    # "grad_ifmap_max_abs_err",
-    # "grad_ifmap_max_rel_err",
-    # "grad_weight_max_abs_err",
-    # "grad_weight_max_rel_err",
-    # "grad_bias_max_abs_err",
-    # "grad_bias_max_rel_err",
+    "running_mean_max_abs_err",
+    "running_mean_rel_err",
+    "running_var_abs_err",
+    "running_var_rel_err",
     "time_spent_waiting_in_barrier",
 ]
 index = ["prec", "impl", "C", "H", "W"]
@@ -86,7 +90,7 @@ def flatten_config_list(config_modifiers):
 def get_scaling_results_path(whole_block):
     return (
         base_path.parent
-        / f"fe_scaling_results{'' if not whole_block else '_whole_block'}.csv"
+        / f"ft_scaling_results{'' if not whole_block else '_whole_block'}.csv"
     )
 
 
@@ -280,15 +284,15 @@ def main():
                 0, f"{main_loop_mcycle_section}_snitch_occupancy"
             ]
 
-            ofmap_max_abs_err, ofmap_max_rel_err = pd.read_csv(
-                ofmap_errors_path
+            ofmap_max_abs_err, ofmap_max_rel_err = pd.read_csv(ofmap_errors_path).max()[
+                2:4
+            ]
+            running_mean_max_abs_err, running_mean_max_rel_err = pd.read_csv(
+                running_mean_errors_path
             ).max()[2:4]
-            # grad_weight_max_abs_err, grad_weight_max_rel_err = pd.read_csv(
-            #     grad_weight_errors_path
-            # ).max()[2:4]
-            # grad_bias_max_abs_err, grad_bias_max_rel_err = pd.read_csv(
-            #     grad_bias_errors_path
-            # ).max()[2:4]
+            running_var_max_abs_err, running_var_max_rel_err = pd.read_csv(
+                running_var_errors_path
+            ).max()[2:4]
             try:
                 perf_counters_raw = subprocess.check_output(
                     r"grep -oPh 'unknown_7c4.*#; .* = \K[0-9a-fx]+' logs/trace_hart_00000000.txt",
@@ -338,6 +342,10 @@ def main():
                     main_loop_snitch_occupancy,
                     ofmap_max_abs_err,
                     ofmap_max_rel_err,
+                    running_mean_max_abs_err,
+                    running_mean_max_rel_err,
+                    running_var_max_abs_err,
+                    running_var_max_rel_err,
                     total_time_waiting_in_barrier,
                     *perf_counters_int,
                 )

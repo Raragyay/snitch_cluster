@@ -107,9 +107,9 @@ static inline void batchnorm_backward_single_core_opt_fp64(
 
     // dataflow:
     double *ptr = (double *)snrt_l1_start_addr();
-    double *weight_scratch = ptr;
-    ptr += C;
     double *invstd_scratch = ptr;
+    ptr += C;
+    double *weight_scratch = ptr;
     ptr += C;
     double *running_mean_scratch = ptr;
     ptr += C;
@@ -136,14 +136,17 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     uint32_t start_dma_load = snrt_mcycle();
     // load running_var, initiate the rest
     if (snrt_is_dm_core()) {
-        // Initiate loads for everything but only wait for the running var load.
-        // Q: is it better to wait then initiate the rest? we'll see
+        weight_load =
+            snrt_dma_start_1d(weight_scratch, l->weight, point_size_in_bytes);
+        running_mean_load = snrt_dma_start_1d(
+            running_mean_scratch, l->running_mean, point_size_in_bytes);
         running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
                                              C * sizeof(double));
-        snrt_dma_wait(running_var_load);
+        snrt_dma_wait_all();
     } else if (compute_id == 0) {
         // PRECONFIGURE: operations on arrays of size C, split by core.
-        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, C, sizeof(double));
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, 3, C, C * sizeof(double),
+                         sizeof(double));
     }
     uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
@@ -151,10 +154,6 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     // compute invstd, load weight and running_mean in
     uint32_t start_invstd_calc = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        weight_load =
-            snrt_dma_start_1d(weight_scratch, l->weight, point_size_in_bytes);
-        running_mean_load = snrt_dma_start_1d(
-            running_mean_scratch, l->running_mean, point_size_in_bytes);
         // load first tile in. We can do this here because sqrt/div are really
         // slow.
         grad_ofmap_load =
@@ -163,17 +162,23 @@ static inline void batchnorm_backward_single_core_opt_fp64(
 
         snrt_dma_wait_all();
     } else if (compute_id == 0) {
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, invstd_scratch);
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, invstd_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, invstd_scratch);
         register double eps = l->eps;  // any value in dma'ing this? idk
         const register double ONE = 1;
         snrt_ssr_enable();
         // unrolling does not help because fsqrt and fdiv are not pipelined
         asm volatile(
-            "frep.o %[n_frep], 3, 0, 0 \n"
+            "frep.o %[n_frep], 6, 0, 0 \n"
             "fadd.d ft3, ft0, %[eps]\n"
             "fsqrt.d ft3, ft3\n"
-            "fdiv.d ft1, %[ONE], ft3\n"
+            "fdiv.d ft3, %[ONE], ft3\n"
+            // write back invstd
+            "fsgnj.d ft1, ft3, ft3\n"
+            // write back weight * invstd
+            "fmul.d ft1, ft0, ft3\n"
+            // write back running mean * invstd
+            "fmul.d ft1, ft0, ft3\n"
             :
             : [eps] "fr"(eps), [ONE] "fr"(ONE),
               [n_frep] "r"(C - 1)  // we repeat n_frep+1 times
@@ -186,14 +191,6 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     uint32_t end_invstd_calc = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
-    // compute weight*invstd and running_mean*invstd
-
-    // computing invstd scratch and using it for weight: can we do it in 1 frep?
-    // load running var: 1 ssr
-    // write running var: 1 ssr
-    // load weight: 1 ssr
-    // write weight: 1 ssr
-    // answer: not really. Still worth precomputing I think
     uint32_t start_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
     uint32_t end_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
@@ -201,11 +198,11 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     // compute grad_weight, grad_bias, grad_ifmap
     if (snrt_is_dm_core()) {
     } else if (compute_id == 0) {
-        batchnorm_backward_fp64_no_loop(
-            grad_ofmap_scratch, grad_ifmap_scratch, ifmap_scratch,
-            running_mean_scratch, weight_scratch, invstd_scratch,
-            grad_bias_scratch, grad_weight_scratch, C, num_points,
-            num_points % 2, C, 1, true, true);
+        batchnorm_backward_fp64_no_loop(grad_ofmap_scratch, grad_ifmap_scratch,
+                                        ifmap_scratch, running_mean_scratch,
+                                        weight_scratch, invstd_scratch,
+                                        grad_bias_scratch, grad_weight_scratch,
+                                        C, num_points, num_points % 2, C, 1);
     }
     uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
     // don't need second reduction

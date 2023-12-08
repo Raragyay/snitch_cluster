@@ -203,8 +203,8 @@ static inline void batchnorm_forward_multicore_fp64(batchnorm_layer_t *l) {
         if (snrt_is_dm_core()) {
             // buf flag should be 1 at this point
             batchnorm_forward_dma_main_loop_fp_agnostic(
-                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
-                work_in_tile, dm_comm, 1, tile_size_in_points,
+                l->ifmap, l->ofmap, C, C * sizeof(double), C * sizeof(double),
+                true, work_left, work_in_tile, dm_comm, 1, tile_size_in_points,
                 tile_stride_in_doubles, ifmap_scratch, ofmap_scratch, buf_flag);
         } else {
             if (num_channels_work_for_core == 0) {
@@ -324,6 +324,7 @@ static inline void batchnorm_forward_training_multicore_fp64(
     uint32_t work_div_4_sub_1 = work_in_tile / 4 - 1;
     uint32_t work_mod_4 = work_in_tile % 4;
     uint32_t work_sub_1 = work_in_tile - 1;
+
     // uint32_t work_sub_1 = work_in_tile - 1;
     if (snrt_is_dm_core()) {
         work_left -= work_in_tile;
@@ -384,7 +385,73 @@ static inline void batchnorm_forward_training_multicore_fp64(
             snrt_cluster_hw_barrier();
         }
     } else {
-        // TODO: looped version
+        if (snrt_is_dm_core()) {
+            // buf flag should be 1 at this point
+            batchnorm_collect_statistics_dma_main_loop_fp_agnostic(
+                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                work_in_tile, dm_comm, 4, tile_size_in_points,
+                tile_stride_in_doubles, ifmap_scratch, buf_flag);
+
+            // reset buf flag and reload
+            buf_flag = 0;
+            dm_comm->num_points_work_in_tile = work_in_tile;
+            // TODO: figure out what mod to do
+            dm_comm->work_mod_4 = work_mod_4;
+            dm_comm->work_div_4_sub_1 =
+                work_div_4_sub_1;  // this is the frep value
+            snrt_dma_start_1d(ifmap_scratch, l->ifmap,
+                              work_in_tile * C * sizeof(double));
+            buf_flag = !buf_flag;
+        } else {
+            if (num_channels_work_for_core == 0) {
+                // start up first tile
+                snrt_cluster_hw_barrier();
+                uint32_t dm_comm_work_in_tile = work_in_tile;
+                while (dm_comm_work_in_tile != 0) {
+                    // wait for dma to compute result and signify work is done
+                    snrt_cluster_hw_barrier();
+                    dm_comm_work_in_tile = dm_comm->num_points_work_in_tile;
+                    // "signal" work is done
+                    snrt_cluster_hw_barrier();
+                }
+            } else {
+                batchnorm_collect_mean_statistics_tile_fp64_looped(
+                    &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id], num_points,
+                    C * sizeof(double), work_in_tile, work_div_4_sub_1,
+                    work_mod_4, tile_stride_in_doubles,
+                    num_channels_work_for_core, num_compute_cores, dm_comm);
+            }
+        }
+
+        if (snrt_is_dm_core()) {
+            // buf flag should be 1 at this point
+            batchnorm_collect_statistics_dma_main_loop_fp_agnostic(
+                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                work_in_tile, dm_comm, 4, tile_size_in_points,
+                tile_stride_in_doubles, ifmap_scratch, buf_flag);
+        } else {
+            if (num_channels_work_for_core == 0) {
+                // start up first tile
+                snrt_cluster_hw_barrier();
+                uint32_t dm_comm_work_in_tile = work_in_tile;
+                while (dm_comm_work_in_tile != 0) {
+                    // wait for dma to compute result and signify work is done
+                    snrt_cluster_hw_barrier();
+                    dm_comm_work_in_tile = dm_comm->num_points_work_in_tile;
+                    // "signal" work is done
+                    snrt_cluster_hw_barrier();
+                }
+            } else {
+                batchnorm_collect_var_statistics_tile_fp64_looped(
+                    &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id],
+                    &current_var_scratch[compute_id], num_points,
+                    C * sizeof(double), work_in_tile, work_div_4_sub_1,
+                    work_mod_4, tile_stride_in_doubles,
+                    num_channels_work_for_core, num_compute_cores, dm_comm);
+            }
+        }
     }
 
     // need to collect current_mean = sum(x) / N
@@ -431,8 +498,9 @@ static inline void batchnorm_forward_training_multicore_fp64(
             // Reduce the four variables running_mean, running_var, weight, bias
             // into an fmadd for main loop see
             // https://github.com/pytorch/pytorch/blob/3acaf8564da4c2f0faaea33ce4572ad9b3715b47/aten/src/ATen/native/cpu/batch_norm_kernel.cpp#L45-L55
-            // Moreover, update statistics for running_mean and running_var. 
-            // Use unbiased estimator for updating statistic, but biased estimator for gamma/beta
+            // Moreover, update statistics for running_mean and running_var.
+            // Use unbiased estimator for updating statistic, but biased
+            // estimator for gamma/beta
             asm volatile(
                 "frep.o %[n_frep], 9, 0, 0 \n"
                 // current_var + eps
@@ -466,7 +534,6 @@ static inline void batchnorm_forward_training_multicore_fp64(
             snrt_ssr_repeat(SNRT_SSR_DM0, 1);
             __builtin_ssr_barrier(SNRT_SSR_DM1);
             snrt_ssr_disable();
-
         }
     }
     // calc gamma beta, dma loads in first tile for ofmap
@@ -503,17 +570,18 @@ static inline void batchnorm_forward_training_multicore_fp64(
         if (snrt_is_dm_core()) {
             // buf flag should be 1 at this point
             batchnorm_forward_dma_main_loop_fp_agnostic(
-                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
-                work_in_tile, dm_comm, 1, tile_size_in_points,
+                l->ifmap, l->ofmap, C, C * sizeof(double), C * sizeof(double),
+                true, work_left, work_in_tile, dm_comm, 1, tile_size_in_points,
                 tile_stride_in_doubles, ifmap_scratch, ofmap_scratch, buf_flag);
         } else {
             if (num_channels_work_for_core == 0) {
                 // start up first tile
                 snrt_cluster_hw_barrier();
-                while (work_in_tile != 0) {
+                uint32_t dm_comm_work_in_tile = work_in_tile;
+                while (dm_comm_work_in_tile != 0) {
                     // wait for dma to compute result and signify work is done
                     snrt_cluster_hw_barrier();
-                    work_in_tile = dm_comm->num_points_work_in_tile;
+                    dm_comm_work_in_tile = dm_comm->num_points_work_in_tile;
                     // "signal" work is done
                     snrt_cluster_hw_barrier();
                 }
@@ -538,8 +606,6 @@ static inline void batchnorm_forward_training_multicore_fp64(
     // wait for all transactions to complete
     uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(temp, current_mean_scratch, C * sizeof(double));
-        snrt_dma_start_1d(temp + C, current_var_scratch, C * sizeof(double));
         snrt_dma_start_1d(l->running_var, running_var_scratch,
                           C * sizeof(double));
         snrt_dma_start_1d(l->running_mean, running_mean_scratch,
@@ -582,9 +648,9 @@ static inline void batchnorm_backward_multicore_fp64(
     dm_comm_t *dm_comm = (dm_comm_t *)raw_ptr;
     raw_ptr += sizeof(dm_comm_t);
     double *ptr = (double *)raw_ptr;
-    double *weight_scratch = ptr;
-    ptr += C;
     double *invstd_scratch = ptr;
+    ptr += C;
+    double *weight_scratch = ptr;
     ptr += C;
     double *running_mean_scratch = ptr;
     ptr += C;
@@ -650,14 +716,16 @@ static inline void batchnorm_backward_multicore_fp64(
     if (snrt_is_dm_core()) {
         // Initiate loads for everything but only wait for the running var load.
         // Q: is it better to wait then initiate the rest? we'll see
-        running_var_load = snrt_dma_start_1d(invstd_scratch, l->running_var,
+        snrt_dma_start_1d(invstd_scratch, l->running_var,
                                              C * sizeof(double));
-        snrt_dma_wait(running_var_load);
+        snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
+        snrt_dma_start_1d(running_mean_scratch, l->running_mean,
+                          C * sizeof(double));
+        snrt_dma_wait_all();
     } else {
         // PRECONFIGURE: operations on arrays of size C, split by core.
-        snrt_ssr_loop_1d(SNRT_SSR_DM0, num_channels_work_for_core,
-                         num_compute_cores * sizeof(double));
-        snrt_ssr_loop_1d(SNRT_SSR_DM1, num_channels_work_for_core,
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, 3, num_channels_work_for_core,
+                         C * sizeof(double),
                          num_compute_cores * sizeof(double));
     }
     uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
@@ -666,9 +734,6 @@ static inline void batchnorm_backward_multicore_fp64(
     // compute invstd, load weight and running_mean in
     uint32_t start_invstd_calc = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(weight_scratch, l->weight, C * sizeof(double));
-        snrt_dma_start_1d(running_mean_scratch, l->running_mean,
-                          C * sizeof(double));
         // load first tile in but only as much as we can in parallel while sqrt
         // runs
         snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
@@ -679,27 +744,33 @@ static inline void batchnorm_backward_multicore_fp64(
         buf_flag = !buf_flag;
     } else {
         if (num_channels_work_for_core > 0) {
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D,
                           &invstd_scratch[compute_id]);
-            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D,
                            &invstd_scratch[compute_id]);
             register double eps = l->eps;  // any value in dma'ing this? idk
             const register double ONE = 1;
             snrt_ssr_enable();
             // unrolling does not help because fsqrt and fdiv are not pipelined
             asm volatile(
-                "frep.o %[n_frep], 3, 0, 0 \n"
+                "frep.o %[n_frep], 6, 0, 0 \n"
                 "fadd.d ft3, ft0, %[eps]\n"
                 "fsqrt.d ft3, ft3\n"
-                "fdiv.d ft1, %[ONE], ft3\n"
+                "fdiv.d ft3, %[ONE], ft3\n"
+                // write back invstd
+                "fsgnj.d ft1, ft3, ft3\n"
+                // write back weight * invstd
+                "fmul.d ft1, ft0, ft3\n"
+                // write back running mean * invstd
+                "fmul.d ft1, ft0, ft3\n"
                 :
                 : [eps] "fr"(eps), [ONE] "fr"(ONE),
                   [n_frep] "r"(num_channels_work_for_core -
                                1)  // we repeat n_frep+1 times
                 : "ft0", "ft1", "ft2", "ft3");
 
-            snrt_fpu_fence();                     // thought: do we need this?
-            __builtin_ssr_barrier(SNRT_SSR_DM1);  // thought: do we need this?
+            snrt_fpu_fence();
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
             snrt_ssr_disable();
         }
     }
@@ -734,8 +805,7 @@ static inline void batchnorm_backward_multicore_fp64(
                     &weight_scratch[compute_id], &invstd_scratch[compute_id],
                     &grad_bias_scratch[compute_id],
                     &grad_weight_scratch[compute_id], C, work_in_tile,
-                    work_mod_2, num_channels_work_for_core, num_compute_cores,
-                    true, false);
+                    work_mod_2, num_channels_work_for_core, num_compute_cores);
             }
 
             snrt_cluster_hw_barrier();

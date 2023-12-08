@@ -1186,12 +1186,7 @@ static inline void batchnorm_backward_training_multicore_fp64(
         snrt_dma_wait(grad_ofmap_load);
         snrt_dma_wait(ifmap_load);
         snrt_dma_wait(curr_mean_load);
-    } 
-    // else if (snrt_is_compute_core()) {
-    //     snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points,
-    //                      num_channels_work_for_core, C * sizeof(double),
-    //                      num_compute_cores * sizeof(double));
-    // }
+    }
     uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
@@ -1396,4 +1391,364 @@ static inline void batchnorm_backward_training_multicore_fp64(
     uint32_t done = snrt_mcycle();
     end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
     end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+}
+
+static inline void batchnorm_backward_training_multicore_fp32(
+    batchnorm_backward_training_layer_t *l) {
+    uint32_t start = snrt_mcycle();
+
+    // data is in HWC format
+    const uint32_t num_clusters =
+        snrt_cluster_num();  // how many clusters are there in total?
+    const uint32_t cluster_id = snrt_cluster_idx();  // which cluster are we?
+    const uint32_t num_compute_cores =
+        snrt_cluster_compute_core_num();  // how many compute cores per cluster?
+    const uint32_t compute_id = snrt_cluster_core_idx();
+
+    // Calculate output dimensions
+    const uint32_t N = 1;
+    const uint32_t H = l->IH;
+    const uint32_t W = l->IW;
+    const uint32_t C = l->CI;
+    const uint32_t num_points = N * H * W;
+
+    precision_t dtype_bytes = l->dtype;
+    uint32_t num_dtypes_per_double = (FP64 / dtype_bytes);
+
+    uint32_t num_doubles_per_aligned_point = ceildiv(C, num_dtypes_per_double);
+    uint32_t num_doubles = num_points * num_doubles_per_aligned_point;
+    bool is_point_aligned_to_8_byte_boundary = C % num_dtypes_per_double == 0;
+    uint32_t num_bytes_per_aligned_point =
+        num_doubles_per_aligned_point * sizeof(double);
+    uint32_t num_bytes_in_point_aligned_ifmap = num_doubles * sizeof(double);
+
+    uint32_t num_bytes_per_packed_point = C * dtype_bytes;
+
+    const uint32_t num_doubles_work_for_core_per_aligned_point =
+        get_core_num_work_items(num_doubles_per_aligned_point,
+                                num_compute_cores, compute_id);
+
+    // dataflow:
+    void *raw_ptr = (void *)snrt_l1_start_addr();
+    dm_comm_t *dm_comm = (dm_comm_t *)raw_ptr;
+    raw_ptr += sizeof(dm_comm_t);
+    v2s *ptr = (v2s *)raw_ptr;
+    v2s *invstd_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *sum_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *dotp_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *k_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *grad_mean_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *weight_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *current_mean_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+    v2s *grad_weight_scratch = ptr;
+    ptr += num_doubles_per_aligned_point;
+
+    v2s *used_tcdm_end_addr =
+        (v2s *)(snrt_l1_end_addr() -
+                   (snrt_l1_end_addr() - snrt_l1_start_addr()) /
+                       4);  // use 3/4 for now
+    ptrdiff_t space_left = used_tcdm_end_addr - ptr;
+    ptrdiff_t tile_size_in_aligned_points = (space_left) / (2 * 2 * num_doubles_per_aligned_point);
+
+    ptrdiff_t grad_ofmap_len = tile_size_in_aligned_points * num_doubles_per_aligned_point * 2;
+    ptrdiff_t grad_ifmap_len = grad_ofmap_len, ifmap_len = grad_ifmap_len;
+
+    v2s *grad_ofmap_scratch = ptr;
+    ptr += grad_ofmap_len;
+    v2s *ifmap_scratch = ptr;
+    ptr += ifmap_len;
+    v2s *grad_ifmap_scratch = ifmap_scratch;  // reuse the buffer
+
+    bool buf_flag = 0;
+
+    snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load,
+        grad_ofmap_load, ifmap_load;
+
+    uint32_t doubles_loadable = max(ceildiv(num_doubles_per_aligned_point, num_compute_cores) * 50 * 7, 128);
+    uint32_t points_loadable = doubles_loadable / num_doubles_per_aligned_point;
+    uint32_t work_in_tile = min(min(points_loadable, tile_size_in_aligned_points), num_points);
+    // uint32_t work_in_tile = 4;
+    uint32_t work_left = num_points;
+    uint32_t work_mod_3 = work_in_tile % 3;
+    uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
+    uint32_t work_mod_4 = work_in_tile % 4;
+    uint32_t work_div_4_sub_1 = work_in_tile / 4 - 1;
+    if (snrt_is_dm_core()) {
+        work_left -= work_in_tile;
+        dm_comm->num_points_work_in_tile = work_in_tile;
+        dm_comm->work_mod_3 = work_mod_3;
+        dm_comm->work_div_3_sub_1 = work_div_3_sub_1;  // this is the frep value
+        buf_flag = !buf_flag;
+    }
+
+    uint32_t start_dma_load = snrt_mcycle();
+    if (snrt_is_dm_core()) {
+        grad_ofmap_load = initiate_dma_1d_or_2d(
+            grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point,
+            work_in_tile, is_point_aligned_to_8_byte_boundary);
+        ifmap_load = initiate_dma_1d_or_2d(
+            ifmap_scratch, l->ifmap, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point,
+            work_in_tile, is_point_aligned_to_8_byte_boundary);
+        curr_mean_load =
+            snrt_dma_start_1d(current_mean_scratch, l->current_mean, num_bytes_per_packed_point);
+        curr_var_load =
+            snrt_dma_start_1d(invstd_scratch, l->current_var, num_bytes_per_packed_point);
+        weight_load = snrt_dma_start_1d(weight_scratch, l->weight, num_bytes_per_packed_point);
+        snrt_dma_wait(grad_ofmap_load);
+        snrt_dma_wait(ifmap_load);
+        snrt_dma_wait(curr_mean_load);
+    }
+    uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_invstd_computations = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_invstd_computations = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    if (work_in_tile == num_points) {
+        DUMP(11);
+        uint32_t start_main_loop_1 = SNRT_SECTIONED_MCYCLE();
+        if (snrt_is_dm_core()) {
+        } else {
+            if (num_doubles_work_for_core_per_aligned_point > 0) {
+                batchnorm_backward_training_tile_fp32_no_loop_1(
+                    &grad_ofmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id], &sum_scratch[compute_id],
+                    &dotp_scratch[compute_id], num_bytes_per_aligned_point,
+                    work_in_tile, work_mod_3,
+                    work_div_3_sub_1, num_doubles_work_for_core_per_aligned_point,
+                    num_compute_cores, true, false);
+            }
+        }
+        uint32_t end_main_loop_1 = SNRT_SECTIONED_MCYCLE();
+    } else {
+        DUMP(12);
+        if (snrt_is_dm_core()) {
+            batchnorm_backward_training_dma_main_loop_fp_agnostic(
+                l, num_doubles_per_aligned_point, num_bytes_per_packed_point,
+                num_bytes_per_aligned_point,
+                is_point_aligned_to_8_byte_boundary, work_left, work_in_tile,
+                dm_comm, tile_size_in_aligned_points, grad_ofmap_scratch,
+                ifmap_scratch, NULL, buf_flag, 3);
+        } else {
+            if (num_doubles_work_for_core_per_aligned_point == 0) {
+                // start up first tile
+                snrt_cluster_hw_barrier();
+                while (work_in_tile != 0) {
+                    // wait for dma to compute result and signify work is done
+                    snrt_cluster_hw_barrier();
+                    work_in_tile = dm_comm->num_points_work_in_tile;
+                    // "signal" work is done
+                    snrt_cluster_hw_barrier();
+                }
+            } else {
+                batchnorm_backward_training_tile_fp32_looped_1(
+                    &grad_ofmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id], &sum_scratch[compute_id],
+                    &dotp_scratch[compute_id],
+                    num_doubles_per_aligned_point, work_in_tile, work_mod_3,
+                    work_div_3_sub_1, tile_size_in_aligned_points,
+                    num_doubles_work_for_core_per_aligned_point,
+                    num_compute_cores, dm_comm);
+            }
+        }
+    }
+    if (snrt_is_dm_core()) {
+        snrt_dma_wait(curr_var_load);
+    }
+    snrt_cluster_hw_barrier();
+
+    DUMP(1);
+
+    uint32_t start_compute_sum_dotp_reduction_2 = SNRT_SECTIONED_MCYCLE();
+    uint32_t end_compute_sum_dotp_reduction_2 = SNRT_SECTIONED_MCYCLE();
+
+    uint32_t start_compute_invstd_k_grad_mean_grad_weight =
+        SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        dm_comm->num_points_work_in_tile = work_in_tile;
+        dm_comm->work_mod_3 = work_mod_3;
+        dm_comm->work_div_3_sub_1 = work_div_3_sub_1;
+        buf_flag = 0;
+        grad_ofmap_load = initiate_dma_1d_or_2d(
+            grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point,
+            work_in_tile, is_point_aligned_to_8_byte_boundary);
+        ifmap_load = initiate_dma_1d_or_2d(
+            ifmap_scratch, l->ifmap, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point,
+            work_in_tile, is_point_aligned_to_8_byte_boundary);
+        snrt_dma_wait(weight_load);
+        snrt_dma_wait(grad_ofmap_load);
+        snrt_dma_wait(ifmap_load);
+        buf_flag = !buf_flag;
+    } else if (snrt_is_compute_core()) {
+        if (num_doubles_work_for_core_per_aligned_point > 0) {
+            register v2s ZERO asm("ft5");  // can consider fcvt instead
+            asm volatile("fcvt.d.w %[ZERO], zero\n"  // vfcvt.s.x raises exception
+                                                    // despite smallfloat spec
+                        : [ZERO] "=fr"(ZERO.f64)::"ft0", "ft1", "ft2");
+            register v2s num_points_reg asm("ft6");  // can consider fcvt instead
+            asm volatile(
+                "fcvt.s.w %[num_points_reg], %[num_points]\n"
+                "vfcpka.s.s %[num_points_reg],%[num_points_reg],%[num_points_reg]\n"  // duplicate the num_points
+                : [num_points_reg] "+fr"(num_points_reg)
+                : [num_points] "r"(num_points) 
+                :"ft0", "ft1", "ft2");
+            snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_doubles_work_for_core_per_aligned_point,
+                             num_compute_cores * sizeof(double));
+
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &invstd_scratch[compute_id]);
+            register float eps = l->eps;
+            const register float ONE = 1;
+            snrt_ssr_enable();
+            asm volatile(
+                "vfcpka.s.s %[ONE],%[ONE],%[ONE]\n"  // duplicate the 1
+                "frep.o %[n_frep], 3, 0, 0 \n"
+                "vfadd.r.s ft3, ft0, %[eps]\n"
+                "vfsqrt.s ft3, ft3\n"
+                "vfdiv.s ft1, %[ONE], ft3\n"
+                :
+                : [eps] "fr"(eps), [ONE] "fr"(ONE),
+                  [n_frep] "r"(num_doubles_work_for_core_per_aligned_point - 1)
+                : "ft0", "ft1", "ft2", "ft3");
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
+
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &grad_weight_scratch[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, &dotp_scratch[compute_id]);
+            asm volatile(
+                "frep.o %[n_frep], 1, 0, 0 \n"
+                "vfmul.s ft1, ft0, ft2 \n"
+                :
+                : [n_frep] "r"(num_doubles_work_for_core_per_aligned_point - 1)
+                : "ft0", "ft1", "ft2");
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
+
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D,
+                          &invstd_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, &k_scratch[compute_id]);
+            snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D,
+                          &grad_weight_scratch[compute_id]);
+            asm volatile(
+                "frep.o %[n_frep], 2, 0, 0 \n"
+                "vfmul.s ft3, ft0, ft2 \n"
+                "vfdiv.s ft1, ft3, %[num_points] \n"
+                :
+                : [n_frep] "r"(num_doubles_work_for_core_per_aligned_point - 1),
+                  [num_points] "fr"(num_points_reg.f64)
+                : "ft0", "ft1", "ft2", "ft3");
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
+
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, &sum_scratch[compute_id]);
+            snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D,
+                           &grad_mean_scratch[compute_id]);
+            asm volatile(
+                "frep.o %[n_frep], 1, 0, 0 \n"
+                "vfdiv.s ft1, ft0, %[num_points] \n"
+                :
+                : [n_frep] "r"(num_doubles_work_for_core_per_aligned_point - 1),
+                  [num_points] "fr"(num_points_reg.f64)
+                : "ft0", "ft1", "ft2");
+            __builtin_ssr_barrier(SNRT_SSR_DM1);
+            snrt_ssr_disable();
+        }
+    }
+    uint32_t end_compute_invstd_k_grad_mean_grad_weight =
+        SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+    
+    DUMP(2);
+
+    if (work_in_tile == num_points) {
+        DUMP(21);
+        uint32_t start_main_loop_2 = SNRT_SECTIONED_MCYCLE();
+        if (snrt_is_dm_core()) {
+            snrt_dma_wait_all();
+            snrt_cluster_hw_barrier();
+            snrt_cluster_hw_barrier();
+            initiate_dma_1d_or_2d(
+                (void *)l->grad_ifmap, (void *)grad_ifmap_scratch,
+                num_bytes_per_packed_point, num_bytes_per_packed_point,
+                num_bytes_per_aligned_point, work_in_tile,
+                is_point_aligned_to_8_byte_boundary);
+        } else {
+            snrt_cluster_hw_barrier();
+            if (num_doubles_work_for_core_per_aligned_point > 0) {
+                batchnorm_backward_training_tile_fp32_no_loop_2(
+                    &grad_ofmap_scratch[compute_id],
+                    &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id],
+                    &weight_scratch[compute_id], &invstd_scratch[compute_id],
+                    &k_scratch[compute_id], &grad_mean_scratch[compute_id],
+                    num_doubles_per_aligned_point,
+                    work_in_tile, work_mod_3, work_div_3_sub_1,
+                    num_doubles_work_for_core_per_aligned_point, num_compute_cores, true, false);
+            }
+            // notify finish
+            snrt_cluster_hw_barrier();
+        }
+        uint32_t end_main_loop_2 = SNRT_SECTIONED_MCYCLE();
+    } else {
+        DUMP(22);
+        if (snrt_is_dm_core()) {
+            batchnorm_backward_training_dma_main_loop_fp_agnostic(
+                l, num_doubles_per_aligned_point, num_bytes_per_packed_point,
+                num_bytes_per_aligned_point,
+                is_point_aligned_to_8_byte_boundary, work_left, work_in_tile,
+                dm_comm, tile_size_in_aligned_points, grad_ofmap_scratch,
+                ifmap_scratch, grad_ifmap_scratch, buf_flag, 4);
+        } else {
+            if (num_doubles_work_for_core_per_aligned_point == 0) {
+                // start up first tile
+                snrt_cluster_hw_barrier();
+                while (work_in_tile != 0) {
+                    // wait for dma to compute result and signify work is done
+                    snrt_cluster_hw_barrier();
+                    work_in_tile = dm_comm->num_points_work_in_tile;
+                    // "signal" work is done
+                    snrt_cluster_hw_barrier();
+                }
+            } else {
+                DUMP(23);
+                batchnorm_backward_training_tile_fp32_looped_2(
+                    &grad_ofmap_scratch[compute_id],
+                    &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
+                    &current_mean_scratch[compute_id], &weight_scratch[compute_id],
+                    &invstd_scratch[compute_id], &k_scratch[compute_id],
+                    &grad_mean_scratch[compute_id],
+                    num_doubles_per_aligned_point, work_in_tile, work_mod_3,
+                    work_div_3_sub_1, tile_size_in_aligned_points,
+                    num_doubles_work_for_core_per_aligned_point,
+                    num_compute_cores, dm_comm);
+            }
+        }
+    }
+    DUMP(3);
+    uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
+                          num_bytes_per_packed_point);
+        snrt_dma_start_1d(l->grad_bias, sum_scratch, num_bytes_per_packed_point);
+        snrt_dma_wait_all();
+    }
+    snrt_cluster_hw_barrier();
+    uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+    DUMP(4);
 }

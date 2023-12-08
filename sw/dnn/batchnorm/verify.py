@@ -390,6 +390,13 @@ def main():
         extract_torch_tensor_from_simulation(raw_results, uid, prec, shape)
         for uid, shape in simulation_output_defs
     ]
+    
+    temp = extract_torch_tensor_from_simulation(raw_results, "temp", prec, [8,1])
+    
+    verification.dump_results_to_csv(
+        [temp],
+        errors_filepath / "raw_result.csv",
+    )
 
     print("All data extracted from simulation and binary. Comparing to golden model. ")
     channels_last_model = channels_last_to_contiguous_wrapper(model_fn)

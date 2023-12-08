@@ -1394,7 +1394,7 @@ static inline void batchnorm_backward_training_multicore_fp64(
 }
 
 static inline void batchnorm_backward_training_multicore_fp32(
-    batchnorm_backward_training_layer_t *l) {
+    batchnorm_backward_training_layer_t *l, double *temp) {
     uint32_t start = snrt_mcycle();
 
     // data is in HWC format
@@ -1582,6 +1582,10 @@ static inline void batchnorm_backward_training_multicore_fp32(
         grad_ofmap_load = initiate_dma_1d_or_2d(
             grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
             num_bytes_per_aligned_point, num_bytes_per_packed_point,
+            work_in_tile, is_point_aligned_to_8_byte_boundary);
+        initiate_dma_1d_or_2d(
+            temp, grad_ofmap_scratch, num_bytes_per_packed_point,
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
             work_in_tile, is_point_aligned_to_8_byte_boundary);
         ifmap_load = initiate_dma_1d_or_2d(
             ifmap_scratch, l->ifmap, num_bytes_per_packed_point,

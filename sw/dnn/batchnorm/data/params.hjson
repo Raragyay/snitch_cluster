@@ -2,7 +2,7 @@
   input_dim:
   {
     channels: 1
-    height: 10
+    height: 8
     width: 1
   }
   eps: 1e-05

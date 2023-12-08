@@ -684,7 +684,7 @@ static inline void batchnorm_backward_training_single_core(
 }
 
 // uses DMA, SSR, FREP
-static inline void batchnorm_backward_training_single_core_opt(
+static inline void batchnorm_backward_training_single_core_opt_fp64(
     batchnorm_backward_training_layer_t *l) {
     uint32_t kernel_start = snrt_mcycle();
     // data is in HWC format
@@ -736,7 +736,6 @@ static inline void batchnorm_backward_training_single_core_opt(
     double *ifmap_scratch = ptr;
     ptr += ifmap_len;
     double *grad_ifmap_scratch = ifmap_scratch;  // reuse the buffer
-    ptr += grad_ifmap_len;
 
     // Load data
     snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load,
@@ -920,6 +919,291 @@ static inline void batchnorm_backward_training_single_core_opt(
     uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch, num_bytes);
+    }
+    uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+    uint32_t done = snrt_mcycle();
+}
+
+static inline void batchnorm_backward_training_single_core_opt_fp32(
+    batchnorm_backward_training_layer_t *l) {
+    uint32_t kernel_start = snrt_mcycle();
+    const uint32_t compute_id = snrt_cluster_core_idx();
+     
+    uint32_t N = 1;
+    uint32_t H = l->IH;
+    uint32_t W = l->IW;
+    uint32_t C = l->CI;
+    uint32_t num_points = N * H * W;
+    precision_t dtype_bytes = l->dtype;
+    uint32_t num_dtypes_per_double = (FP64 / dtype_bytes);
+
+    uint32_t num_doubles_per_point = ceildiv(C, num_dtypes_per_double);
+    uint32_t num_doubles = num_points * num_doubles_per_point;
+    bool is_point_aligned_to_8_byte_boundary = C % num_dtypes_per_double == 0;
+    uint32_t num_bytes_per_aligned_point =
+        num_doubles_per_point * sizeof(double);
+    uint32_t num_bytes_in_point_aligned_ifmap = num_doubles * sizeof(double);
+
+    // not including padding for non-aligned points.
+    // When is_point_aligned_to_8_byte_boundary == true, the expressions above
+    // are equivalent. Output should be written according to the packed version
+    uint32_t num_bytes_per_packed_point = C * dtype_bytes;
+    
+    // dataflow:
+    v2s *ptr = (v2s *)snrt_l1_start_addr();
+
+    v2s *invstd_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *dotp_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *k_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *grad_mean_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *dx_scratch = ptr;
+    ptr += num_doubles;
+
+    v2s *weight_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *curr_mean_scratch = ptr;
+    ptr += num_doubles_per_point;
+    v2s *curr_var_scratch = ptr;
+    ptr += num_doubles_per_point;
+
+    ptrdiff_t grad_weight_scratch_len = num_doubles_per_point,
+              grad_bias_scratch_len = num_doubles_per_point;
+
+    v2s *grad_weight_scratch = ptr;
+    ptr += grad_weight_scratch_len;
+    v2s *grad_bias_scratch = ptr;
+    ptr += grad_bias_scratch_len;
+
+    ptrdiff_t grad_ofmap_len = num_points * C, grad_ifmap_len = grad_ofmap_len,
+              ifmap_len = grad_ifmap_len;
+
+    v2s *grad_ofmap_scratch = ptr;
+    ptr += grad_ofmap_len;
+    v2s *ifmap_scratch = ptr;
+    ptr += ifmap_len;
+    v2s *grad_ifmap_scratch = ifmap_scratch;  // reuse the buffer
+
+    snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load,
+        grad_ofmap_load, ifmap_load;
+
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+    uint32_t start_dma_load = snrt_mcycle();
+    if (snrt_is_dm_core()) {
+        curr_var_load = snrt_dma_start_1d(invstd_scratch, l->current_var,
+                                          num_bytes_per_packed_point);
+        grad_ofmap_load = initiate_dma_1d_or_2d(
+            grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point, num_points,
+            is_point_aligned_to_8_byte_boundary);
+        ifmap_load = initiate_dma_1d_or_2d(
+            ifmap_scratch, l->ifmap, dtype_bytes * C,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point, num_points,
+            is_point_aligned_to_8_byte_boundary);
+        curr_mean_load = snrt_dma_start_1d(curr_mean_scratch, l->current_mean,
+                                           num_bytes_per_packed_point);
+        weight_load =
+            snrt_dma_start_1d(weight_scratch, l->weight, num_bytes_per_packed_point);
+        snrt_dma_wait(curr_var_load);
+    } else if (compute_id == 0) {
+        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_doubles_per_point, sizeof(double));
+    }
+    uint32_t end_dma_load = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_invstd_computations = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        snrt_dma_wait(grad_ofmap_load);
+        snrt_dma_wait(ifmap_load);
+        snrt_dma_wait(curr_mean_load);
+    } else if (compute_id == 0) {
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, invstd_scratch);
+        register float eps = l->eps;
+        const register float ONE = 1;
+        snrt_ssr_enable();
+        asm volatile(
+            "vfcpka.s.s %[ONE],%[ONE],%[ONE]\n"  // duplicate the 1
+            "frep.o %[n_frep], 3, 0, 0 \n"
+            "vfadd.r.s ft3, ft0, %[eps]\n"
+            "vfsqrt.s ft3, ft3\n"
+            "vfdiv.s ft1, %[ONE], ft3\n"
+            :
+            : [eps] "fr"(eps), [ONE] "fr"(ONE),
+              [n_frep] "r"(num_doubles_per_point - 1)
+            : "ft0", "ft1", "ft2", "ft3");
+
+        snrt_fpu_fence();
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+        snrt_ssr_disable();
+    }
+    uint32_t end_invstd_computations = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_compute_sum_dotp_reduction = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+    } else if (compute_id == 0) {
+        register v2s ZERO asm("ft5");  // can consider fcvt instead
+        asm volatile(
+            "fcvt.s.w %[ZERO], zero\n"
+            "vfcpka.s.s %[ZERO],%[ZERO],%[ZERO]\n"
+            : [ZERO] "+fr"(ZERO.f64)::"ft0", "ft1", "ft2");
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points, num_doubles_per_point, num_bytes_per_aligned_point,
+                         sizeof(double));
+        snrt_ssr_repeat(SNRT_SSR_DM0, 2);
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
+        snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, ifmap_scratch);
+        for (uint32_t i = 0; i < num_doubles_per_point; ++i) {
+            register volatile v2s sum = ZERO;
+            register volatile v2s dotp = ZERO;
+            register v2s curr_mean;
+            curr_mean.f64 = curr_mean_scratch[i].f64;
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 4, 0, 0 \n"
+                "vfsub.s ft3, ft1, %[curr_mean]\n"
+                "vfadd.s %[sum], ft0, %[sum] \n"
+                "vfmul.s ft3, ft3, ft0\n"
+                "vfadd.s %[dotp], ft3, %[dotp]\n"
+                : [sum] "+fr"(sum.f64), [dotp] "+fr"(dotp.f64)
+                : [curr_mean] "fr"(curr_mean.f64), [zero] "fr"(ZERO.f64),
+                  [n_frep] "r"(num_points - 1)
+                : "ft0", "ft1", "ft2", "ft3");
+
+            snrt_fpu_fence();
+            snrt_ssr_disable();
+
+            grad_bias_scratch[i] = sum;
+            dotp_scratch[i] = dotp;
+        }
+        snrt_ssr_repeat(SNRT_SSR_DM0, 1);
+    }
+    uint32_t end_compute_sum_dotp_reduction = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_compute_k_grad_mean = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        snrt_dma_wait(weight_load);
+    } else if (compute_id == 0) {
+        // register v2s num_points_reg;
+        register v2s ZERO asm("ft5");  // can consider fcvt instead
+        asm volatile("fcvt.d.w %[ZERO], zero\n"  // vfcvt.s.x raises exception
+                                                // despite smallfloat spec
+                    : [ZERO] "=fr"(ZERO.f64)::"ft0", "ft1", "ft2");
+        register v2s num_points_reg asm("ft6");  // can consider fcvt instead
+        asm volatile(
+            "fcvt.s.w %[num_points_reg], %[num_points]\n"
+            "vfcpka.s.s %[num_points_reg],%[num_points_reg],%[num_points_reg]\n"  // duplicate the num_points
+            : [num_points_reg] "+fr"(num_points_reg)
+            : [num_points] "r"(num_points) 
+            :"ft0", "ft1", "ft2");
+        snrt_ssr_loop_1d(SNRT_SSR_DM_ALL, num_doubles_per_point, sizeof(double));
+
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, grad_weight_scratch);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, dotp_scratch);
+        snrt_ssr_enable();
+        asm volatile(
+            "frep.o %[n_frep], 1, 0, 0 \n"
+            "vfmul.s ft1, ft0, ft2 \n"
+            :
+            : [n_frep] "r"(num_doubles_per_point - 1)
+            : "ft0", "ft1", "ft2");
+        snrt_fpu_fence();
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+        snrt_ssr_disable();
+
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, invstd_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, k_scratch);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_1D, grad_weight_scratch);
+        snrt_ssr_enable();
+        asm volatile(
+            "frep.o %[n_frep], 2, 0, 0 \n"
+            "vfmul.s ft3, ft0, ft2 \n"
+            "vfdiv.s ft1, ft3, %[num_points] \n"
+            :
+            : [n_frep] "r"(num_doubles_per_point - 1), [num_points] "fr"(num_points_reg.f64),
+              [zero] "fr"(ZERO.f64)
+            : "ft0", "ft1", "ft2", "ft3", "ft4");
+        snrt_fpu_fence();
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+        snrt_ssr_disable();
+
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_1D, grad_bias_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, grad_mean_scratch);
+        snrt_ssr_enable();
+        asm volatile(
+            "frep.o %[n_frep], 1, 0, 0 \n"
+            "vfdiv.s ft1, ft0, %[num_points] \n"
+            :
+            : [n_frep] "r"(num_doubles_per_point - 1), [num_points] "fr"(num_points_reg.f64)
+            : "ft0", "ft1", "ft2");
+        snrt_fpu_fence();
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+        snrt_ssr_disable();
+    }
+    uint32_t end_compute_k_grad_mean = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_compute_grad_ifmap = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+    } else if (compute_id == 0) {
+        snrt_ssr_loop_2d(SNRT_SSR_DM_ALL, num_points, num_doubles_per_point, num_bytes_per_aligned_point,
+                         sizeof(double));
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
+        snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, grad_ofmap_scratch);
+        for (uint32_t i = 0; i < num_doubles_per_point; ++i) {
+            register v2s curr_mean;
+            curr_mean.f64 = curr_mean_scratch[i].f64;
+            register v2s k;
+            k.f64 = k_scratch[i].f64;
+            register v2s grad_mean;
+            grad_mean.f64 = grad_mean_scratch[i].f64;
+            register v2s invstd;
+            invstd.f64 = invstd_scratch[i].f64;
+            register v2s weight;
+            weight.f64 = weight_scratch[i].f64;
+            snrt_ssr_enable();
+            asm volatile(
+                "frep.o %[n_frep], 6, 0, 0 \n"
+                "vfsub.s ft3, ft0, %[curr_mean] \n"
+                "vfmul.s ft4, ft3, %[k] \n"
+                "vfsub.s ft4, ft2, ft4 \n"
+                "vfsub.s ft4, ft4, %[grad_mean] \n"
+                "vfmul.s ft4, ft4, %[invstd] \n"
+                "vfmul.s ft1, ft4, %[weight] \n"
+                :
+                : [curr_mean] "fr"(curr_mean.f64), [k] "fr"(k.f64),
+                  [grad_mean] "fr"(grad_mean.f64), [invstd] "fr"(invstd.f64),
+                  [weight] "fr"(weight.f64), [n_frep] "r"(num_points - 1)
+                : "ft0", "ft1", "ft2", "ft3", "ft4");
+            snrt_fpu_fence();
+            snrt_ssr_disable();
+        }
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
+    }
+    uint32_t end_compute_grad_ifmap = SNRT_SECTIONED_MCYCLE();
+    snrt_cluster_hw_barrier();
+
+    uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
+    if (snrt_is_dm_core()) {
+        initiate_dma_1d_or_2d(
+            l->grad_ifmap, grad_ifmap_scratch, dtype_bytes * C,
+            num_bytes_per_packed_point, num_bytes_per_aligned_point, num_points,
+            is_point_aligned_to_8_byte_boundary);
+        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
+                          num_bytes_per_packed_point);
+        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, num_bytes_per_packed_point);
+        snrt_dma_wait_all();
     }
     uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();

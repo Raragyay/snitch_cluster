@@ -2345,8 +2345,7 @@ batchnorm_backward_training_tile_fp64_no_loop_1(
     double* dotp_scratch, uint32_t C, uint32_t num_points_work_for_core_in_tile,
     uint32_t work_mod_3, uint32_t work_div_3_sub_1,
     uint32_t num_channels_to_process, uint32_t channel_stride,
-    uint32_t is_first_iteration, uint32_t force_configure) {
-    DUMP(22);
+    bool is_first_iteration, bool force_configure) {
     if (is_first_iteration || force_configure) {
         snrt_ssr_loop_2d(
             SNRT_SSR_DM_ALL,
@@ -2480,7 +2479,6 @@ batchnorm_backward_training_tile_fp64_no_loop_1(
         snrt_ssr_disable();
     } while (i < num_channels_to_process);
     __builtin_ssr_barrier(SNRT_SSR_DM1);
-    DUMP(33);
 }
 
 static inline void __attribute__((always_inline))
@@ -2521,9 +2519,6 @@ batchnorm_backward_training_tile_fp64_looped_1(
     snrt_ssr_enable();
     // TODO: fix num_channels_work_for_core == 0.
     do {
-        // DUMP(tile_size_in_points);
-        // DUMP(C);
-        // DUMP(sizeof(double));
         register volatile uint32_t i =
             0;  // updated during frep for pseudo-dual issue
         register double sum_0 = ZERO;
@@ -2534,15 +2529,11 @@ batchnorm_backward_training_tile_fp64_looped_1(
         register double dotp_2 = ZERO;
         register double current_mean = *current_mean_scratch;
         snrt_cluster_hw_barrier();
-        // DUMP(work_in_tile);
-        // DUMP(1111);
-        // DUMP(grad_ofmap_scratch);
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
         snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, ifmap_scratch);
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             // Can only manual unroll 5 times since the max for frep is 16
-            // DUMP(work_div_3_sub_1);
             if (frep) {
                 asm volatile(
                     "frep.o %[n_frep], 9, 0, 0 \n"
@@ -2718,99 +2709,6 @@ batchnorm_backward_training_tile_fp64_looped_1(
     snrt_cluster_hw_barrier();
 }
 
-static inline void batchnorm_backward_training_main_loop_1(
-    uint32_t C, uint32_t work_left,  // only present for dma
-    uint32_t initial_work_in_tile, uint32_t initial_work_mod_3,
-    uint32_t initial_work_div_3_sub_1, dm_comm_t* dm_comm,
-    uint32_t tile_size_in_points, uint32_t compute_id,
-    uint32_t num_compute_cores, batchnorm_backward_training_layer_t* l,
-    double* grad_ofmap_scratch, double* ifmap_scratch,
-    double* current_mean_scratch, double* sum_scratch, double* dotp_scratch,
-    uint32_t buf_flag) {
-    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
-
-    uint32_t num_channels_work_for_core =
-        get_core_num_work_items(C, num_compute_cores, compute_id);
-    if (snrt_is_dm_core()) {
-        snrt_dma_wait_all();
-        // buf_flag should be 1 here.
-        // signal first iteration
-        // compute cores don't have to read dm comm the first time
-        snrt_cluster_hw_barrier();
-        // skip the first iteration in looping
-        uint32_t point_start = initial_work_in_tile;
-        uint32_t work_in_tile = initial_work_in_tile;
-        uint32_t is_last_iteration = false;
-        uint32_t prev_point_start = 0;
-        uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
-        // split the remaining work "nicely"
-        uint32_t min_loops = ceildiv(work_left, tile_size_in_points);
-        // align up to multiple of 3 because that avoids stalling in fpu the
-        // best
-        uint32_t ideal_work_in_tile =
-            min(align_up_non_power_of_2(ceildiv(work_left, min_loops), 3),
-                tile_size_in_points);
-        // uint32_t ideal_work_in_tile = 96;  // TODO CHANGE BACK
-        while (work_left > 0) {
-            // uint32_t estimated_max_tileable_work = tile_size_in_points;
-            // (work_in_tile * ceildiv(C, num_compute_cores) * 5 *
-            //  NUM_DOUBLES_LOADED_PER_CYCLE) /
-            // (3 * C);
-            work_in_tile = min(ideal_work_in_tile, work_left);
-            work_left -= work_in_tile;
-            // update comms
-            dm_comm->num_points_work_in_tile = work_in_tile;
-            dm_comm->work_mod_3 = work_in_tile % 3;
-            dm_comm->work_div_3_sub_1 = work_in_tile / 3 - 1;
-            // comm what the next iteration will be
-            // wait for potential previous gradifmap write out?
-            snrt_dma_wait_all();
-            snrt_dma_start_1d(
-                &grad_ofmap_scratch[tile_size_in_points * C * buf_flag],
-                &l->grad_ofmap[point_start * C],
-                work_in_tile * C * sizeof(double));
-            snrt_dma_start_1d(
-                &ifmap_scratch[tile_size_in_points * C * buf_flag],
-                &l->ifmap[point_start * C], work_in_tile * C * sizeof(double));
-            snrt_cluster_hw_barrier();
-            snrt_dma_wait_all();
-            // signal to core that current tile is ready to be computed on
-            snrt_cluster_hw_barrier();
-            prev_point_start = point_start;
-            num_points_work_in_prev_tile = work_in_tile;
-            point_start += work_in_tile;
-            buf_flag = !buf_flag;
-        }
-        dm_comm->num_points_work_in_tile = 0;
-        dm_comm->work_mod_3 = 0;
-        dm_comm->work_div_3_sub_1 = 0xdeadbeef;
-        // signal last iteration that there is no more work
-        snrt_cluster_hw_barrier();
-        // wait for last tile to finish
-        snrt_cluster_hw_barrier();
-    } else {
-        if (num_channels_work_for_core == 0) {
-            snrt_cluster_hw_barrier();
-            while (initial_work_in_tile != 0) {
-                // wait for dma to compute result
-                snrt_cluster_hw_barrier();
-                initial_work_in_tile = dm_comm->num_points_work_in_tile;
-                // "signal" work is done
-                snrt_cluster_hw_barrier();
-            }
-        } else {
-            batchnorm_backward_training_tile_fp64_looped_1(
-                &grad_ofmap_scratch[compute_id], &ifmap_scratch[compute_id],
-                &current_mean_scratch[compute_id], &sum_scratch[compute_id],
-                &dotp_scratch[compute_id], C, initial_work_in_tile,
-                initial_work_mod_3, initial_work_div_3_sub_1,
-                tile_size_in_points, num_channels_work_for_core,
-                num_compute_cores, dm_comm);
-        }
-    }
-    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
-}
-
 static inline void __attribute__((always_inline))
 batchnorm_backward_training_tile_fp64_no_loop_2(
     const double* grad_ofmap_scratch, double* grad_ifmap_scratch,
@@ -2928,7 +2826,6 @@ batchnorm_backward_training_tile_fp64_no_loop_2(
               [weight_times_invstd] "fr"(weight_times_invstd),
               [work_mod_4] "r"(work_mod_4)
             : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
-        snrt_fpu_fence();
         snrt_ssr_disable();
     } while (i < num_channels_to_process);
     __builtin_ssr_barrier(SNRT_SSR_DM1);
@@ -3160,115 +3057,98 @@ batchnorm_backward_training_tile_fp64_looped_2(
     snrt_cluster_hw_barrier();
 }
 
-static inline void batchnorm_backward_training_main_loop_2(
-    uint32_t C, uint32_t work_left,  // only present for dma
-    uint32_t initial_work_in_tile, uint32_t initial_work_mod_4,
-    uint32_t initial_work_div_4_sub_1, dm_comm_t* dm_comm,
-    uint32_t tile_size_in_points, uint32_t compute_id,
-    uint32_t num_compute_cores, batchnorm_backward_training_layer_t* l,
-    double* grad_ofmap_scratch, double* ifmap_scratch,
-    double* grad_ifmap_scratch, double* k_scratch, double* grad_mean_scratch,
-    double* invstd_scratch, double* current_mean_scratch,
-    double* weight_scratch, uint32_t buf_flag) {
-    uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
+static inline void batchnorm_backward_training_dma_main_loop_fp_agnostic(
+    batchnorm_backward_training_layer_t* l, uint32_t num_doubles_per_aligned_point,
+    uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,
+    bool is_point_aligned_to_8_byte_boundary,
+    uint32_t work_left,  // only present for dma
+    uint32_t initial_work_in_tile, dm_comm_t* dm_comm,
+    uint32_t tile_size_in_points, double* grad_ofmap_scratch,
+    double* ifmap_scratch, double* grad_ifmap_scratch, bool buf_flag, uint32_t base) {
+    snrt_dma_wait_all();
 
-    uint32_t num_channels_work_for_core =
-        get_core_num_work_items(C, num_compute_cores, compute_id);
+    // signal first iteration
+    // compute cores don't have to read dm comm the first time
+    snrt_cluster_hw_barrier();
 
-    if (snrt_is_dm_core()) {
+    // skip the first iteration in looping
+    uint32_t point_start = initial_work_in_tile;
+    uint32_t work_in_tile = initial_work_in_tile;
+    uint32_t prev_point_start = 0;
+    uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
+    // split the remaining work "nicely"
+    uint32_t min_loops = ceildiv(work_left, tile_size_in_points);
+    // align up to multiple of 2 because that avoids stalling in fpu the
+    // best
+    uint32_t ideal_work_in_tile =
+        min(ALIGN_UP(ceildiv(work_left, min_loops), base), tile_size_in_points);
+
+    while (work_left > 0) {
+        // uint32_t estimated_max_tileable_work = tile_size_in_points;
+        // (work_in_tile * ceildiv(C, num_compute_cores) * 5 *
+        //  NUM_DOUBLES_LOADED_PER_CYCLE) /
+        // (3 * C);
+        work_in_tile = min(ideal_work_in_tile, work_left);
+        work_left -= work_in_tile;
+
+        // update comms
+        dm_comm->num_points_work_in_tile = work_in_tile;
+        dm_comm->work_mod_unroll = work_in_tile % base;
+        dm_comm->work_div_unroll_sub_1 = work_in_tile / base - 1;
+        // comm what the next iteration will be
+        // wait for potential previous grad_ifmap write out?
         snrt_dma_wait_all();
-        // buf_flag should be 1 here.
-        // signal first iteration
-        // compute cores don't have to read dm comm the first time
-        snrt_cluster_hw_barrier();
-        // skip the first iteration in looping
-        uint32_t point_start = initial_work_in_tile;
-        uint32_t work_in_tile = initial_work_in_tile;
-        uint32_t is_last_iteration = false;
-        uint32_t prev_point_start = 0;
-        uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
-        // split the remaining work "nicely"
-        uint32_t min_loops = ceildiv(work_left, tile_size_in_points);
-        // align up to multiple of 4 because that avoids stalling in fpu the
-        // best
-        uint32_t ideal_work_in_tile =
-            min(align_up_non_power_of_2(ceildiv(work_left, min_loops), 4),
-                tile_size_in_points);
-        // uint32_t ideal_work_in_tile = 96;  // TODO CHANGE BACK
-        while (work_left > 0) {
-            // uint32_t estimated_max_tileable_work = tile_size_in_points;
-            // (work_in_tile * ceildiv(C, num_compute_cores) * 5 *
-            //  NUM_DOUBLES_LOADED_PER_CYCLE) /
-            // (3 * C);
-            work_in_tile = min(ideal_work_in_tile, work_left);
-            work_left -= work_in_tile;
-            // update comms
-            dm_comm->num_points_work_in_tile = work_in_tile;
-            dm_comm->work_mod_4 = work_in_tile % 4;
-            dm_comm->work_div_4_sub_1 = work_in_tile / 4 - 1;
-            // comm what the next iteration will be
-            // wait for potential previous gradifmap write out?
-            snrt_dma_wait_all();
-            snrt_dma_start_1d(
-                &grad_ofmap_scratch[tile_size_in_points * C * buf_flag],
-                &l->grad_ofmap[point_start * C],
-                work_in_tile * C * sizeof(double));
-            snrt_dma_start_1d(
-                &ifmap_scratch[tile_size_in_points * C * buf_flag],
-                &l->ifmap[point_start * C], work_in_tile * C * sizeof(double));
-            snrt_cluster_hw_barrier();
-            snrt_dma_wait_all();
-            // signal to core that current tile is ready to be computed on
-            snrt_cluster_hw_barrier();
-            snrt_dma_start_1d(
-                &l->grad_ifmap[prev_point_start * C],
-                &grad_ifmap_scratch[tile_size_in_points * C *
-                                    (!buf_flag)],  // take !buf_flag dma
-                                                   // core is one
-                                                   // iteration ahead of
-                                                   // compute core
-                num_points_work_in_prev_tile * C * sizeof(double));
-            prev_point_start = point_start;
-            num_points_work_in_prev_tile = work_in_tile;
-            point_start += work_in_tile;
-            buf_flag = !buf_flag;
-        }
-        dm_comm->num_points_work_in_tile = 0;
-        dm_comm->work_mod_4 = 0;
-        dm_comm->work_div_4_sub_1 = 0xdeadbeef;
-        // signal last iteration that there is no more work
-        snrt_cluster_hw_barrier();
-        // wait for last tile to finish
-        snrt_cluster_hw_barrier();
-        snrt_dma_start_1d(
-            &l->grad_ifmap[prev_point_start * C],
-            &grad_ifmap_scratch[tile_size_in_points * C *
-                                (!buf_flag)],  // take !buf_flag dma
-                                               // core is one iteration
-                                               // ahead of compute core
-            num_points_work_in_prev_tile * C * sizeof(double));
-    } else {
-        if (num_channels_work_for_core == 0) {
-            snrt_cluster_hw_barrier();
-            while (initial_work_in_tile != 0) {
-                // wait for dma to compute result
-                snrt_cluster_hw_barrier();
-                initial_work_in_tile = dm_comm->num_points_work_in_tile;
-                // "signal" work is done
-                snrt_cluster_hw_barrier();
-            }
-        } else {
-            batchnorm_backward_training_tile_fp64_looped_2(
-                &grad_ofmap_scratch[compute_id],
-                &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
-                &current_mean_scratch[compute_id], &weight_scratch[compute_id],
-                &invstd_scratch[compute_id], &k_scratch[compute_id],
-                &grad_mean_scratch[compute_id], C, initial_work_in_tile,
-                initial_work_mod_4, initial_work_div_4_sub_1,
-                tile_size_in_points, num_channels_work_for_core,
-                num_compute_cores, dm_comm);
-        }
-    }
 
-    uint32_t end_main_loop = SNRT_SECTIONED_MCYCLE();
+        initiate_dma_1d_or_2d(
+            &grad_ofmap_scratch[tile_size_in_points *
+                                num_doubles_per_aligned_point * buf_flag],
+            &((char*)l->grad_ofmap)[point_start * num_bytes_per_packed_point],
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
+            num_bytes_per_packed_point, work_in_tile,
+            is_point_aligned_to_8_byte_boundary);
+        initiate_dma_1d_or_2d(
+            &ifmap_scratch[tile_size_in_points * num_doubles_per_aligned_point *
+                           buf_flag],
+            &((char*)l->ifmap)[point_start * num_bytes_per_packed_point],
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
+            num_bytes_per_packed_point, work_in_tile,
+            is_point_aligned_to_8_byte_boundary);
+        // signal to core that current tile has information ready
+        snrt_cluster_hw_barrier();
+        snrt_dma_wait_all();
+        // wait for previous tile to be finished computing, signify current
+        // tile inputs done loading
+        snrt_cluster_hw_barrier();
+        if (grad_ifmap_scratch != NULL) {
+            initiate_dma_1d_or_2d(
+                &((char*)
+                    l->grad_ifmap)[prev_point_start * num_bytes_per_packed_point],
+                &grad_ifmap_scratch[tile_size_in_points *
+                                    num_doubles_per_aligned_point * (!buf_flag)],
+                num_bytes_per_packed_point, num_bytes_per_packed_point,
+                num_bytes_per_aligned_point, num_points_work_in_prev_tile,
+                is_point_aligned_to_8_byte_boundary);
+        }
+        prev_point_start = point_start;
+        num_points_work_in_prev_tile = work_in_tile;
+        point_start += work_in_tile;
+        buf_flag = !buf_flag;
+    }
+    dm_comm->num_points_work_in_tile = 0;
+    dm_comm->work_mod_unroll = 0;
+    dm_comm->work_div_unroll_sub_1 = 0xdeadbeef;
+    // signal last iteration that there is no more work
+    snrt_cluster_hw_barrier();
+    // wait for last tile to finish
+    snrt_cluster_hw_barrier();
+    if (grad_ifmap_scratch != NULL) {
+        initiate_dma_1d_or_2d(
+            &((char*)l->grad_ifmap)[prev_point_start * num_bytes_per_packed_point],
+            &grad_ifmap_scratch[tile_size_in_points *
+                                num_doubles_per_aligned_point * (!buf_flag)],
+            num_bytes_per_packed_point, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_points_work_in_prev_tile,
+            is_point_aligned_to_8_byte_boundary);
+    }
+    snrt_dma_wait_all();
 }

@@ -41,6 +41,9 @@ static inline uint64_t asuint(float f) {
     return result;
 }
 
+#define CEIL(x, y) ((((x) - 1) / (y)) + 1)
+#define MIN(x, y) ((x) < (y)?(x):(y))
+
 void gemm_fp32_baseline(uint32_t M, uint32_t N, uint32_t K, float* A,
                         uint32_t ldA, uint32_t ta, float* B, uint32_t ldB,
                         uint32_t tb, float* C, uint32_t ldC, float BETA) {
@@ -461,6 +464,9 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
     const uint32_t one_beta = bet == 1.0;
     register double ZERO = 0.0;
 
+    if (M==0)
+        return;
+
     // SSR strides and bounds only have to be configured
     // once in the beginning
     if (setup_SSR) {
@@ -609,9 +615,17 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
             } else {
                 c = 0.0;
             }
-            for (uint32_t k = 0; k < K; k++) {
-                c += A[k + m * ldA] * B[k + n * ldB];
-            }
+
+            //THIS IF BRAKES THE CODE FOR SOME REASON!!!!!!!!!!!!!!!!
+            // if (!ta && !tb)
+            // {
+                // if (snrt_cluster_core_idx() == 0)
+                for (uint32_t k = 0; k < K; k++) {
+                    c += A[m * ldA + k] * B[k * ldB + n];
+                }
+            // }
+
+
             C[m * ldC + n] = alp * c;
         }
 
@@ -1533,6 +1547,8 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
         // Compute fraction of C rows every core computes
         uint32_t frac_m = m / compute_num;
+        if (compute_id < m % compute_num)
+            frac_m++;
 
         switch (prec) {
             case FP64:

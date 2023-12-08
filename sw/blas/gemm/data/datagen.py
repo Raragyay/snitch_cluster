@@ -63,9 +63,16 @@ def emit_header(**kwargs):
     assert (N % n_tiles) == 0, 'N is not an integer multiple of tile size'
     assert (K % k_tiles) == 0, 'K is not an integer multiple of tile size'
     frac_m = M / m_tiles
-    assert (frac_m % 8) == 0, 'frac_m is not an integer multiple of the number of cores per' \
-                              'cluster'
+    # assert (frac_m % 8) == 0, 'frac_m is not an integer multiple of the number of cores per' \
+    #                           'cluster'
     assert not (parallelize_m and parallelize_k), 'Cannot parallelize K and M simultaneously'
+
+    if kwargs['ta']:
+        assert M == K, 'A cannot be transposed and multiplied if it is not squared'
+    if kwargs['tb']:
+        assert N == K, 'B cannot be transposed and multiplied if it is not squared'
+
+
 
     if (kwargs['prec']) == 8:
         # sign -1 or 1

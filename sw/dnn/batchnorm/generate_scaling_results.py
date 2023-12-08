@@ -289,7 +289,7 @@ def main():
             ).max()[2:4]
             try:
                 perf_counters_raw = subprocess.check_output(
-                    r"grep -oPh 'unknown_7c4.*#; .* = \K[0-9x]+' logs/trace_hart_00000000.txt",
+                    r"grep -oPh 'unknown_7c4.*#; .* = \K[0-9a-fx]+' logs/trace_hart_00000000.txt",
                     text=True,
                     shell=True,
                     cwd=target_snitch_cluster_path,

@@ -13,6 +13,7 @@
 #define SNRT_SECTIONED_MCYCLE() (snrt_mcycle())
 #endif
 #define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))
 #define ceildiv(a, b) ((((a)-1) / (b)) + 1)
 #if PERF_DEBUG
 NAMED_DUMP(uint32_t, PERF_RESULT, 0x7C4)
@@ -642,7 +643,7 @@ batchnorm_collect_mean_statistics_tile_fp64_looped(
 static inline void __attribute__((always_inline))
 batchnorm_collect_var_statistics_tile_fp64_looped(
     const double* ifmap_scratch, const double* current_mean_scratch,
-    double* current_var_scratch, 
+    double* current_var_scratch,
     uint32_t num_points,  // of all batches. represents N in computation of mean
                           // and var
     uint32_t num_bytes_per_point,
@@ -859,7 +860,7 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
 }
 
 static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
-    batchnorm_training_layer_t* l, uint32_t num_doubles_per_aligned_point,
+    double* ifmap, double* ofmap, uint32_t num_doubles_per_aligned_point,
     uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,
     bool is_point_aligned_to_8_byte_boundary,
     uint32_t work_left,  // only present for dma
@@ -900,7 +901,7 @@ static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
         snrt_dma_wait_all();
         initiate_dma_1d_or_2d(
             &ifmap_scratch[tile_stride_in_doubles * buf_flag],
-            &((char*)l->ifmap)[point_start * num_bytes_per_packed_point],
+            &((char*)ifmap)[point_start * num_bytes_per_packed_point],
             num_bytes_per_packed_point, num_bytes_per_aligned_point,
             num_bytes_per_packed_point, work_in_tile,
             is_point_aligned_to_8_byte_boundary);
@@ -918,7 +919,7 @@ static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
 
         // DUMP(&ofmap_scratch[tile_stride_in_doubles * (!buf_flag)]);
         initiate_dma_1d_or_2d(
-            &((char*)l->ofmap)[prev_point_start * num_bytes_per_packed_point],
+            &((char*)ofmap)[prev_point_start * num_bytes_per_packed_point],
             &ofmap_scratch[tile_stride_in_doubles * (!buf_flag)],
             num_bytes_per_packed_point, num_bytes_per_packed_point,
             num_bytes_per_aligned_point, num_points_work_in_prev_tile,
@@ -938,7 +939,7 @@ static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
     snrt_cluster_hw_barrier();
 
     initiate_dma_1d_or_2d(
-        &((char*)l->ofmap)[prev_point_start * num_bytes_per_packed_point],
+        &((char*)ofmap)[prev_point_start * num_bytes_per_packed_point],
         &ofmap_scratch[tile_stride_in_doubles * (!buf_flag)],
         num_bytes_per_packed_point, num_bytes_per_packed_point,
         num_bytes_per_aligned_point, num_points_work_in_prev_tile,
@@ -1785,8 +1786,6 @@ batchnorm_backward_tile_fp32_looped(
         weight_times_invstd.f64 = weight_scratch->f64;
         register v2s running_mean;
         running_mean.f64 = running_mean_scratch->f64;
-        DUMP(work_in_tile);
-        DUMP(ifmap_scratch);
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             asm volatile(
@@ -2252,22 +2251,44 @@ static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
     // skip the first iteration in looping
     uint32_t point_start = initial_work_in_tile;
     uint32_t work_in_tile = initial_work_in_tile;
+    DUMP(work_in_tile);
+    DUMP(work_left);
     uint32_t prev_point_start = 0;
     uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
-    // split the remaining work "nicely"
-    uint32_t min_loops = ceildiv(work_left, tile_size_in_points);
-    // align up to multiple of 2 because that avoids stalling in fpu the
-    // best
-    uint32_t ideal_work_in_tile =
-        min(ALIGN_UP(ceildiv(work_left, min_loops), 2), tile_size_in_points);
+    uint32_t prev_prev_work_in_tile = 0;
+    const uint32_t target_points_for_last_tile =
+        512 / num_doubles_per_aligned_point;
+    DUMP(target_points_for_last_tile);
 
     while (work_left > 0) {
-        // uint32_t estimated_max_tileable_work = tile_size_in_points;
-        // (work_in_tile * ceildiv(C, num_compute_cores) * 5 *
-        //  NUM_DOUBLES_LOADED_PER_CYCLE) /
-        // (3 * C);
-        work_in_tile = min(ideal_work_in_tile, work_left);
-        DUMP(work_in_tile);
+        const uint32_t cycles_per_double = l->dtype == FP64 ? 4 : 5;
+        const uint32_t bytes_per_cycle =
+            is_point_aligned_to_8_byte_boundary ? 60 : 12;
+        uint32_t time_left = num_points_work_in_prev_tile *
+                                 num_doubles_per_aligned_point *
+                                 cycles_per_double / 8 -
+                             prev_prev_work_in_tile *
+                                 num_bytes_per_aligned_point / bytes_per_cycle;
+        // units: points
+        uint32_t max_work_allowed =
+            time_left * bytes_per_cycle / (2 * num_bytes_per_aligned_point);
+        // need to ensure at least some progress
+        max_work_allowed = max(max_work_allowed, target_points_for_last_tile);
+        // now max_work_allowed is legal.
+        max_work_allowed = ALIGN_UP(max_work_allowed, 2);
+
+        max_work_allowed =
+            min(max_work_allowed, min(work_left, tile_size_in_points));
+
+        uint32_t write_out_time =
+            work_in_tile * num_bytes_per_aligned_point / bytes_per_cycle;
+        if (target_points_for_last_tile * 2 < work_left &&
+            write_out_time > (work_left - max_work_allowed) *
+                                 num_doubles_per_aligned_point *
+                                 cycles_per_double) {
+            max_work_allowed = work_left - target_points_for_last_tile;
+        }
+        work_in_tile = max_work_allowed;
         work_left -= work_in_tile;
 
         // update comms
@@ -2323,6 +2344,7 @@ static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
         //     num_points_work_in_prev_tile * num_doubles_per_aligned_point *
         //         sizeof(double));
         prev_point_start = point_start;
+        prev_prev_work_in_tile = num_points_work_in_prev_tile;
         num_points_work_in_prev_tile = work_in_tile;
         point_start += work_in_tile;
         buf_flag = !buf_flag;

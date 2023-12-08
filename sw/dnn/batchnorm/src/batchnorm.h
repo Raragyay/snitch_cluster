@@ -203,7 +203,7 @@ static inline void batchnorm_forward_multicore_fp64(batchnorm_layer_t *l) {
         if (snrt_is_dm_core()) {
             // buf flag should be 1 at this point
             batchnorm_forward_dma_main_loop_fp_agnostic(
-                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                l->ifmap, l->ofmap, C, C * sizeof(double), C * sizeof(double), true, work_left,
                 work_in_tile, dm_comm, 1, tile_size_in_points,
                 tile_stride_in_doubles, ifmap_scratch, ofmap_scratch, buf_flag);
         } else {
@@ -324,6 +324,7 @@ static inline void batchnorm_forward_training_multicore_fp64(
     uint32_t work_div_4_sub_1 = work_in_tile / 4 - 1;
     uint32_t work_mod_4 = work_in_tile % 4;
     uint32_t work_sub_1 = work_in_tile - 1;
+    
     // uint32_t work_sub_1 = work_in_tile - 1;
     if (snrt_is_dm_core()) {
         work_left -= work_in_tile;
@@ -569,7 +570,7 @@ static inline void batchnorm_forward_training_multicore_fp64(
         if (snrt_is_dm_core()) {
             // buf flag should be 1 at this point
             batchnorm_forward_dma_main_loop_fp_agnostic(
-                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                l->ifmap, l->ofmap, C, C * sizeof(double), C * sizeof(double), true, work_left,
                 work_in_tile, dm_comm, 1, tile_size_in_points,
                 tile_stride_in_doubles, ifmap_scratch, ofmap_scratch, buf_flag);
         } else {

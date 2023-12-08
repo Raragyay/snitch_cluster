@@ -162,7 +162,7 @@ batchnorm_forward_tile_fp64_looped(
     uint32_t prev_work = work_in_tile;
     const uint32_t inner_loop_stride = num_bytes_per_point;
     const uint32_t buf_flag_offset = tile_stride_in_doubles * sizeof(double);
-    const uint32_t channel_array_reset_dist =
+    const uint32_t input_channel_array_reset_dist =
         channel_stride * num_channels_to_process * sizeof(double);
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
     snrt_ssr_loop_2d(
@@ -208,8 +208,8 @@ batchnorm_forward_tile_fp64_looped(
             register uint32_t temp;
             asm volatile(
                 "bne %[i], %[num_channels_to_process], 2f\n"
-                "sub %[gamma_scratch], %[gamma_scratch], %[channel_array_reset_dist]\n"
-                "sub %[beta_scratch], %[beta_scratch],%[channel_array_reset_dist]\n"
+                "sub %[gamma_scratch], %[gamma_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[beta_scratch], %[beta_scratch],%[input_channel_array_reset_dist]\n"
                 "xori %[buf_flag], %[buf_flag], 1\n"
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
@@ -251,7 +251,8 @@ batchnorm_forward_tile_fp64_looped(
                 [ofmap_scratch] "+r"(ofmap_scratch)
                 : [i] "r"(i),
                   [num_channels_to_process] "r"(num_channels_to_process),
-                  [channel_array_reset_dist] "r"(channel_array_reset_dist),
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
                   [work_div_1_sub_1_offset] "i"(
@@ -668,7 +669,7 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
 
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_stride_in_doubles * sizeof(double);
-    const uint32_t channel_array_reset_dist =
+    const uint32_t input_channel_array_reset_dist =
         channel_stride * num_channels_to_process * sizeof(double);
     const uint32_t inner_loop_stride = num_bytes_per_point;
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
@@ -730,7 +731,7 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
             register uint32_t temp;
             asm volatile(
                 "bne %[i], %[num_channels_to_process], 2f\n"
-                "sub %[current_mean_scratch], %[current_mean_scratch], %[channel_array_reset_dist]\n"
+                "sub %[current_mean_scratch], %[current_mean_scratch], %[input_channel_array_reset_dist]\n"
                 "xori %[buf_flag], %[buf_flag], 1\n"
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
@@ -787,7 +788,8 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
                   [outer_loop_stride] "r"(outer_loop_stride),
                   [dm_comm] "r"(dm_comm),
                   [buf_flag_offset] "r"(buf_flag_offset),
-                  [channel_array_reset_dist] "r"(channel_array_reset_dist)
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist)
                 : "ft0", "ft1", "ft2", "x0", "memory");
 
             register uint32_t mod_temp;
@@ -1224,7 +1226,7 @@ batchnorm_backward_tile_fp64_looped(
     // outside loop: channels
     // inside loop: points
     uint32_t prev_work = work_in_tile;
-    register uint32_t next_work_mod_2;
+    register uint32_t next_work_mod_2 = work_mod_2;
     register bool frep = work_in_tile >= 2;
     register double ZERO asm("ft9");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
@@ -1233,7 +1235,8 @@ batchnorm_backward_tile_fp64_looped(
     bool buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
-    const uint32_t channel_array_reset_dist =
+    // resets for inputs that can be immediately offset
+    const uint32_t input_channel_array_reset_dist =
         channel_stride * num_channels_to_process * sizeof(double);
     const uint32_t inner_loop_stride = C * sizeof(double);
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
@@ -1248,22 +1251,22 @@ batchnorm_backward_tile_fp64_looped(
 
     snrt_ssr_enable();
     // TODO: fix num_channels_work_for_core == 0.
-    do {
+    register double grad_weight_0 = ZERO;
+    register double grad_weight_1 = ZERO;
+    register double grad_weight_2 = ZERO;
+    register double grad_bias_0 = ZERO;
+    register double grad_bias_1 = ZERO;
+    register double grad_bias_2 = ZERO;
+    register double invstd = *invstd_scratch;
+    register double weight_times_invstd = *weight_scratch;
+    register double running_mean_times_invstd = *running_mean_scratch;
+    do { // while (work_in_tile != 0)
         register volatile uint32_t i =
             0;  // updated during frep for pseudo-dual issue
-        register double grad_weight_0 = ZERO;
-        register double grad_weight_1 = ZERO;
-        register double grad_weight_2 = ZERO;
-        register double grad_bias_0 = ZERO;
-        register double grad_bias_1 = ZERO;
-        register double grad_bias_2 = ZERO;
-        register double invstd = *invstd_scratch;
         snrt_cluster_hw_barrier();
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
         snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
-        register double weight_times_invstd = *weight_scratch;
-        register double running_mean_times_invstd = *running_mean_scratch;
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             asm volatile(
@@ -1273,7 +1276,7 @@ batchnorm_backward_tile_fp64_looped(
                   [weight_times_invstd] "+fr"(weight_times_invstd)
                 : [invstd] "fr"(invstd)
                 : "ft0", "ft1", "ft2");
-            if (frep) {
+            if (frep != 0) {
                 asm volatile(
                     "frep.o %[n_frep], 8, 0, 0 \n"
                     "fmsub.d ft4, ft2, %[invstd], %[running_mean_times_invstd]\n"
@@ -1346,9 +1349,9 @@ batchnorm_backward_tile_fp64_looped(
             register uint32_t temp;
             asm volatile(
                 "bne %[i], %[num_channels_to_process], 2f\n"
-                "sub %[invstd_scratch], %[invstd_scratch], %[channel_array_reset_dist]\n"
-                "sub %[weight_scratch], %[weight_scratch],%[channel_array_reset_dist]\n"
-                "sub %[running_mean_scratch],%[running_mean_scratch],%[channel_array_reset_dist]\n "
+                "sub %[invstd_scratch], %[invstd_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[weight_scratch], %[weight_scratch],%[input_channel_array_reset_dist]\n"
+                "sub %[running_mean_scratch],%[running_mean_scratch],%[input_channel_array_reset_dist]\n "
                 "xori %[buf_flag], %[buf_flag], 1\n"
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
@@ -1394,20 +1397,21 @@ batchnorm_backward_tile_fp64_looped(
                 // "scfgwi %[grad_ifmap_scratch],%[DM_1] | %[REG_WPTR_2D]<<5\n"
                 // "scfgwi %[ifmap_scratch],%[DM_2] | %[REG_RPTR_2D]<<5\n"
                 // "5:\n"
-                : [buf_flag] "+r"(buf_flag),
-                  [invstd_scratch] "+r"(invstd_scratch),
-                  [weight_scratch] "+r"(weight_scratch),
-                  [running_mean_scratch] "+r"(running_mean_scratch),
-                  [work_in_tile] "+r"(work_in_tile),
-                  [next_work_mod_2] "=r"(next_work_mod_2),
-                  [prev_work] "+r"(prev_work), [frep] "+r"(frep),
-                  [work_div_2_sub_1] "+r"(work_div_2_sub_1),
-                  [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
-                  [grad_ifmap_scratch] "+r"(grad_ifmap_scratch),
+                : [buf_flag] "+&r"(buf_flag),
+                  [invstd_scratch] "+&r"(invstd_scratch),
+                  [weight_scratch] "+&r"(weight_scratch),
+                  [running_mean_scratch] "+&r"(running_mean_scratch),
+                  [work_in_tile] "+&r"(work_in_tile),
+                  [next_work_mod_2] "=&r"(next_work_mod_2),
+                  [prev_work] "+&r"(prev_work), [frep] "+&r"(frep),
+                  [work_div_2_sub_1] "+&r"(work_div_2_sub_1),
+                  [grad_ofmap_scratch] "+&r"(grad_ofmap_scratch),
+                  [grad_ifmap_scratch] "+&r"(grad_ifmap_scratch),
                   [ifmap_scratch] "+r"(ifmap_scratch)
                 : [i] "r"(i),
                   [num_channels_to_process] "r"(num_channels_to_process),
-                  [channel_array_reset_dist] "r"(channel_array_reset_dist),
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
                   [work_mod_2_offset] "i"(offsetof(dm_comm_t, work_mod_2)),
@@ -1422,7 +1426,7 @@ batchnorm_backward_tile_fp64_looped(
                   [inner_loop_stride] "r"(inner_loop_stride),
                   [outer_loop_stride] "r"(outer_loop_stride),
                   [dm_comm] "r"(dm_comm), [buf_flag_offset] "r"(buf_flag_offset)
-                : "ft0", "ft1", "ft2", "x0", "memory");
+                : "ft0", "ft1", "ft2");
 
             asm volatile(
                 "beqz %[work_mod_2], 0f\n"  // mod is 0
@@ -1432,12 +1436,13 @@ batchnorm_backward_tile_fp64_looped(
                 "fmul.d ft1, ft0, %[weight_times_invstd]\n"
                 "fmadd.d %[grad_weight_0], ft4, ft0, %[grad_weight_0]\n"
                 "0:\n"
-                : [grad_weight_0] "+fr"(grad_weight_0), [grad_bias_0] "+fr"(
-                                                            grad_bias_0)
+                // "mv %[work_mod_2], %[next_work_mod_2]\n"
+                : [grad_weight_0] "+&fr"(grad_weight_0),
+                  [grad_bias_0] "+&fr"(grad_bias_0),
+                  [work_mod_2] "+r"(work_mod_2)
                 : [running_mean_times_invstd] "fr"(running_mean_times_invstd),
                   [weight_times_invstd] "fr"(weight_times_invstd),
-                  [invstd] "fr"(invstd), [zero] "fr"(ZERO),
-                  [work_mod_2] "r"(work_mod_2)
+                  [invstd] "fr"(invstd), [zero] "fr"(ZERO)
                 : "ft0", "ft1", "ft2", "ft4");
 
             // in plain C:
@@ -1451,19 +1456,20 @@ batchnorm_backward_tile_fp64_looped(
             // grad_bias_0 = grad_bias_1 = grad_weight_0 = grad_weight_1 = 0;
             register double temp_grad_bias, temp_grad_weight;
             asm volatile(
-                "fld %[temp_grad_bias], 0(%[grad_bias_scratch])\n"
-                "fld %[temp_grad_weight], 0(%[grad_weight_scratch])\n"
-                "fadd.d %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
-                "fadd.d %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
                 // interleave 0 resetting and loading between fadd latency
                 // don't need to synchronize here because the integer core can't
                 // issue these instructions until the previous increments have
                 // happened
+                "fld %[temp_grad_bias], 0(%[grad_bias_scratch])\n"
+                "fld %[temp_grad_weight], 0(%[grad_weight_scratch])\n"
                 "fld %[invstd],0(%[invstd_scratch])\n"
-                "fld %[weight_times_invstd],0(%[weight_scratch])\n"
+                // 3 cycles of buffer above for the end of frep
                 "fadd.d %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
                 "fadd.d %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
+                "fld %[weight_times_invstd],0(%[weight_scratch])\n"
                 "fld %[running_mean_times_invstd],0(%[running_mean_scratch])\n"
+                "fadd.d %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
+                "fadd.d %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
                 "fsgnj.d %[grad_bias_1],%[ZERO],%[ZERO]\n"
                 "fsgnj.d %[grad_weight_1],%[ZERO],%[ZERO]\n"
                 "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
@@ -1731,7 +1737,7 @@ batchnorm_backward_tile_fp32_looped(
     const uint32_t buf_flag_offset = tile_size_in_aligned_points *
                                      num_doubles_per_aligned_point *
                                      sizeof(double);
-    const uint32_t channel_array_reset_dist =
+    const uint32_t input_channel_array_reset_dist =
         channel_stride * num_doubles_work_for_core_per_point * sizeof(double);
     const uint32_t inner_loop_stride =
         num_doubles_per_aligned_point * sizeof(double);
@@ -1875,9 +1881,9 @@ batchnorm_backward_tile_fp32_looped(
             register uint32_t temp;
             asm volatile(
                 "bne %[i], %[num_doubles_work_for_core_per_point], 2f\n"
-                "sub %[invstd_scratch], %[invstd_scratch], %[channel_array_reset_dist]\n"
-                "sub %[weight_scratch], %[weight_scratch],%[channel_array_reset_dist]\n"
-                "sub %[running_mean_scratch],%[running_mean_scratch],%[channel_array_reset_dist]\n "
+                "sub %[invstd_scratch], %[invstd_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[weight_scratch], %[weight_scratch],%[input_channel_array_reset_dist]\n"
+                "sub %[running_mean_scratch],%[running_mean_scratch],%[input_channel_array_reset_dist]\n "
                 "xori %[buf_flag], %[buf_flag], 1\n"
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
@@ -1937,7 +1943,8 @@ batchnorm_backward_tile_fp32_looped(
                 : [i] "r"(i),
                   [num_doubles_work_for_core_per_point] "r"(
                       num_doubles_work_for_core_per_point),
-                  [channel_array_reset_dist] "r"(channel_array_reset_dist),
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
                   [work_mod_2_offset] "i"(offsetof(dm_comm_t, work_mod_2)),
@@ -2536,7 +2543,7 @@ batchnorm_backward_training_tile_fp64_looped_1(
     bool buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
-    const uint32_t channel_array_reset_dist =
+    const uint32_t input_channel_array_reset_dist =
         channel_stride * num_channels_to_process * sizeof(double);
     const uint32_t inner_loop_stride = C * sizeof(double);
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
@@ -2613,7 +2620,7 @@ batchnorm_backward_training_tile_fp64_looped_1(
             register uint32_t temp;
             asm volatile(
                 "bne %[i], %[num_channels_to_process], 2f\n"
-                "sub %[current_mean_scratch], %[current_mean_scratch], %[channel_array_reset_dist]\n"
+                "sub %[current_mean_scratch], %[current_mean_scratch], %[input_channel_array_reset_dist]\n"
                 "xori %[buf_flag], %[buf_flag], 1\n"
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
@@ -2660,7 +2667,8 @@ batchnorm_backward_training_tile_fp64_looped_1(
                   [ifmap_scratch] "+r"(ifmap_scratch)
                 : [i] "r"(i),
                   [num_channels_to_process] "r"(num_channels_to_process),
-                  [channel_array_reset_dist] "r"(channel_array_reset_dist),
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
                   [work_mod_3_offset] "i"(offsetof(dm_comm_t, work_mod_3)),
@@ -2989,7 +2997,7 @@ batchnorm_backward_training_tile_fp64_looped_2(
     bool buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
-    const uint32_t channel_array_reset_dist =
+    const uint32_t input_channel_array_reset_dist =
         channel_stride * num_channels_to_process * sizeof(double);
     const uint32_t inner_loop_stride = C * sizeof(double);
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
@@ -3063,11 +3071,11 @@ batchnorm_backward_training_tile_fp64_looped_2(
             asm volatile(
                 "bne %[i], %[num_channels_to_process], 2f\n"
                 // extra check here for channels == 1. THen don't sub
-                "sub %[invstd_scratch], %[invstd_scratch], %[channel_array_reset_dist]\n"
-                "sub %[weight_scratch], %[weight_scratch], %[channel_array_reset_dist]\n"
-                "sub %[current_mean_scratch], %[current_mean_scratch], %[channel_array_reset_dist]\n"
-                "sub %[k_scratch], %[k_scratch], %[channel_array_reset_dist]\n"
-                "sub %[grad_mean_scratch], %[grad_mean_scratch], %[channel_array_reset_dist]\n"
+                "sub %[invstd_scratch], %[invstd_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[weight_scratch], %[weight_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[current_mean_scratch], %[current_mean_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[k_scratch], %[k_scratch], %[input_channel_array_reset_dist]\n"
+                "sub %[grad_mean_scratch], %[grad_mean_scratch], %[input_channel_array_reset_dist]\n"
                 "xori %[buf_flag], %[buf_flag], 1\n"
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
@@ -3122,7 +3130,8 @@ batchnorm_backward_training_tile_fp64_looped_2(
                   [ifmap_scratch] "+r"(ifmap_scratch)
                 : [i] "r"(i),
                   [num_channels_to_process] "r"(num_channels_to_process),
-                  [channel_array_reset_dist] "r"(channel_array_reset_dist),
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
                   [work_mod_4_offset] "i"(offsetof(dm_comm_t, work_mod_4)),

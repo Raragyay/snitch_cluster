@@ -1028,22 +1028,20 @@ batchnorm_backward_fp64_no_loop(
     uint32_t num_points_work_for_core,  // requires: > 0
     uint32_t work_mod_2,  // precompute to avoid icache branch misses
     uint32_t num_channels_to_process,  //  requires: > 0
-    uint32_t channel_stride, bool is_first_iteration, bool force_configure) {
+    uint32_t channel_stride) {
     // access pattern: iterate over the different channels, then over
     // the different points
     // Split work over channels to maximize efficacy of frep.
     // outside loop: channels
     // inside loop: points
-    if (is_first_iteration || force_configure) {
-        snrt_ssr_loop_2d(
-            SNRT_SSR_DM_ALL,
-            num_points_work_for_core,  // dimension of inner loop
-            num_channels_to_process,   // dimension of outer loop
-            C * sizeof(double),  // stride per inner loop iteration: 1 point
-            channel_stride *
-                sizeof(double));  // stride per outer loop iteration
-        snrt_ssr_repeat(SNRT_SSR_DM0, 3);
-    }
+    snrt_ssr_loop_2d(
+        SNRT_SSR_DM_ALL,
+        num_points_work_for_core,  // dimension of inner loop
+        num_channels_to_process,   // dimension of outer loop
+        C * sizeof(double),  // stride per inner loop iteration: 1 point
+        channel_stride *
+            sizeof(double));  // stride per outer loop iteration
+    snrt_ssr_repeat(SNRT_SSR_DM0, 3);
 
     // thought: how could I minimize the # of reads to grad_ofmap?
     // dy is used for: grad_bias (addition)
@@ -1076,13 +1074,6 @@ batchnorm_backward_fp64_no_loop(
     register double running_mean_times_invstd = *running_mean_scratch;
     // do 1 loop
     do {  // while (i < num_channels_to_process)
-        asm volatile(
-            "fmul.d %[running_mean_times_invstd],%[running_mean_times_invstd],%[invstd]\n"
-            "fmul.d %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
-            : [running_mean_times_invstd] "+fr"(running_mean_times_invstd),
-              [weight_times_invstd] "+fr"(weight_times_invstd)
-            : [invstd] "fr"(invstd)
-            : "ft0", "ft1", "ft2");
         if (frep) {
             asm volatile(
                 "frep.o %[n_frep], 8, 0, 0 \n"
@@ -1164,21 +1155,15 @@ batchnorm_backward_fp64_no_loop(
         // grad_bias_0 = grad_bias_1 = grad_weight_0 = grad_weight_1 = 0;
         register double temp_grad_bias, temp_grad_weight;
         asm volatile(
-            "bnez %[is_first_iteration], 3f\n"
-            "fld %[temp_grad_bias], 0(%[grad_bias_scratch])\n"
-            "fld %[temp_grad_weight], 0(%[grad_weight_scratch])\n"
-            "fadd.d %[grad_bias_0], %[temp_grad_bias], %[grad_bias_0]\n"
-            "fadd.d %[grad_weight_0], %[temp_grad_weight], %[grad_weight_0]\n"
-            "3:\n"
             // interleave 0 resetting and loading between fadd latency
             // don't need to synchronize here because the integer core can't
             // issue these instructions until the previous increments have
             // happened
             "fld %[invstd],0(%[invstd_scratch])\n"
             "fld %[weight_times_invstd],0(%[weight_scratch])\n"
+            "fld %[running_mean_times_invstd],0(%[running_mean_scratch])\n"
             "fadd.d %[grad_bias_0], %[grad_bias_1], %[grad_bias_0]\n"
             "fadd.d %[grad_weight_0], %[grad_weight_1], %[grad_weight_0]\n"
-            "fld %[running_mean_times_invstd],0(%[running_mean_scratch])\n"
             "fsgnj.d %[grad_bias_1],%[ZERO],%[ZERO]\n"
             "fsgnj.d %[grad_weight_1],%[ZERO],%[ZERO]\n"
             "fsd %[grad_bias_0], 0(%[grad_bias_scratch])\n"
@@ -1194,7 +1179,7 @@ batchnorm_backward_fp64_no_loop(
               [running_mean_times_invstd] "=fr"(running_mean_times_invstd),
               [weight_times_invstd] "=fr"(weight_times_invstd),
               [invstd] "=fr"(invstd)
-            : [is_first_iteration] "r"(is_first_iteration), [ZERO] "fr"(ZERO),
+            : [ZERO] "fr"(ZERO),
               [invstd_scratch] "r"(invstd_scratch),
               [weight_scratch] "r"(weight_scratch),
               [running_mean_scratch] "r"(running_mean_scratch),
@@ -1269,13 +1254,13 @@ batchnorm_backward_tile_fp64_looped(
         snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
         // do 1 loop
         do {  // while (i < num_channels_to_process)
-            asm volatile(
-                "fmul.d %[running_mean_times_invstd],%[running_mean_times_invstd],%[invstd]\n"
-                "fmul.d %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
-                : [running_mean_times_invstd] "+fr"(running_mean_times_invstd),
-                  [weight_times_invstd] "+fr"(weight_times_invstd)
-                : [invstd] "fr"(invstd)
-                : "ft0", "ft1", "ft2");
+            // asm volatile(
+            //     "fmul.d %[running_mean_times_invstd],%[running_mean_times_invstd],%[invstd]\n"
+            //     "fmul.d %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
+            //     : [running_mean_times_invstd] "+fr"(running_mean_times_invstd),
+            //       [weight_times_invstd] "+fr"(weight_times_invstd)
+            //     : [invstd] "fr"(invstd)
+            //     : "ft0", "ft1", "ft2");
             if (frep != 0) {
                 asm volatile(
                     "frep.o %[n_frep], 8, 0, 0 \n"

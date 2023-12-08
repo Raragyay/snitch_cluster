@@ -37,9 +37,6 @@ int main() {
                         batchnorm_backward_training_single_core_opt_fp32(
                             &backward_training_layer);
                         break;
-                    case MULTICORE_OPT:
-                        batchnorm_backward_training_multicore_fp32(&backward_training_layer, temp);
-                        break;
                     default:
                         return 1;
                 }

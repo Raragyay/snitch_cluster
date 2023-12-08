@@ -191,14 +191,6 @@ static inline void batchnorm_backward_single_core_opt_fp64(
     uint32_t end_invstd_calc = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
-    // compute weight*invstd and running_mean*invstd
-
-    // computing invstd scratch and using it for weight: can we do it in 1 frep?
-    // load running var: 1 ssr
-    // write running var: 1 ssr
-    // load weight: 1 ssr
-    // write weight: 1 ssr
-    // answer: not really. Still worth precomputing I think
     uint32_t start_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
     uint32_t end_running_var_weight_inplace_mul = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();

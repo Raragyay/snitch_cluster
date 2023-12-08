@@ -75,7 +75,7 @@ static inline snrt_dma_txid_t initiate_dma_1d_or_2d(void* dst, void* src,
                                                     size_t size,
                                                     size_t dst_stride,
                                                     size_t src_stride,
-                                                    size_t repeat, bool is_1d) {
+                                                    size_t repeat, uint32_t is_1d) {
     if (is_1d) {
         return snrt_dma_start_1d(dst, src, size * repeat);
     } else {
@@ -158,7 +158,7 @@ batchnorm_forward_tile_fp64_looped(
     // Split work over channels to maximize efficacy of frep and avoid tcdm
     // contention. outside loop: channels inside loop: points
 
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
     uint32_t prev_work = work_in_tile;
     const uint32_t inner_loop_stride = num_bytes_per_point;
     const uint32_t buf_flag_offset = tile_stride_in_doubles * sizeof(double);
@@ -468,7 +468,7 @@ batchnorm_collect_mean_statistics_tile_fp64_looped(
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
 
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
 
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_stride_in_doubles * sizeof(double);
@@ -665,7 +665,7 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
 
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
 
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_stride_in_doubles * sizeof(double);
@@ -864,11 +864,11 @@ batchnorm_collect_var_statistics_tile_fp64_looped(
 static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
     double* ifmap, double* ofmap, uint32_t num_doubles_per_aligned_point,
     uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,
-    bool is_point_aligned_to_8_byte_boundary,
+    uint32_t is_point_aligned_to_8_byte_boundary,
     uint32_t work_left,  // only present for dma
     uint32_t initial_work_in_tile, dm_comm_t* dm_comm, uint32_t unroll,
     uint32_t tile_size_in_points, uint32_t tile_stride_in_doubles,
-    double* ifmap_scratch, double* ofmap_scratch, bool buf_flag) {
+    double* ifmap_scratch, double* ofmap_scratch, uint32_t buf_flag) {
     snrt_dma_wait_all();
 
     // signal first iteration
@@ -952,11 +952,11 @@ static inline void batchnorm_forward_dma_main_loop_fp_agnostic(
 static inline void batchnorm_collect_statistics_dma_main_loop_fp_agnostic(
     batchnorm_training_layer_t* l, uint32_t num_doubles_per_aligned_point,
     uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,
-    bool is_point_aligned_to_8_byte_boundary,
+    uint32_t is_point_aligned_to_8_byte_boundary,
     uint32_t work_left,  // only present for dma
     uint32_t initial_work_in_tile, dm_comm_t* dm_comm, uint32_t unroll,
     uint32_t tile_size_in_points, uint32_t tile_stride_in_doubles,
-    double* ifmap_scratch, bool buf_flag) {
+    double* ifmap_scratch, uint32_t buf_flag) {
     snrt_dma_wait_all();
 
     // signal first iteration
@@ -1038,9 +1038,8 @@ batchnorm_backward_fp64_no_loop(
         SNRT_SSR_DM_ALL,
         num_points_work_for_core,  // dimension of inner loop
         num_channels_to_process,   // dimension of outer loop
-        C * sizeof(double),  // stride per inner loop iteration: 1 point
-        channel_stride *
-            sizeof(double));  // stride per outer loop iteration
+        C * sizeof(double),        // stride per inner loop iteration: 1 point
+        channel_stride * sizeof(double));  // stride per outer loop iteration
     snrt_ssr_repeat(SNRT_SSR_DM0, 3);
 
     // thought: how could I minimize the # of reads to grad_ofmap?
@@ -1053,7 +1052,7 @@ batchnorm_backward_fp64_no_loop(
     //                 grad_ifmap (dy * invstd[C] * weight[C])
     // from this I think that the best result is to tile dy and x.
     // need to also tile the write out to grad_ifmap. This fills up all 3 ssrs.
-    bool frep = num_points_work_for_core >= 2;
+    uint32_t frep = num_points_work_for_core >= 2;
     uint32_t work_div_2_sub_1 = num_points_work_for_core / 2 -
                                 1;  // can underflow, but then frep won't happen
     register volatile uint32_t i =
@@ -1179,8 +1178,7 @@ batchnorm_backward_fp64_no_loop(
               [running_mean_times_invstd] "=fr"(running_mean_times_invstd),
               [weight_times_invstd] "=fr"(weight_times_invstd),
               [invstd] "=fr"(invstd)
-            : [ZERO] "fr"(ZERO),
-              [invstd_scratch] "r"(invstd_scratch),
+            : [ZERO] "fr"(ZERO), [invstd_scratch] "r"(invstd_scratch),
               [weight_scratch] "r"(weight_scratch),
               [running_mean_scratch] "r"(running_mean_scratch),
               [grad_bias_scratch] "r"(grad_bias_scratch),
@@ -1212,12 +1210,14 @@ batchnorm_backward_tile_fp64_looped(
     // inside loop: points
     uint32_t prev_work = work_in_tile;
     register uint32_t next_work_mod_2 = work_mod_2;
-    register bool frep = work_in_tile >= 2;
+    // use uint32_t for the uint32_t, otherwise the compiler will insert an `andi`
+    // for each uint32_t
+    register uint32_t frep = work_in_tile >= 2;
     register double ZERO asm("ft9");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
 
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
     // resets for inputs that can be immediately offset
@@ -1235,7 +1235,7 @@ batchnorm_backward_tile_fp64_looped(
     snrt_ssr_repeat(SNRT_SSR_DM0, 3);
 
     snrt_ssr_enable();
-    // TODO: fix num_channels_work_for_core == 0.
+
     register double grad_weight_0 = ZERO;
     register double grad_weight_1 = ZERO;
     register double grad_weight_2 = ZERO;
@@ -1245,7 +1245,7 @@ batchnorm_backward_tile_fp64_looped(
     register double invstd = *invstd_scratch;
     register double weight_times_invstd = *weight_scratch;
     register double running_mean_times_invstd = *running_mean_scratch;
-    do { // while (work_in_tile != 0)
+    do {  // while (work_in_tile != 0)
         register volatile uint32_t i =
             0;  // updated during frep for pseudo-dual issue
         snrt_cluster_hw_barrier();
@@ -1254,13 +1254,6 @@ batchnorm_backward_tile_fp64_looped(
         snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, ifmap_scratch);
         // do 1 loop
         do {  // while (i < num_channels_to_process)
-            // asm volatile(
-            //     "fmul.d %[running_mean_times_invstd],%[running_mean_times_invstd],%[invstd]\n"
-            //     "fmul.d %[weight_times_invstd],%[weight_times_invstd],%[invstd]\n"
-            //     : [running_mean_times_invstd] "+fr"(running_mean_times_invstd),
-            //       [weight_times_invstd] "+fr"(weight_times_invstd)
-            //     : [invstd] "fr"(invstd)
-            //     : "ft0", "ft1", "ft2");
             if (frep != 0) {
                 asm volatile(
                     "frep.o %[n_frep], 8, 0, 0 \n"
@@ -1478,14 +1471,12 @@ batchnorm_backward_tile_fp64_looped(
                 : "ft0", "ft1", "ft2");
         } while (i < num_channels_to_process);
         // don't need to fpu_fence since last 3 instructions are inconsequential
-        __builtin_ssr_barrier(SNRT_SSR_DM1);
         // snrt_ssr_disable();
         // notify that computations for this tile are done
         work_mod_2 = next_work_mod_2;
         grad_weight_scratch -= channel_stride * (num_channels_to_process - 1);
         grad_bias_scratch -= channel_stride * (num_channels_to_process - 1);
-        // DUMP(222);
-        // DUMP(work_in_tile);
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
     } while (work_in_tile != 0);
     // // notify last tile done
     snrt_ssr_disable();
@@ -1536,7 +1527,7 @@ batchnorm_backward_fp32_no_loop(
     //   dependencies
     // Conclusion: I think you have to do 3 instructions without fmadd/fmsub
 
-    bool frep = num_points_work_for_core >= 2;
+    uint32_t frep = num_points_work_for_core >= 2;
     uint32_t work_div_2_sub_1 = num_points_work_for_core / 2 -
                                 1;  // can underflow, but then frep won't happen
     register volatile uint32_t i =
@@ -1712,12 +1703,12 @@ batchnorm_backward_tile_fp32_looped(
     // inside loop: points
     uint32_t prev_work = work_in_tile;
     register uint32_t next_work_mod_2;
-    register bool frep = work_in_tile >= 2;
+    register uint32_t frep = work_in_tile >= 2;
     register v2s ZERO asm("ft9");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=fr"(ZERO.f64)::"ft0", "ft1", "ft2");
 
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_aligned_points *
                                      num_doubles_per_aligned_point *
@@ -2070,7 +2061,7 @@ batchnorm_backward_fp16_no_loop(
     //   dependencies
     // Conclusion: I think you have to do 3 instructions without fmadd/fmsub
 
-    bool frep = num_points_work_for_core >= 2;
+    uint32_t frep = num_points_work_for_core >= 2;
     uint32_t work_div_2_sub_1 = num_points_work_for_core / 2 -
                                 1;  // can underflow, but then frep won't happen
     register volatile uint32_t i =
@@ -2229,11 +2220,11 @@ batchnorm_backward_fp16_no_loop(
 static inline void batchnorm_backward_dma_main_loop_fp_agnostic(
     batchnorm_backward_layer_t* l, uint32_t num_doubles_per_aligned_point,
     uint32_t num_bytes_per_packed_point, uint32_t num_bytes_per_aligned_point,
-    bool is_point_aligned_to_8_byte_boundary,
+    uint32_t is_point_aligned_to_8_byte_boundary,
     uint32_t work_left,  // only present for dma
     uint32_t initial_work_in_tile, dm_comm_t* dm_comm,
     uint32_t tile_size_in_points, double* grad_ofmap_scratch,
-    double* ifmap_scratch, double* grad_ifmap_scratch, bool buf_flag) {
+    double* ifmap_scratch, double* grad_ifmap_scratch, uint32_t buf_flag) {
     snrt_dma_wait_all();
 
     // signal first iteration
@@ -2366,7 +2357,7 @@ batchnorm_backward_training_tile_fp64_no_loop_1(
     double* dotp_scratch, uint32_t C, uint32_t num_points_work_for_core_in_tile,
     uint32_t work_mod_3, uint32_t work_div_3_sub_1,
     uint32_t num_channels_to_process, uint32_t channel_stride,
-    bool is_first_iteration, bool force_configure) {
+    uint32_t is_first_iteration, uint32_t force_configure) {
     DUMP(22);
     if (is_first_iteration || force_configure) {
         snrt_ssr_loop_2d(
@@ -2377,7 +2368,7 @@ batchnorm_backward_training_tile_fp64_no_loop_1(
             channel_stride *
                 sizeof(double));  // stride per outer loop iteration
     }
-    bool frep = num_points_work_for_core_in_tile >= 3;
+    uint32_t frep = num_points_work_for_core_in_tile >= 3;
     register volatile uint32_t i = 0;
     register double ZERO asm("ft9");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
@@ -2521,11 +2512,11 @@ batchnorm_backward_training_tile_fp64_looped_1(
     // inside loop: points
     uint32_t prev_work = work_in_tile;
     register uint32_t next_work_mod_3;
-    register bool frep = work_in_tile >= 3;
+    register uint32_t frep = work_in_tile >= 3;
     register double ZERO asm("ft11");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
     const uint32_t input_channel_array_reset_dist =
@@ -2747,7 +2738,7 @@ static inline void batchnorm_backward_training_main_loop_1(
     uint32_t num_compute_cores, batchnorm_backward_training_layer_t* l,
     double* grad_ofmap_scratch, double* ifmap_scratch,
     double* current_mean_scratch, double* sum_scratch, double* dotp_scratch,
-    bool buf_flag) {
+    uint32_t buf_flag) {
     uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
 
     uint32_t num_channels_work_for_core =
@@ -2761,7 +2752,7 @@ static inline void batchnorm_backward_training_main_loop_1(
         // skip the first iteration in looping
         uint32_t point_start = initial_work_in_tile;
         uint32_t work_in_tile = initial_work_in_tile;
-        bool is_last_iteration = false;
+        uint32_t is_last_iteration = false;
         uint32_t prev_point_start = 0;
         uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
         // split the remaining work "nicely"
@@ -2840,7 +2831,7 @@ batchnorm_backward_training_tile_fp64_no_loop_2(
     const double* k_scratch, const double* grad_mean_scratch, uint32_t C,
     uint32_t num_points_work_for_core_in_tile, uint32_t work_mod_4,
     uint32_t work_div_4_sub_1, uint32_t num_channels_to_process,
-    uint32_t channel_stride, bool is_first_iteration, bool force_configure) {
+    uint32_t channel_stride, uint32_t is_first_iteration, uint32_t force_configure) {
     if (is_first_iteration || force_configure) {
         snrt_ssr_loop_2d(
             SNRT_SSR_DM_ALL,
@@ -2850,7 +2841,7 @@ batchnorm_backward_training_tile_fp64_no_loop_2(
             channel_stride *
                 sizeof(double));  // stride per outer loop iteration
     }
-    bool frep = num_points_work_for_core_in_tile >= 4;
+    uint32_t frep = num_points_work_for_core_in_tile >= 4;
     register volatile uint32_t i = 0;
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
@@ -2974,12 +2965,12 @@ batchnorm_backward_training_tile_fp64_looped_2(
     // inside loop: points
     uint32_t prev_work = work_in_tile;
     register uint32_t next_work_mod_4;
-    register bool frep = work_in_tile >= 4;
+    register uint32_t frep = work_in_tile >= 4;
     register double ZERO asm("ft11");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
 
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
     const uint32_t input_channel_array_reset_dist =
@@ -3189,7 +3180,7 @@ static inline void batchnorm_backward_training_main_loop_2(
     double* grad_ofmap_scratch, double* ifmap_scratch,
     double* grad_ifmap_scratch, double* k_scratch, double* grad_mean_scratch,
     double* invstd_scratch, double* current_mean_scratch,
-    double* weight_scratch, bool buf_flag) {
+    double* weight_scratch, uint32_t buf_flag) {
     uint32_t start_main_loop = SNRT_SECTIONED_MCYCLE();
 
     uint32_t num_channels_work_for_core =
@@ -3204,7 +3195,7 @@ static inline void batchnorm_backward_training_main_loop_2(
         // skip the first iteration in looping
         uint32_t point_start = initial_work_in_tile;
         uint32_t work_in_tile = initial_work_in_tile;
-        bool is_last_iteration = false;
+        uint32_t is_last_iteration = false;
         uint32_t prev_point_start = 0;
         uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
         // split the remaining work "nicely"

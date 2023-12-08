@@ -3086,7 +3086,6 @@ batchnorm_backward_training_tile_fp32_no_loop_2(
     }
     bool frep = num_points_work_for_core_in_tile >= 3;
     register volatile uint32_t i = 0;
-    snrt_ssr_repeat(SNRT_SSR_DM_ALL, 1);
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, grad_ofmap_scratch);

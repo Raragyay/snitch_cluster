@@ -1699,9 +1699,10 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     &current_mean_scratch[compute_id],
                     &weight_scratch[compute_id], &invstd_scratch[compute_id],
                     &k_scratch[compute_id], &grad_mean_scratch[compute_id],
-                    num_doubles_per_aligned_point,
+                    num_bytes_per_aligned_point,
                     work_in_tile, work_mod_3, work_div_3_sub_1,
-                    num_doubles_work_for_core_per_aligned_point, num_compute_cores, true, false);
+                    num_doubles_work_for_core_per_aligned_point,
+                    num_compute_cores, true, false);
             }
             // notify finish
             snrt_cluster_hw_barrier();

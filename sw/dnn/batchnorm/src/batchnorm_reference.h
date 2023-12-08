@@ -741,7 +741,11 @@ static inline void batchnorm_backward_training_single_core_opt_fp64(
     snrt_dma_txid_t invstd_load, curr_var_load, weight_load, curr_mean_load,
         grad_ofmap_load, ifmap_load;
 
-    uint32_t start_dma_load = SNRT_SECTIONED_MCYCLE();
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+    uint32_t start_dma_load = snrt_mcycle();
     if (snrt_is_dm_core()) {
         curr_var_load = snrt_dma_start_1d(invstd_scratch, l->current_var,
                                           point_size_in_bytes);
@@ -919,10 +923,13 @@ static inline void batchnorm_backward_training_single_core_opt_fp64(
     uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_ifmap, grad_ifmap_scratch, num_bytes);
+        snrt_dma_wait_all();
     }
     uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 }
 
 static inline void batchnorm_backward_training_single_core_opt_fp32(

@@ -17,7 +17,7 @@ base_config = {
     "prec": 64,
     "impl_opt_level": "MULTICORE_OPT",
     "is_forward": False,
-    "is_training": False,
+    "is_training": True,
 }
 
 
@@ -38,12 +38,12 @@ target_snitch_cluster_path = (
     base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 )
 grad_ifmap_errors_path = (
-    base_path.parent / "batchnorm_verify_results" / "grad_ifmap.csv"
+    base_path.parent / "batchnorm_verify_results" / "grad_ifmap_training.csv"
 )
 grad_weight_errors_path = (
-    base_path.parent / "batchnorm_verify_results" / "grad_weight.csv"
+    base_path.parent / "batchnorm_verify_results" / "grad_weight_training.csv"
 )
-grad_bias_errors_path = base_path.parent / "batchnorm_verify_results" / "grad_bias.csv"
+grad_bias_errors_path = base_path.parent / "batchnorm_verify_results" / "grad_bias_training.csv"
 
 columns = [
     "prec",
@@ -88,7 +88,7 @@ def flatten_config_list(config_modifiers):
 def get_scaling_results_path(whole_block):
     return (
         base_path.parent
-        / f"scaling_results{'' if not whole_block else '_whole_block'}.csv"
+        / f"bt_scaling_results{'' if not whole_block else '_whole_block'}.csv"
     )
 
 
@@ -154,34 +154,34 @@ config_modifiers = {
             format_size(32, 16, 16),
             format_size(32, 32, 16),
             format_size(32, 32, 32),
-            format_size(32, 64, 32),
-            format_size(32, 64, 64),
+            # format_size(32, 64, 32),
+            # format_size(32, 64, 64),
         ],
     },
-    32: {
-        "SINGLE_CORE_OPT": [
-            *small_sizes,
-            *non_aligned_sizes,
-            format_size(16, 8, 8),
-            format_size(16, 16, 8),
-            format_size(16, 16, 16),
-        ],
-        "MULTICORE_OPT": [
-            *small_sizes,
-            format_size(15, 16, 16),
-            format_size(15, 23, 23),
-            format_size(16, 8, 8),
-            format_size(16, 16, 8),
-            format_size(16, 16, 16),
-            format_size(16, 64, 64),
-            format_size(32, 16, 16),
-            format_size(32, 32, 16),
-            format_size(32, 32, 32),
-            format_size(32, 64, 32),
-            format_size(32, 64, 64),
-            format_size(64, 64, 64),
-        ],
-    },
+    # 32: {
+    #     "SINGLE_CORE_OPT": [
+    #         *small_sizes,
+    #         *non_aligned_sizes,
+    #         format_size(16, 8, 8),
+    #         format_size(16, 16, 8),
+    #         format_size(16, 16, 16),
+    #     ],
+    #     "MULTICORE_OPT": [
+    #         *small_sizes,
+    #         format_size(15, 16, 16),
+    #         format_size(15, 23, 23),
+    #         format_size(16, 8, 8),
+    #         format_size(16, 16, 8),
+    #         format_size(16, 16, 16),
+    #         format_size(16, 64, 64),
+    #         format_size(32, 16, 16),
+    #         format_size(32, 32, 16),
+    #         format_size(32, 32, 32),
+    #         format_size(32, 64, 32),
+    #         format_size(32, 64, 64),
+    #         format_size(64, 64, 64),
+    #     ],
+    # },
     # 16: {
     #     "SINGLE_CORE_OPT": [
     #         *small_sizes,
@@ -318,28 +318,29 @@ def main():
                 / "logs"
                 / f"barrier-timings-for-mcycle-{main_loop_mcycle_section}.csv"
             )
-            if impl == "MULTICORE_OPT":
-                # 0th one matters - first load
-                # 1st one matters - first tile load in
-                # for looped, 2nd one doesn't matter because it is info.
-                # for looped, 3rd, 5th, and so on matter
-                # for non looped, 2nd one also doesn't matter because dma immediately waits
-                # so the potentially dma-bound ones are 0, 1, odd, and last barrier
-                total_time_waiting_in_barrier = sum(
-                    (barrier_times["core_8"] - barrier_times["core_0"])
-                    .clip(0, None)
-                    .iloc[
-                        [
-                            i
-                            for i in barrier_times.index
-                            if i in (0, 1, barrier_times.index[-1]) or i % 2 == 1
-                        ]
-                    ]
-                )
-            else:
-                total_time_waiting_in_barrier = sum(
-                    (barrier_times["core_8"] - barrier_times["core_0"]).clip(0, None)
-                )
+            # if impl == "MULTICORE_OPT":
+            #     # 0th one matters - first load
+            #     # 1st one matters - first tile load in
+            #     # for looped, 2nd one doesn't matter because it is info.
+            #     # for looped, 3rd, 5th, and so on matter
+            #     # for non looped, 2nd one also doesn't matter because dma immediately waits
+            #     # so the potentially dma-bound ones are 0, 1, odd, and last barrier
+            #     total_time_waiting_in_barrier = sum(
+            #         (barrier_times["core_8"] - barrier_times["core_0"])
+            #         .clip(0, None)
+            #         .iloc[
+            #             [
+            #                 i
+            #                 for i in barrier_times.index
+            #                 if i in (0, 1, barrier_times.index[-1]) or i % 2 == 1
+            #             ]
+            #         ]
+            #     )
+            # else:
+            # not going to be fully accurate unfortunately because of the info barriers. 
+            total_time_waiting_in_barrier = sum(
+                (barrier_times["core_8"] - barrier_times["core_0"]).clip(0, None)
+            )
 
             data.append(
                 (
@@ -365,14 +366,14 @@ def main():
                 )
             )
             subprocess.run(
-                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
+                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results_bt/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,
             ).check_returncode()
             subprocess.run(
-                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
+                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results_bt/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,

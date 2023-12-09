@@ -41,6 +41,9 @@ static inline uint64_t asuint(float f) {
     return result;
 }
 
+#define CEIL(x, y) ((((x) - 1) / (y)) + 1)
+#define MIN(x, y) ((x) < (y)?(x):(y))
+
 void gemm_fp32_baseline(uint32_t M, uint32_t N, uint32_t K, float* A,
                         uint32_t ldA, uint32_t ta, float* B, uint32_t ldB,
                         uint32_t tb, float* C, uint32_t ldC, float BETA) {
@@ -461,6 +464,9 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
     const uint32_t one_beta = bet == 1.0;
     register double ZERO = 0.0;
 
+    if (M==0)
+        return;
+
     // SSR strides and bounds only have to be configured
     // once in the beginning
     if (setup_SSR) {
@@ -609,9 +615,17 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
             } else {
                 c = 0.0;
             }
-            for (uint32_t k = 0; k < K; k++) {
-                c += A[k + m * ldA] * B[k + n * ldB];
-            }
+
+            //THIS IF BRAKES THE CODE FOR SOME REASON!!!!!!!!!!!!!!!!
+            // if (!ta && !tb)
+            // {
+                // if (snrt_cluster_core_idx() == 0)
+                for (uint32_t k = 0; k < K; k++) {
+                    c += A[m * ldA + k] * B[k * ldB + n];
+                }
+            // }
+
+
             C[m * ldC + n] = alp * c;
         }
 
@@ -773,6 +787,200 @@ void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
 
     snrt_ssr_disable();
 }
+
+
+void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
+                   float* A, const uint32_t ldA, uint32_t ta, float* B, const uint32_t ldB, uint32_t tb,
+                   float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
+                   const uint32_t setup_SSR) {
+    // Unrolling factor of most inner loop.
+    // Should be at least as high as the FMA delay
+    // for maximum utilization
+    const uint32_t unroll = 4;
+    const float alp = *ALPHA;
+    const float bet = *BETA / alp;
+    const uint32_t zero_beta = bet == 0.0;
+    const uint32_t one_beta = bet == 1.0;
+    register float ZERO = 0.0;
+    // SSR strides and bounds only have to be configured
+    // once in the beginning
+    if (setup_SSR) {
+        uint32_t ssr0_b[4] = {unroll, K / 2, N / unroll, M};
+        uint32_t ssr0_i[4] = {0, sizeof(float) * 2, 0, sizeof(float) * ldA};
+
+        uint32_t ssr1_b[4] = {unroll, K / 2, N / unroll, M};
+        uint32_t ssr1_i[4] = {sizeof(float) * ldB, sizeof(float) * 2,
+                              sizeof(float) * unroll * ldB, 0};
+
+        snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                         ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+        snrt_ssr_repeat(SNRT_SSR_DM0, unroll);
+
+        snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                         ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2], ssr1_i[3]);
+    }
+
+    // SSR start address need to be configured each time
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, A);
+    snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, B);
+
+    // Kernel progresses by 2 values each step
+    const uint32_t n_frep = K / 2 - 1;
+
+    for (uint32_t m = 0; m < M; m++) {
+        uint32_t n = 0;
+        for (uint32_t n0 = 0; n0 < N / unroll; n0++) {
+            float* _C = &C[m * ldC + n / 2];
+            const register float zero = 0.0;
+            v2f32 c[unroll], reduce_reg[unroll];
+
+            snrt_ssr_enable();
+            asm volatile(
+                "bnez %[zero_beta], 1f\n"
+                
+                // Load intermediate results
+                "flw %[reduce_reg0], 0(%[C]) \n"
+                "flw %[reduce_reg1], 4(%[C]) \n"
+                "flw %[reduce_reg2], 8(%[C]) \n"
+                "flw %[reduce_reg3], 12(%[C]) \n"
+                "flw %[reduce_reg4], 16(%[C]) \n"
+                "flw %[reduce_reg5], 20(%[C]) \n"
+                "flw %[reduce_reg6], 24(%[C]) \n"
+                "flw %[reduce_reg7], 28(%[C]) \n"
+
+                "bnez %[one_beta], 2f\n"
+                "fmul.s %[reduce_reg0], %[reduce_reg0], %[beta] \n"
+                "fmul.s %[reduce_reg1], %[reduce_reg1], %[beta] \n"
+                "fmul.s %[reduce_reg2], %[reduce_reg2], %[beta] \n"
+                "fmul.s %[reduce_reg3], %[reduce_reg3], %[beta] \n"
+                "fmul.s %[reduce_reg4], %[reduce_reg4], %[beta] \n"
+                "fmul.s %[reduce_reg5], %[reduce_reg5], %[beta] \n"
+                "fmul.s %[reduce_reg6], %[reduce_reg6], %[beta] \n"
+                "fmul.s %[reduce_reg7], %[reduce_reg7], %[beta] \n"
+
+
+                // Pack intermediate results into SIMD vector
+                "2: \n"
+                "vfcpka.s.s %[reduce_reg0], %[reduce_reg0], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg1], %[reduce_reg1], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg2], %[reduce_reg2], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg3], %[reduce_reg3], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg4], %[reduce_reg4], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg5], %[reduce_reg5], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg6], %[reduce_reg6], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg7], %[reduce_reg7], %[zero]\n"
+                "j 3f \n"
+
+                "1: \n"
+                // Initialize SIMD vector with zeros
+                "vfcpka.s.s %[reduce_reg0], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg1], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg2], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg3], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg4], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg5], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg6], %[zero], %[zero]\n"
+                "vfcpka.s.s %[reduce_reg7], %[zero], %[zero]\n"
+                "j 3f \n"
+
+
+                "3: \n"
+                // Don't accumulate in first iteration
+                "vfmul.s %[c0], ft1, ft0 \n"
+                "vfmul.s %[c1], ft1, ft0 \n"
+                "vfmul.s %[c2], ft1, ft0 \n"
+                "vfmul.s %[c3], ft1, ft0 \n"
+                "vfmul.s %[c4], ft1, ft0 \n"
+                "vfmul.s %[c5], ft1, ft0 \n"
+                "vfmul.s %[c6], ft1, ft0 \n"
+                "vfmul.s %[c7], ft1, ft0 \n"
+                // frep over MACs
+                "frep.o  %[n_frep], %[unroll], 0, 0 \n"
+                "vfmac.s %[c0], ft1, ft0 \n"
+                "vfmac.s %[c1], ft1, ft0 \n"
+                "vfmac.s %[c2], ft1, ft0 \n"
+                "vfmac.s %[c3], ft1, ft0 \n"
+                "vfmac.s %[c4], ft1, ft0 \n"
+                "vfmac.s %[c5], ft1, ft0 \n"
+                "vfmac.s %[c6], ft1, ft0 \n"
+                "vfmac.s %[c7], ft1, ft0 \n"
+                // Sum-reduce vector
+                "vfsum.s %[reduce_reg0], %[c0] \n"
+                "vfsum.s %[reduce_reg1], %[c1] \n"
+                "vfsum.s %[reduce_reg2], %[c2] \n"
+                "vfsum.s %[reduce_reg3], %[c3] \n"
+                "vfsum.s %[reduce_reg4], %[c4] \n"
+                "vfsum.s %[reduce_reg5], %[c5] \n"
+                "vfsum.s %[reduce_reg6], %[c6] \n"
+                "vfsum.s %[reduce_reg7], %[c7] \n"
+                
+                "vfcpka.s.s %[alpha], %[alpha], %[zero]\n"
+                "vfmul.r.s %[reduce_reg0], %[reduce_reg0], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg1], %[reduce_reg1], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg2], %[reduce_reg2], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg3], %[reduce_reg3], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg4], %[reduce_reg4], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg5], %[reduce_reg5], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg6], %[reduce_reg6], %[alpha] \n"
+                "vfmul.r.s %[reduce_reg7], %[reduce_reg7], %[alpha] \n"                
+
+
+                // Pack results together again into vectors
+                "vfcpka.s.s %[c0], %[reduce_reg0], %[reduce_reg1] \n"
+                "vfcpka.s.s %[c1], %[reduce_reg2], %[reduce_reg3] \n"
+                "vfcpka.s.s %[c2], %[reduce_reg4], %[reduce_reg5] \n"
+                "vfcpka.s.s %[c3], %[reduce_reg6], %[reduce_reg7] \n"
+                : [ c0 ] "+f"(c[0]), [ c1 ] "+f"(c[1]), [ c2 ] "+f"(c[2]),
+                  [ c3 ] "+f"(c[3]), [ c4 ] "+f"(c[4]), [ c5 ] "+f"(c[5]),
+                  [ c6 ] "+f"(c[6]), [ c7 ] "+f"(c[7]),
+                  [ reduce_reg0 ] "+f"(reduce_reg[0]),
+                  [ reduce_reg1 ] "+f"(reduce_reg[1]),
+                  [ reduce_reg2 ] "+f"(reduce_reg[2]),
+                  [ reduce_reg3 ] "+f"(reduce_reg[3]),
+                  [ reduce_reg4 ] "+f"(reduce_reg[4]),
+                  [ reduce_reg5 ] "+f"(reduce_reg[5]),
+                  [ reduce_reg6 ] "+f"(reduce_reg[6]),
+                  [ reduce_reg7 ] "+f"(reduce_reg[7])
+                : [ C ] "r"(_C), [ zero ] "f"(zero), [ n_frep ] "r"(n_frep - 1),
+                  [ unroll ] "i"(unroll), [ alpha ] "f"(alp), [ beta ] "f"(bet), [ zero_beta ] "r"(zero_beta), [ one_beta ] "r"(one_beta)
+                : "ft0", "ft1", "ft2");
+
+                snrt_ssr_disable();
+
+            // Store results
+            ((v2f32*)_C)[0] = c[0];
+            ((v2f32*)_C)[1] = c[1];
+            ((v2f32*)_C)[2] = c[2];
+            ((v2f32*)_C)[3] = c[3];
+
+            // progress by 2 columns each iteration of the loop
+            n += unroll * 2;
+        }
+
+        // Clean up of leftover columns
+
+        for (; n < N; n++) {
+            float c;
+            if (!zero_beta) {
+                if (one_beta)
+                    c = C[m * ldC + n];
+                else
+                    c = C[m * ldC + n] * bet;
+            } else {
+                c = 0.0;
+            }
+            for (uint32_t k = 0; k < K; k++) {
+                c += A[k + m * ldA] * B[k + n * ldB];
+            }
+            C[m * ldC + n] = alp * c;
+        }
+
+        snrt_ssr_enable();
+    }
+
+    snrt_ssr_disable();
+}
+
 
 void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
                    __fp16* B, uint32_t ldB, __fp16* C, uint32_t ldC,
@@ -1317,8 +1525,6 @@ void gemm_fp8_ex_opt(uint32_t M, uint32_t N, uint32_t K, char* A, uint32_t ldA,
 // sizes and pointers are for the whole cluster computation. Within a cluster
 // the computation is parallelized by assigning distinct output rows to
 // distinct cores.
-// TODO: beta (and alpha) should be of floating-point type (same precision as
-// operands)
 void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 uint32_t transa, uint32_t transb, uint32_t m, uint32_t n,
                 uint32_t k, void* alpha, void* a, uint32_t lda, void* b,
@@ -1329,14 +1535,20 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
         // Compute cores work not on contiguous blocks but on strided rows
         uint32_t lda_strided = compute_num * lda;
+        if (transa)
+            lda_strided = lda;
         uint32_t ldc_strided = compute_num * ldc;
 
         // Compute cores access A and C at offsets of one row from each other
         uint32_t offsetA = compute_id * lda;
+        if (transa)
+            offsetA = compute_id;
         uint32_t offsetC = compute_id * ldc;
 
         // Compute fraction of C rows every core computes
         uint32_t frac_m = m / compute_num;
+        if (compute_id < m % compute_num)
+            frac_m++;
 
         switch (prec) {
             case FP64:
@@ -1354,13 +1566,17 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 //                    (double)beta);
                 break;
             case FP32:
+                gemm_fp32_complete(frac_m, n, k, (float*)a + offsetA,
+                    lda_strided,
+                    transa, (float*)b, ldb, transb, (float*)c +
+                    offsetC, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
                 // gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
                 //                    lda_strided, transa, (float*)b, ldb, transb,
                 //                    (float*)c + offsetC, ldc_strided,
                 //                    (float)beta);
                 // gemm_fp32_opt(frac_m, n, k, (float*)a + offsetA, lda_strided,
                 //             (float*)b, ldb, (float*)c + offsetC, ldc_strided,
-                //             &beta, setup_ssr);
+                //             (uint32_t*)beta, setup_ssr);
                 break;
             case FP16:
                 if (expand) {
@@ -1452,14 +1668,26 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 // Copy data in TCDM
                 if (snrt_is_dm_core()) {
                     if (load_a) {
-                        snrt_dma_load_2d_tile(local_a, a,
-                                              abs_m_tile_idx, abs_k_tile_idx,
-                                              frac_m, frac_k, k, prec);
+
+                        if (transa)
+                            snrt_dma_load_2d_tile(local_a, a,
+                                                abs_k_tile_idx, abs_m_tile_idx,
+                                                frac_k, frac_m, m, prec);
+                        else
+                            snrt_dma_load_2d_tile(local_a, a,
+                                                abs_m_tile_idx, abs_k_tile_idx,
+                                                frac_m, frac_k, k, prec);
+                        
                     }
                     if (load_b) {
-                        snrt_dma_load_2d_tile(local_b, b,
-                                              abs_k_tile_idx, n_tile,
-                                              frac_k, frac_n, n, prec);
+                        if (transb)
+                            snrt_dma_load_2d_tile(local_b, b,
+                                                n_tile, abs_k_tile_idx,
+                                                frac_n, frac_k, k, prec);
+                        else
+                            snrt_dma_load_2d_tile(local_b, b,
+                                                abs_k_tile_idx, n_tile,
+                                                frac_k, frac_n, n, prec);
                     }
                     // C tile is loaded only upon first iteration, then the C
                     // array will contain the partial results from the
@@ -1488,11 +1716,11 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     volatile uint32_t ldb = frac_n;
                     volatile uint32_t ldc = frac_n;
 
-                    // Transpose of A unsupported
-                    if (transa) return -1;
+                    
+                    if (transa) {
+                        lda = frac_m;
+                    }
                     if (transb) {
-                        // Transpose of B supported only in FP64
-                        if (prec != FP64) return -1;
                         ldb = frac_k;
                     }
 

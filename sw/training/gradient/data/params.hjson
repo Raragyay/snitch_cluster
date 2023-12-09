@@ -1,8 +1,8 @@
 // Parameters for gradient update
 
 {
-    M:30, #30
-    N:27, #27
-    K:34, #34
+    M:96,
+    N:96,
+    K:96,
     prec: 32,
 }

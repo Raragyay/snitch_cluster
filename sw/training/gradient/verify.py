@@ -63,16 +63,16 @@ def main():
 
     print("M",M,"N",N,"K",K)
     #print("A\n",np.transpose(A))    
-    # print("GRAD_C:\n", GRAD_C)
-    # print("B:\n",np.transpose(B))
+    print("GRAD_C:\n", GRAD_C)
+    print("B:\n",np.transpose(B))
 
     # Verify results
 
     grad_A_golden, grad_B_golden = golden_model(alpha, A,B,GRAD_C)
     goldens = np.concatenate((grad_A_golden.flatten(),grad_B_golden.flatten()))
     
-    # goldens = grad_A_golden.flatten()
-    # actuals = grad_A_actual
+    #goldens = grad_A_golden.flatten()
+    #actuals = grad_A_actual
 
     absolute_err = np.absolute(  actuals - goldens )
     fail = np.any(absolute_err > ERR_THRESHOLD)

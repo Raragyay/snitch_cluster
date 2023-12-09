@@ -12,7 +12,6 @@
 #define CEIL(x, y) ((((x) - 1) / (y)) + 1)
 #define MIN(x, y) ((x) < (y)?(x):(y))
 
-typedef float v2f32 __attribute__((vector_size(8)));
 
 void backpropagation_baseline_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *grad_C,DATA_TYPE *grad_A,DATA_TYPE *grad_B,
                     uint32_t M, uint32_t N, uint32_t K);
@@ -27,6 +26,11 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
                     uint32_t compute_grad_a,uint32_t compute_grad_b, uint32_t dtype_size);
 
+
+void __main_loop_fp64__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
+                    uint32_t compute_grad_a,uint32_t compute_grad_b);
+
 void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
                     uint32_t compute_grad_a,uint32_t compute_grad_b);
@@ -37,11 +41,14 @@ void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA
 void __backpropagation_multicore_computation_grad_A_fp64__(DATA_TYPE alpha, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_B, DATA_TYPE *local_GRAD_A,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize, uint32_t setup_SSR);
 
-void __backpropagation_multicore_computation_grad_B_fp32__(DATA_TYPE alpha, float *local_A, float *local_GRAD_C, float *local_GRAD_B,
+void __backpropagation_multicore_computation_grad_B_fp32__(DATA_TYPE alpha, DATA_TYPE *local_A, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR);
 
 void __backpropagation_multicore_computation_grad_A_fp32__(DATA_TYPE alpha, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_B, DATA_TYPE *local_GRAD_A,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize, uint32_t setup_SSR);
+
+inline void __clean_up_grad_A_fp64__(DATA_TYPE *local_GRAD_A,DATA_TYPE* local_B, DATA_TYPE* local_GRAD_C, DATA_TYPE alpha,
+                    int32_t k, int32_t m, uint32_t K, uint32_t N, uint32_t mult_alpha, uint32_t initialize);
 
 // A[M][K]
 // B[K][N]
@@ -417,10 +424,24 @@ void backpropagation_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_
 void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
                     uint32_t compute_grad_a,uint32_t compute_grad_b, uint32_t dtype_size){
+    switch (dtype_size)
+    {
+    case 4:
+        __main_loop_fp32__(alpha, A, B, GRAD_C, GRAD_A, GRAD_B, M, N, K, M_tiles, N_tiles, K_tiles, compute_grad_a, compute_grad_b);
+        break;
+    
+    case 8:
+        __main_loop_fp64__(alpha, A, B, GRAD_C, GRAD_A, GRAD_B, M, N, K, M_tiles, N_tiles, K_tiles, compute_grad_a, compute_grad_b);
+        break;
+    }
 
-    // if(dtype_size==4){
-    //     __main_loop_fp32__(alpha, A, B, GRAD_C, GRAD_A, GRAD_B, M, N, K, M_tiles, N_tiles, K_tiles, compute_grad_a, compute_grad_b);
-    //     return;}
+}
+
+
+void __main_loop_fp64__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
+                    uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
+                    uint32_t compute_grad_a,uint32_t compute_grad_b){
+
     uint32_t frac_M = M / M_tiles;
     uint32_t frac_N = N / N_tiles;
     uint32_t frac_K = K / K_tiles;
@@ -441,28 +462,10 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
 
 
     if(compute_grad_b){
-        
-        const uint32_t padding_K_req = (dtype_size==4 && frac_K%2!=0) ? 1: 0;
-        const uint32_t padding_N_req = (dtype_size==4 && frac_N%2!=0) ? 1: 0;
 
-        //If padding is required on K we just increment frac_K to be allocated for the tcdm. The last iteration
-        //will iterate over one meaningful data and one useless. The useless one will not be saved back into main memory  
-        if(padding_K_req){
-            size_A = frac_M *(frac_K+1);
-            c = CEIL(frac_K+1, compute_num);
-            lb = c * compute_id;
-            ub = MIN((c * (compute_id + 1)), frac_K+1);
-
-        }else{
-            c = CEIL(frac_K, compute_num);
-            lb = c * compute_id;
-            ub = MIN((c * (compute_id + 1)), frac_K);
-        }
-
-        if(padding_N_req){
-            size_GRAD_C = frac_M * (frac_N+1);
-
-        }
+        c = CEIL(frac_K, compute_num);
+        lb = c * compute_id;
+        ub = MIN((c * (compute_id + 1)), frac_K);
 
         local_A = (DATA_TYPE *)snrt_l1_next();
         local_GRAD_C = local_A + size_A;
@@ -475,15 +478,8 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
                 for(m=0;m<M_tiles;m++){
 
                     if(snrt_is_dm_core()){
-                        if(padding_K_req)
-                            snrt_dma_start_2d(local_A,A+k*frac_K+m*frac_M*K,(frac_K+1)*dtype_size,(frac_K+1)*dtype_size,K*dtype_size,frac_M);
-                        else
-                            snrt_dma_load_2d_tile(local_A,A,m,k,frac_M,frac_K,K,dtype_size);
-                        if(padding_N_req)
-                            snrt_dma_start_2d(local_GRAD_C,GRAD_C+n*frac_N+m*frac_M*N,(frac_N+1)*dtype_size,(frac_N+1)*dtype_size,N*dtype_size,frac_M);
-                        else
-                            snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,dtype_size);
-
+                        snrt_dma_load_2d_tile(local_A,A,m,k,frac_M,frac_K,K, 8);
+                        snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N, 8);
                         snrt_dma_wait_all();
                     }      
 
@@ -508,33 +504,9 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
                             :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
                             :[m] "r"(m),[M_tiles_m_1] "r"(M_tiles-1)
                         :);
-                        snrt_mcycle();
 
-                        switch (dtype_size)
-                        {
-                        case 8:
-                            __backpropagation_multicore_computation_grad_B_fp64__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
-                                                            frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                            
-                            break;
-                        case 4:
-                            if(padding_K_req && padding_N_req)
-                                __backpropagation_multicore_computation_grad_B_fp32__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
-                                                            frac_M,frac_N+1,frac_K+1,lb,ub,mult_alpha,initialize,setup_SSR);                           
-                            else if(padding_K_req)
-                                __backpropagation_multicore_computation_grad_B_fp32__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
-                                                            frac_M,frac_N,frac_K+1,lb,ub,mult_alpha,initialize,setup_SSR);
-                            else if(padding_N_req)
-                                __backpropagation_multicore_computation_grad_B_fp32__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
-                                                            frac_M,frac_N+1,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
-                            else
-                                __backpropagation_multicore_computation_grad_B_fp32__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
-                                                            frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                                                       
-                            break;
-
-                        }
-                        
-
-                        snrt_mcycle();
+                        __backpropagation_multicore_computation_grad_B_fp64__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
+                                                        frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                                  
 
                         //C code
                         //if(setup_SSR==1) setup_SSR=0;
@@ -552,11 +524,7 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
 
                 }
                 if (snrt_is_dm_core()) {
-                    if(padding_N_req){
-                        snrt_dma_start_2d(GRAD_B+n*frac_N+k*frac_K*N,local_GRAD_RES,frac_N*dtype_size,N*dtype_size,(frac_N+1)*dtype_size,frac_K);
-                    }else{
-                        snrt_dma_store_2d_tile(GRAD_B, local_GRAD_RES,k,n,frac_K,frac_N,N,dtype_size);
-                    }
+                    snrt_dma_store_2d_tile(GRAD_B, local_GRAD_RES,k,n,frac_K,frac_N,N,8);
                     snrt_dma_wait_all();
                 }
 
@@ -570,14 +538,8 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
 
     if(compute_grad_a){
 
-        const uint32_t padding_req = (dtype_size==4 && frac_N%2!=0) ? 1: 0;
-        if(padding_req){
-            frac_N +=1;
-            size_GRAD_C = frac_N * frac_M;
-            size_B = frac_N * frac_K;
-        }
         local_GRAD_C = (DATA_TYPE *)snrt_l1_next();
-        local_B =(N%32!=0 || dtype_size!=8) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C + 1;//to make the access on different banks
+        local_B =(N%32!=0) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C + 1;//to make the access on different banks  
         local_GRAD_RES = local_B + size_B;
 
         c = CEIL(frac_M, compute_num);
@@ -591,23 +553,24 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
 
                         if(snrt_is_dm_core()){
 
-                            if(padding_req){
-                                const float zero=0.0f;
-                                snrt_dma_start_2d(local_GRAD_C,GRAD_C+n*(frac_N-1)+m*frac_M*N,frac_N*dtype_size,frac_N*dtype_size,N*dtype_size,frac_M);
-                                snrt_dma_start_2d(local_B,B+n*(frac_N-1)+k*frac_K*N,frac_N*dtype_size,frac_N*dtype_size,N*dtype_size,frac_K);
-
-                                snrt_dma_start_2d(local_GRAD_C+frac_N-1,&zero,4,frac_N*4,0,frac_M);
-                                snrt_dma_start_2d(local_B+frac_N-1,&zero,4,frac_N*4,0,frac_K);                            
-                            }else{
-                                snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,dtype_size);
-                                snrt_dma_load_2d_tile(local_B,B,k,n,frac_K,frac_N,N,dtype_size);
-                            }
+                            snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,8);
+                            snrt_dma_load_2d_tile(local_B,B,k,n,frac_K,frac_N,N,8);
                             snrt_dma_wait_all();
 
                         }
 
                         snrt_cluster_hw_barrier();
-
+                        // if(compute_id==0 && k==1){
+                        //     for(int i=0;i<3;i++){
+                        //         for(int j=0;j<frac_K;j++){
+                        //             printf("%f ",local_B[j*frac_N+i]);
+                        //         }
+                        //         printf("\n");
+                        //     }
+                        //     printf("\n\n");
+                        // }
+                        // snrt_cluster_hw_barrier();
+                        
                         if(!snrt_is_dm_core()){
                             
                             //C code
@@ -630,25 +593,8 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
                             :);
 
 
-                            snrt_mcycle();
-
-                            switch (dtype_size)
-                            {
-                            case 8:
-                                    __backpropagation_multicore_computation_grad_A_fp64__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
-                                                                                    frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                                break;
-                                    break;
-                            
-                            case 4:
-                                     __backpropagation_multicore_computation_grad_A_fp32__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
-                                                                                    frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
-                                    break;
-
-
-                            }
-                            
-
-                            snrt_mcycle();
+                            __backpropagation_multicore_computation_grad_A_fp64__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
+                                                                            frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                              
 
                             //C code
                             //if(setup_SSR==1) setup_SSR=0;
@@ -668,7 +614,7 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
 
                 if (snrt_is_dm_core()) {
                     //tiling doesn't bother write-back.
-                    snrt_dma_store_2d_tile(GRAD_A, local_GRAD_RES,m,k,frac_M,frac_K,K,dtype_size);
+                    snrt_dma_store_2d_tile(GRAD_A, local_GRAD_RES,m,k,frac_M,frac_K,K,8);
                     snrt_dma_wait_all();
                 }
 
@@ -680,11 +626,11 @@ void backpropagation_multicore(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA
 
 }
 
+
 void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *GRAD_C,DATA_TYPE *GRAD_A, DATA_TYPE *GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
                     uint32_t compute_grad_a,uint32_t compute_grad_b){
 
-                        
     uint32_t frac_M = M / M_tiles;
     uint32_t frac_N = N / N_tiles;
     uint32_t frac_K = K / K_tiles;
@@ -703,10 +649,9 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
     
     const uint32_t padding_K_req = (frac_K%2!=0) ? 1: 0;
     const uint32_t padding_N_req = (frac_N%2!=0) ? 1: 0;
-    snrt_cluster_hw_barrier();
 
     if(compute_grad_b){
-
+        
         //If padding is required on K we just increment frac_K to be allocated for the tcdm. The last iteration
         //will iterate over one meaningful data and one useless. The useless one will not be saved back into main memory  
         if(padding_K_req){
@@ -770,6 +715,7 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
                             :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
                             :[m] "r"(m),[M_tiles_m_1] "r"(M_tiles-1)
                         :);
+
                         snrt_mcycle();
 
                         if(padding_K_req && padding_N_req)
@@ -784,9 +730,7 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
                         else
                             __backpropagation_multicore_computation_grad_B_fp32__(alpha,local_A,local_GRAD_C,local_GRAD_RES,
                                                         frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                                                       
-                        break;
-
-
+                        
                         snrt_mcycle();
 
                         //C code
@@ -817,6 +761,8 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
             }
         }
     }
+
+    snrt_cluster_hw_barrier();
 
     if(compute_grad_a){
 
@@ -883,7 +829,8 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
 
                             __backpropagation_multicore_computation_grad_A_fp32__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
                                                                         frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
-                            
+                
+
                             snrt_mcycle();
 
                             //C code
@@ -912,7 +859,6 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
 
             }
         }
-    
     }
 
 }
@@ -920,7 +866,7 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
 
 void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA_TYPE *local_A, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR){
-
+                        
     register const uint32_t compute_num = snrt_cluster_compute_core_num();
     register const uint32_t compute_id = snrt_cluster_core_idx();
     register double ZERO=0.0f;
@@ -931,6 +877,7 @@ void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA
     register int32_t n0; 
     const register int32_t loops= N/unroll;
     register int32_t k=compute_id;
+    double sum;
     if(dim>0){
 
         if(loops > 0){
@@ -1035,7 +982,7 @@ void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA
 
            //cleanup sucks, make it better
             for (; n<N; n++) {
-                volatile double sum=(initialize) ? 0 : local_GRAD_B[k*N + n] ;
+                sum=(initialize) ? 0 : local_GRAD_B[k*N + n] ;
                 for (uint32_t m=0; m<M; m++) {
                     sum += local_A[k + m*K] * local_GRAD_C[m*N + n];
                 }
@@ -1044,9 +991,7 @@ void __backpropagation_multicore_computation_grad_B_fp64__(DATA_TYPE alpha, DATA
 
         k+=compute_num;
         }
-       // snrt_mcycle();
     }
-
 }
 
 
@@ -1138,15 +1083,10 @@ void __backpropagation_multicore_computation_grad_A_fp64__(DATA_TYPE alpha, DATA
             }
 
             snrt_ssr_disable();
+            snrt_fpu_fence();
 
-            //cleanup suckes
-            for (; k<K; k++) {
-                volatile double sum=0;
-                for (uint32_t n=0; n<N; n++) {
-                    sum +=  local_GRAD_C[m*N+n]*local_B[n+k*N];
-                }
-                local_GRAD_A[m*K + k] = alpha*sum;
-            }
+            __clean_up_grad_A_fp64__(local_GRAD_A,local_B,local_GRAD_C,alpha,k,m,K,N,mult_alpha,initialize);
+            
             m++;
         }
 
@@ -1156,7 +1096,7 @@ void __backpropagation_multicore_computation_grad_A_fp64__(DATA_TYPE alpha, DATA
 }
 
 
-void __backpropagation_multicore_computation_grad_B_fp32__(DATA_TYPE alpha, float *local_A, float *local_GRAD_C, float *local_GRAD_B,
+void __backpropagation_multicore_computation_grad_B_fp32__(DATA_TYPE alpha, DATA_TYPE *local_A, DATA_TYPE *local_GRAD_C, DATA_TYPE *local_GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR){
 
     //modify lb and upperbound. Every cycle of K iterates over 2 lines not one
@@ -1229,9 +1169,9 @@ void __backpropagation_multicore_computation_grad_B_fp32__(DATA_TYPE alpha, floa
                     "j 2f\n"            
                     //load previous data and operate the mac on it
                     "1:\n"
-                    "fld ft3, 0(%[sum_addr_0]) \n"
+                    "fld ft3,  0(%[sum_addr_0]) \n"
                     "fld ft4,  0(%[sum_addr_1]) \n"
-                    "fld ft5, 8(%[sum_addr_0]) \n"
+                    "fld ft5,  8(%[sum_addr_0]) \n"
                     "fld ft6,  8(%[sum_addr_1]) \n"
                     "fld ft7, 16(%[sum_addr_0]) \n"
                     "fld ft8, 16(%[sum_addr_1]) \n"
@@ -1249,8 +1189,8 @@ void __backpropagation_multicore_computation_grad_B_fp32__(DATA_TYPE alpha, floa
                   
                     "2:\n"                   
                     "frep.o %[n_frep],12 , 0, 0 \n"
-                    "vfcpka.s.s ft10,ft0,ft0\n"
                     "vfcpka.s.s ft11,%[ZERO],%[ZERO] \n"
+                    "vfcpka.s.s ft10,ft0,ft0\n"
                     "vfsum.s ft11,ft0 \n"
                     "vfsub.r.s ft11, ft10, ft11 \n"
                     
@@ -1442,5 +1382,156 @@ void __backpropagation_multicore_computation_grad_A_fp32__(DATA_TYPE alpha, DATA
 
     }
     snrt_fpu_fence();    
+
+}
+
+
+inline void __clean_up_grad_A_fp64__(DATA_TYPE *local_GRAD_A,DATA_TYPE* local_B, DATA_TYPE* local_GRAD_C, DATA_TYPE alpha,
+                    int32_t k, int32_t m, uint32_t K, uint32_t N, uint32_t mult_alpha, uint32_t initialize){
+    //C code
+    double sum;
+    for (; k<K; k++) {
+        sum=(initialize) ? 0 : local_GRAD_A[m*K + k] ;
+        for (uint32_t n=0; n<N; n++) {
+            sum +=  local_GRAD_C[m*N+n]*local_B[n+k*N];
+        }
+        local_GRAD_A[m*K + k] =(mult_alpha)? alpha*sum :sum;
+    }
+    // register double ZERO=0.0f;
+    // switch (K-k){
+    // case 3:
+    //     asm volatile(
+    //         "beqz %[initialize], 1f\n"
+    //         "fcvt.d.w %[ZERO], zero\n"
+    //         "fsgnj.d ft3,%[ZERO],%[ZERO]\n"
+    //         "fsgnj.d ft4,%[ZERO],%[ZERO]\n"
+    //         "fsgnj.d ft5,%[ZERO],%[ZERO]\n"
+    //         "mv t0, zero\n" //t0 is n
+    //         "j 2f\n"            
+
+    //         "1:\n"
+    //         "fld ft3, 0(%[local_GRAD_A]) \n" //ft3,4,5 are sum
+    //         "fld ft4, 8(%[local_GRAD_A]) \n"
+    //         "fld ft5, 16(%[local_GRAD_A]) \n"
+    //         "mv t0, zero\n" //t0 is n
+            
+    //         "2:\n"
+    //         "fld ft6, 0(%[local_GRAD_C]) \n" //ft6 is the local_grad_c value                
+    //         "mul t1, %[k], %[N] \n"
+    //         "add t1, t1, t0 \n"
+    //         "add t1, t1, %[local_B] \n"
+    //         "fld ft7, 0(t1)\n" //ft7,8,9 contains local_B values 
+    //         "add t1, t1, %[N] \n"
+    //         "fld ft8, 0(t1)\n"
+    //         "add t1, t1, %[N] \n"
+    //         "fld ft9, 0(t1)\n"
+
+    //         "fmadd.d ft3, ft6, ft7, ft3 \n"
+    //         "fmadd.d ft4, ft6, ft8, ft4 \n"
+    //         "fmadd.d ft5, ft6, ft9, ft5 \n"
+
+    //         "addi t0, t0, 8 \n"
+    //         "addi %[local_GRAD_C],%[local_GRAD_C],8 \n"
+    //         "bne t0, %[N], 2b\n"
+            
+    //         "beqz %[mult_alpha], 3f \n"
+    //         "fmul.d ft3, %[alpha],ft3 \n"
+    //         "fmul.d ft4, %[alpha],ft4 \n"
+    //         "fmul.d ft5, %[alpha],ft5 \n"
+
+    //         "3:\n"
+    //         "fsd ft3, 0(%[local_GRAD_A]) \n"
+    //         "fsd ft4, 8(%[local_GRAD_A]) \n"
+    //         "fsd ft5, 16(%[local_GRAD_A]) \n"
+            
+
+    //         "4:\n"
+    //         :
+    //         :[local_GRAD_A] "r"(local_GRAD_A + m*K + 0),[local_B] "r"(local_B), [local_GRAD_C] "r"(local_GRAD_C + m*N), [k] "r"(k), [K] "r"(K),
+    //         [initialize] "r"(initialize), [mult_alpha] "r"(mult_alpha), [N] "r"(8*N), [ZERO] "fr"(ZERO), [alpha] "f"(alpha)
+    //         :"t0","t1","ft3","ft4","ft5","ft6","ft7","ft8","ft9");
+    //     break;
+    // case 2:
+    //     asm volatile(
+    //         "beqz %[initialize], 1f\n"
+    //         "fcvt.d.w %[ZERO], zero\n"
+    //         "fsgnj.d ft3,%[ZERO],%[ZERO]\n"
+    //         "fsgnj.d ft4,%[ZERO],%[ZERO]\n"
+    //         "mv t0, zero\n" //t0 is n
+    //         "j 2f\n"            
+
+    //         "1:\n"
+    //         "fld ft3, 0(%[local_GRAD_A]) \n" //ft3,4,5 are sum
+    //         "fld ft4, 8(%[local_GRAD_A]) \n"
+    //         "mv t0, zero\n" //t0 is n
+            
+    //         "2:\n"
+    //         "fld ft6, 0(%[local_GRAD_C]) \n" //ft6 is the local_grad_c value                
+    //         "mul t1, %[k], %[N] \n"
+    //         "add t1, t1, t0 \n"
+    //         "add t1, t1, %[local_B] \n"
+    //         "fld ft7, 0(t1)\n" //ft7,8 contains local_B values 
+    //         "add t1, t1, %[N] \n"
+    //         "fld ft8, 0(t1)\n"
+            
+    //         "fmadd.d ft3, ft6, ft7, ft3 \n"
+    //         "fmadd.d ft4, ft6, ft8, ft4 \n"
+
+    //         "addi t0, t0, 8 \n"
+    //         "addi %[local_GRAD_C],%[local_GRAD_C],8 \n"
+    //         "bne t0, %[N], 2b\n"
+            
+    //         "beqz %[mult_alpha], 3f \n"
+    //         "fmul.d ft3, %[alpha],ft3 \n"
+    //         "fmul.d ft4, %[alpha],ft4 \n"
+
+    //         "3:\n"
+    //         "fsd ft3, 0(%[local_GRAD_A]) \n"
+    //         "fsd ft4, 8(%[local_GRAD_A]) \n"
+            
+    //         "4:\n"
+    //         :
+    //         :[local_GRAD_A] "r"(local_GRAD_A + m*K + 0),[local_B] "r"(local_B), [local_GRAD_C] "r"(local_GRAD_C + m*N), [k] "r"(k), [K] "r"(K),
+    //         [initialize] "r"(initialize), [mult_alpha] "r"(mult_alpha), [N] "r"(8*N), [ZERO] "fr"(ZERO), [alpha] "f"(alpha)
+    //         :"t0","t1","ft3","ft4","ft6","ft7","ft8");
+    //     break;
+    // case 1:
+    //     asm volatile(
+    //         "beqz %[initialize], 1f\n"
+    //         "fcvt.d.w %[ZERO], zero\n"
+    //         "fsgnj.d ft3,%[ZERO],%[ZERO]\n"
+    //         "mv t0, zero\n" //t0 is n
+    //         "j 2f\n"            
+
+    //         "1:\n"
+    //         "fld ft3, 0(%[local_GRAD_A]) \n" //ft3,4,5 are sum
+    //         "mv t0, zero\n" //t0 is n
+            
+    //         "2:\n"
+    //         "fld ft6, 0(%[local_GRAD_C]) \n" //ft6 is the local_grad_c value                
+    //         "mul t1, %[k], %[N] \n"
+    //         "add t1, t1, t0 \n"
+    //         "add t1, t1, %[local_B] \n"
+    //         "fld ft7, 0(t1)\n" //ft7,8 contains local_B values 
+            
+    //         "fmadd.d ft3, ft6, ft7, ft3 \n"
+
+    //         "addi t0, t0, 8 \n"
+    //         "addi %[local_GRAD_C],%[local_GRAD_C],8 \n"
+    //         "bne t0, %[N], 2b\n"
+            
+    //         "beqz %[mult_alpha], 3f \n"
+    //         "fmul.d ft3, %[alpha],ft3 \n"
+
+    //         "3:\n"
+    //         "fsd ft3, 0(%[local_GRAD_A]) \n"
+            
+    //         "4:\n"
+    //         :
+    //         :[local_GRAD_A] "r"(local_GRAD_A + m*K + k),[local_B] "r"(local_B), [local_GRAD_C] "r"(local_GRAD_C + m*N), [k] "r"(k), [K] "r"(K),
+    //         [initialize] "r"(initialize), [mult_alpha] "r"(mult_alpha), [N] "r"(8*N), [ZERO] "fr"(ZERO), [alpha] "f"(alpha)
+    //         :"t0","t1","ft3","ft4","ft6","ft7","ft8");
+    //     break;                        
+    // }
 
 }

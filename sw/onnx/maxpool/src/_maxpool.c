@@ -23,7 +23,7 @@
 #define USE_SSR_FREP_3D 0
 #define USE_SSR_FREP_ALL 0
 #define USE_DOUBLE_BUFFERING 1
-#define OPTIMIZE_PERFECT_TILING 1
+#define ENABLE_SPECIALIZED 1
 
 #define ENABLE_BENCHMARKING 1
 
@@ -56,6 +56,23 @@ int align(int a) {
   return (a + 4) - ((a + 4) % 8);
 }
 
+static inline void snrt_ssr_loop_3d_custom(enum snrt_ssr_dm dm, size_t b0, size_t b1,
+                             size_t b2, size_t s0, size_t s1, size_t s2) {
+    --b0;
+    --b1;
+    --b2;
+    write_ssr_cfg(REG_BOUNDS + 0, dm, b0);
+    write_ssr_cfg(REG_BOUNDS + 1, dm, b1);
+    write_ssr_cfg(REG_BOUNDS + 2, dm, b2);
+    size_t a = 0;
+    write_ssr_cfg(REG_STRIDES + 0, dm, s0 - a);
+    a += s0 * b0;
+    write_ssr_cfg(REG_STRIDES + 1, dm, s1 - a);
+    a += s1 * b1;
+    write_ssr_cfg(REG_STRIDES + 2, dm, s2 - a);
+    // a += s2 * b2;
+}
+
 static inline void ssr_asm_with_index(int*, int);
 
 void ssr_asm_with_index(int* out_idx, int total_iter) {
@@ -79,7 +96,7 @@ void ssr_asm_with_index(int* out_idx, int total_iter) {
   );
 }
 
-void ssr_asm_no_index(int);
+static inline void ssr_asm_no_index(int);
 
 void ssr_asm_no_index(int n_iter_minus_two) {
 
@@ -126,6 +143,99 @@ void ssr_asm_no_index(int n_iter_minus_two) {
   //   : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two) /* loading initial val takes 1 read */
   //   : "ft0", "ft1", "ft2", "ft3", "memory"
   // );
+}
+
+static inline void ssr_asm_no_index(int);
+
+void ssr_asm_no_index_optimized(int n_iter_minus_two, int total_iters) {
+
+  // DUMP(n_iter_minus_two);
+  // DUMP(total_iters);
+
+  // asm volatile(
+  //   "li t0, 0\n"
+
+  //   "fadd.d ft3, %[zero], ft0\n"
+  //   "frep.o %[n_frep], 1, 0, 0\n"
+  //   "fmax.d ft3, ft3, ft0\n"
+  //   "fadd.d ft1, %[zero], ft3\n"
+
+  //   "addi t0, t0, 1\n"
+
+  //   // "fmv.x.w %[tmp], fa0\n"
+  //   // "mv      %[tmp], %[tmp]\n"
+
+  //   "bne t0, %[total_iters], -20\n"
+
+  //   :/* [tmp] "+r"(tmp)*/
+  //   : [zero] "f"(0.0),
+  //     // [work_this_core] "r"(work_this_core),
+  //     [n_frep] "r"(n_frep),
+  //     // [n_channels] "r"(n_channels),
+  //     [total_iters] "r"(total_iters)
+  //   : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
+  // );
+
+  if (n_iter_minus_two == 0) {
+    asm volatile(
+      "li t0, 0\n"
+
+      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "fmax.d ft1, ft3, ft0\n"
+
+      "addi t0, t0, 1\n"
+
+      "bne t0, %[total_iters], -12\n"
+
+      :
+      : [zero] "f"(0.0),
+        [total_iters] "r"(total_iters)
+      : "t0", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
+    );
+  }
+  else if (n_iter_minus_two % 2 == 0) {
+    asm volatile(
+      "li t0, 0\n"
+
+      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "fmax.d ft3, ft3, ft0\n"
+      "frep.o %[n_frep], 2, 0, 0\n"
+      "fmax.d ft4, ft3, ft0\n"
+      "fmax.d ft3, ft4, ft0\n"
+      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+
+      "addi t0, t0, 1\n"
+
+      "bne t0, %[total_iters], -28\n"
+
+      :
+      : [zero] "f"(0.0),
+        [n_frep] "r"(n_iter_minus_two / 2 - 1),
+        [total_iters] "r"(total_iters)
+      : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+    );
+  }
+  else {
+    asm volatile(
+      "li t0, 0\n"
+
+      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "frep.o %[n_frep], 2, 0, 0\n"
+      "fmax.d ft4, ft3, ft0\n"
+      "fmax.d ft3, ft4, ft0\n"
+      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+
+      "addi t0, t0, 1\n"
+
+      "bne t0, %[total_iters], -24\n"
+
+      :
+      : [zero] "f"(0.0),
+        [n_frep] "r"(n_iter_minus_two / 2),
+        [total_iters] "r"(total_iters)
+      : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+    );
+  }
 }
 
 #endif
@@ -521,11 +631,9 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
                    int end_step) {
 
                     
-  #if OPTIMIZE_PERFECT_TILING
-  // If the kernel can tile perfectly in the input matrix we can optimize with ssr.
-  // In the future, this optimization can be done even if it doesn't tile perfectly
-  // by special casing the last maxpool op and special casing the first one when padding != 0.
-  if (attr->pads[0] == 0 && (attr->input_shape[2] - attr->kernel_shape[0]) % attr->strides[0] == 0) {
+  #if ENABLE_SPECIALIZED
+  // Currently only works with 0 padding. It might be possible to special case the iterations that consider the padding and perform the normal optimization on the rest.
+  if (attr->pads[0] == 0) {
     // If the stride is the default value (== kernel shape) and the dilation
     // fits the input perfectly (if incrementing by the dilation would happen to take us to
     // the first element of each successive matrix) then in the future we can reduce the dimension
@@ -536,92 +644,40 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     // }
 
     // Due to us double buffering only an integer number of matrices,
-    // we are called to process an integer number of matrices.
-    DUMP(88888);
+    // we are therefore called to process an integer number of matrices.
     int input_size = attr->input_shape[2];
     int pooled_size = attr->output_shape[2];
     int n_channels = end_step / pooled_size;
     int work_this_core = pooled_size / n_cores;
     if (start_step < pooled_size % n_cores) ++work_this_core;
 
-    if (start_step == 2) DUMP(input_size);
-    if (start_step == 2) DUMP(pooled_size);
-    if (start_step == 2) DUMP(work_this_core);
-
     // innermost iters, inner iters, outer iters, innermost stride, inner stride, outer stride
     snrt_ssr_loop_3d(SNRT_SSR_DM0,
-      attr->kernel_shape[0], work_this_core, n_channels,
-      attr->dilations[0] * sizeof(double), attr->strides[0] * sizeof(double) * n_cores, input_size * sizeof(double));
+      attr->kernel_shape[0],
+      work_this_core,
+      n_channels,
+      attr->dilations[0] * sizeof(double),
+      attr->strides[0] * sizeof(double) * n_cores,
+      input_size * sizeof(double));
 
-    snrt_ssr_loop_1d(SNRT_SSR_DM1, work_this_core * n_channels, n_cores * sizeof(double));
+    snrt_ssr_loop_2d(SNRT_SSR_DM1,
+      work_this_core,
+      n_channels,
+      n_cores * sizeof(double),
+      pooled_size * sizeof(double));
 
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, in + start_step * attr->strides[0]);
-    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + start_step);
+    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + start_step);
 
     snrt_ssr_enable();
 
     // frep performs kernel shape fmax ops, total of work_this_core frep's
-    // unsigned tmp;
-    // asm volatile(
-    //   "li t0, 0\n"
-    //   "li t1, 0\n"
-
-    //   "fadd.d ft3, %[zero], ft0\n"
-    //   "frep.o %[n_frep], 1, 0, 0\n"
-    //   "fmax.d ft3, ft3, ft0\n"
-    //   "fadd.d ft1, %[zero], ft3\n"
-
-    //   "fmv.x.w %[tmp], fa0\n"
-    //   "mv      %[tmp], %[tmp]\n"
-
-    //   "addi t1, t1, 1\n"
-    //   "bne t1, %[work_this_core], -28\n"
-    //   "addi t0, t0, 1\n"
-    //   "bne t0, %[n_channels], -36\n"
-
-    //   : [tmp] "+r"(tmp)
-    //   : [zero] "f"(0.0), [work_this_core] "r"(work_this_core), [n_frep] "r"(attr->kernel_shape[0] - 2), [n_channels] "r"(n_channels)
-    //   : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
-    // );
-    // unsigned tmp;
     const register int n_frep = attr->kernel_shape[0] - 2;
     const register int total_iters = work_this_core * n_channels;
-    asm volatile(
-      "li t0, 0\n"
-
-      "fadd.d ft3, %[zero], ft0\n"
-      "frep.o %[n_frep], 1, 0, 0\n"
-      "fmax.d ft3, ft3, ft0\n"
-      "fadd.d ft1, %[zero], ft3\n"
-
-      "addi t0, t0, 1\n"
-
-      // "fmv.x.w %[tmp], fa0\n"
-      // "mv      %[tmp], %[tmp]\n"
-
-      "bne t0, %[total_iters], -20\n"
-
-      :/* [tmp] "+r"(tmp)*/
-      : [zero] "f"(0.0),
-        // [work_this_core] "r"(work_this_core),
-        [n_frep] "r"(n_frep),
-        // [n_channels] "r"(n_channels),
-        [total_iters] "r"(total_iters)
-      : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
-    );
+    ssr_asm_no_index_optimized(n_frep, total_iters);
 
     snrt_ssr_disable();
     snrt_fpu_fence();
-    // asm volatile(
-
-    //   "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
-    //   "frep.o %[n_frep], 1, 0, 0\n"
-    //   "fmax.d ft3, ft3, ft0\n"
-    //   "fadd.d ft1, %[zero], ft3\n" /* store the final value */
-    //   :
-    //   : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two) /* loading initial val takes 1 read */
-    //   : "ft0", "ft1", "ft2", "ft3", "memory"
-    // );
     return;
   }
   #endif

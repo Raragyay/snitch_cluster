@@ -1149,6 +1149,143 @@ void __gemm_fp32_complete_ta(const uint32_t M, const uint32_t N, const uint32_t 
 
 }
 
+void __gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
+                   float* A, const uint32_t ldA, float* B, const uint32_t ldB,
+                   float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
+                   const uint32_t setup_SSR) {
+    // Unrolling factor of most inner loop.
+    // Should be at least as high as the FMA delay
+    // for maximum utilization
+    const uint32_t unroll = 4;
+    const float alp = *ALPHA;
+    const float bet = *BETA / alp;
+    const uint32_t zero_beta = bet == 0.0;
+    const uint32_t one_beta = bet == 1.0;
+
+    register float ZERO = 0.0;
+    // SSR strides and bounds only have to be configured
+    // once in the beginning
+    if (setup_SSR) {
+            const uint32_t ssr0_b[4] = {unroll, K/2, N / (unroll*2), M};
+            const uint32_t ssr0_i[4] = {0, 2 * 4, 0, 4 * ldA};
+
+            snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                             ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+            snrt_ssr_repeat(SNRT_SSR_DM0, 2);
+
+            const uint32_t ssr1_b[4] = {unroll, K/2, N / (unroll*2), M};
+            const uint32_t ssr1_i[4] = {2 * 4, ldB * 2 * 4, unroll * 8, 0};
+
+            snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                             ssr1_i[3]);
+
+            snrt_ssr_loop_4d(SNRT_SSR_DM2, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                             ssr1_i[3]);
+
+    }
+
+    // SSR start address need to be configured each time
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, A);
+    snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, B);
+    snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_4D, B + ldB);
+
+    const uint32_t n_frep = K/2;
+
+    for (uint32_t m = 0; m < M; m++) {
+        uint32_t n = 0;
+        for (uint32_t n0 = 0; n0 < N / (unroll*2); n0++) {
+            float* _C = &C[m * ldC + n];
+            const register float zero = 0.0;
+            const register double zero_d = 0.0;
+
+            snrt_ssr_enable();
+            asm volatile(
+
+
+                "beqz %[zero_beta], 1f\n"               
+                "fmv.d ft3, %[zero_d] \n"
+                "fmv.d ft4, %[zero_d] \n"
+                "fmv.d ft5, %[zero_d] \n"
+                "fmv.d ft6, %[zero_d] \n"
+                "j 2f\n"
+
+                "1:\n"
+                "fld ft3,  0(%[sum_addr_0]) \n"
+                "fld ft4,  8(%[sum_addr_0]) \n"
+                "fld ft5,  16(%[sum_addr_0]) \n"
+                "fld ft6,  24(%[sum_addr_0]) \n"
+
+                "vfmul.r.s ft3, ft3, %[beta] \n"
+                "vfmul.r.s ft4, ft4, %[beta] \n"
+                "vfmul.r.s ft5, ft5, %[beta] \n"
+                "vfmul.r.s ft6, ft6, %[beta] \n"
+
+                "2:\n"                   
+                "frep.o %[n_frep], 12, 0, 0 \n"
+                "vfcpka.s.s ft11, %[zero], %[zero] \n"
+                "vfcpka.s.s ft10, ft0, ft0 \n"
+                "vfsum.s ft11, ft0 \n"
+                "vfsub.r.s ft11, ft10, ft11 \n"
+
+                "vfmac.r.s ft3, ft1, ft10 \n"
+                "vfmac.r.s ft4, ft1, ft10 \n"
+                "vfmac.r.s ft5, ft1, ft10 \n"
+                "vfmac.r.s ft6, ft1, ft10 \n"
+                
+                "vfmre.r.s ft3, ft2, ft11 \n"
+                "vfmre.r.s ft4, ft2, ft11 \n"
+                "vfmre.r.s ft5, ft2, ft11 \n"
+                "vfmre.r.s ft6, ft2, ft11 \n"                
+                
+                "vfmul.r.s ft3, ft3, %[alpha] \n"
+                "vfmul.r.s ft4, ft4, %[alpha] \n"
+                "vfmul.r.s ft5, ft5, %[alpha] \n"
+                "vfmul.r.s ft6, ft6, %[alpha] \n"
+
+
+                "fsd ft3,  0(%[sum_addr_0]) \n"
+                "fsd ft4,  8(%[sum_addr_0]) \n"
+                "fsd ft5, 16(%[sum_addr_0]) \n"
+                "fsd ft6, 24(%[sum_addr_0]) \n"
+
+                : 
+                : [ sum_addr_0 ] "r"(_C), [ zero ] "f"(zero), [ zero_d ] "f"(zero_d), [ n_frep ] "r"(n_frep - 1),
+                  [ alpha ] "f"(alp), [ neg_alpha ] "f"(-alp), [ beta ] "f"(bet), [ neg_beta ] "f"(-bet), [ zero_beta ] "r"(zero_beta)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8", "ft9", "ft10", "ft11", "fa0");
+
+                snrt_ssr_disable();
+
+            n += unroll*2;
+        }
+
+        // Clean up of leftover columns: TODO -> cleanup doesn't work with transposed matrices
+
+        for (; n < N; n++) {
+            float c;
+            if (!zero_beta) {
+                if (one_beta)
+                    c = C[m * ldC + n];
+                else
+                    c = C[m * ldC + n] * bet;
+            } else {
+                c = 0.0;
+            }
+            for (uint32_t k = 0; k < K; k++) {
+                c += A[k + m * ldA] * B[k + n * ldB];
+            }
+            C[m * ldC + n] = alp * c;
+        }
+
+        snrt_ssr_enable();
+    }
+
+    snrt_ssr_disable();
+
+
+}
+
 
 
 void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
@@ -1156,6 +1293,10 @@ void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
                    float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
                    const uint32_t setup_SSR)
 {
+    if (!ta && !tb)
+    {
+        __gemm_fp32_complete (M, N, K, A, ldA, B, ldB, C, ldC, ALPHA, BETA, setup_SSR);
+    }
     if (!ta && tb)
     {
         __gemm_fp32_complete_tb (M, N, K, A, ldA, B, ldB, C, ldC, ALPHA, BETA, setup_SSR);
@@ -1754,7 +1895,12 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 break;
             case FP32:
                 /*FRAC M HAS TO BE MODIFIED because we compute 2 rows at the time*/
-                if (!transa && transb)
+                if (!transa && !transb)
+                    gemm_fp32_complete(frac_m, n, k, (float*)a + offsetA,
+                        lda_strided,
+                        transa, (float*)b, ldb, transb, (float*)c +
+                        offsetC, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
+                else if (!transa && transb)
                     gemm_fp32_complete(frac_m, n, k, (float*)a + offsetA,
                         lda_strided,
                         transa, (float*)b, ldb, transb, (float*)c +

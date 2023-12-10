@@ -21,7 +21,7 @@ ERR_THRESHOLD = 0.001
 
 def main():
     # Run simulation and get outputs
-    precision = '64'
+    precision = '32'
     args = verification.parse_args()
     raw_results = verification.simulate(sim_bin=args.sim_bin,
                                         snitch_bin=args.snitch_bin,

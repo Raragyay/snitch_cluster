@@ -617,6 +617,7 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
             }
 
             //THIS IF BRAKES THE CODE FOR SOME REASON!!!!!!!!!!!!!!!!
+            //You need this to invert rows and columns in the case where A and/or B are transposed
             // if (!ta && !tb)
             // {
                 // if (snrt_cluster_core_idx() == 0)
@@ -789,14 +790,14 @@ void gemm_fp32_opt(const uint32_t M, const uint32_t N, const uint32_t K,
 }
 
 
-void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
-                   float* A, const uint32_t ldA, uint32_t ta, float* B, const uint32_t ldB, uint32_t tb,
+void __gemm_fp32_complete_tb(const uint32_t M, const uint32_t N, const uint32_t K,
+                   float* A, const uint32_t ldA, float* B, const uint32_t ldB,
                    float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
                    const uint32_t setup_SSR) {
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
     // for maximum utilization
-    const uint32_t unroll = 4;
+    const uint32_t unroll = 8;
     const float alp = *ALPHA;
     const float bet = *BETA / alp;
     const uint32_t zero_beta = bet == 0.0;
@@ -957,7 +958,7 @@ void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
             n += unroll * 2;
         }
 
-        // Clean up of leftover columns
+        // Clean up of leftover columns: TODO -> cleanup doesn't work with transposed matrices
 
         for (; n < N; n++) {
             float c;
@@ -980,6 +981,192 @@ void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
 
     snrt_ssr_disable();
 }
+
+
+void __gemm_fp32_complete_ta(const uint32_t M, const uint32_t N, const uint32_t K,
+                   float* A, const uint32_t ldA, float* B, const uint32_t ldB,
+                   float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
+                   const uint32_t setup_SSR) {
+    // Unrolling factor of most inner loop.
+    // Should be at least as high as the FMA delay
+    // for maximum utilization
+    const uint32_t unroll = 8;
+    const float alp = *ALPHA;
+    const float bet = *BETA / alp;
+    const uint32_t zero_beta = bet == 0.0;
+    const uint32_t one_beta = bet == 1.0;
+
+    register float ZERO = 0.0;
+    // SSR strides and bounds only have to be configured
+    // once in the beginning
+    if (setup_SSR) {
+            const uint32_t ssr0_b[4] = {unroll/2, K, N / unroll, M};
+            const uint32_t ssr0_i[4] = {0, 4 * ldA, 0, 8 * 8};
+
+            snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                             ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+            snrt_ssr_repeat(SNRT_SSR_DM0, 2);
+
+            const uint32_t ssr1_b[4] = {unroll/2, K, N / unroll, M};
+            const uint32_t ssr1_i[4] = {8, 4 * ldB, 4 * unroll, 0}; //maybe 4*unroll
+
+            snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                             ssr1_i[3]);
+            snrt_ssr_repeat(SNRT_SSR_DM1, 2);
+
+    }
+
+    // SSR start address need to be configured each time
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, A);
+    snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, B);
+
+    const uint32_t n_frep = K - 1;
+
+    for (uint32_t m = 0; m < M; m++) {
+        uint32_t n = 0;
+        for (uint32_t n0 = 0; n0 < N / unroll; n0++) {
+            float* _C = &C[m * ldC * 2 + n / 2];
+            const register float zero = 0.0;
+
+            snrt_ssr_enable();
+            asm volatile(
+
+                //load first values of A and de-couple them
+                "vfcpka.s.s ft10, ft0, ft0 \n"// a reg with the first two value repeated twice 
+                "vfcpka.s.s ft11, %[zero], %[zero] \n"
+                "vfsum.s ft11, ft0 \n"
+                "vfsub.r.s ft11, ft10, ft11 \n"
+
+
+                "beqz %[zero_beta], 1f\n"               
+                "vfmul.s ft3, ft10, ft1 \n"
+                "vfmul.s ft4, ft11, ft1 \n"
+                "vfmul.s ft5, ft10, ft1 \n"
+                "vfmul.s ft6, ft11, ft1 \n"
+                "vfmul.s ft7, ft10, ft1 \n"
+                "vfmul.s ft8, ft11, ft1 \n"
+                "vfmul.s ft9, ft10, ft1 \n"
+                "vfmul.s fa0, ft11, ft1 \n"
+                "j 2f\n"
+
+                "1:\n"
+                "fld ft3,  0(%[sum_addr_0]) \n"
+                "fld ft4,  0(%[sum_addr_1]) \n"
+                "fld ft5,  8(%[sum_addr_0]) \n"
+                "fld ft6,  8(%[sum_addr_1]) \n"
+                "fld ft7, 16(%[sum_addr_0]) \n"
+                "fld ft8, 16(%[sum_addr_1]) \n"
+                "fld ft9, 24(%[sum_addr_0]) \n"
+                "fld fa0, 24(%[sum_addr_1]) \n"
+
+                "vfmul.r.s ft3, ft3, %[beta] \n"
+                "vfmul.r.s ft4, ft4, %[neg_beta] \n"
+                "vfmul.r.s ft5, ft5, %[beta] \n"
+                "vfmul.r.s ft6, ft6, %[neg_beta] \n"
+                "vfmul.r.s ft7, ft7, %[beta] \n"
+                "vfmul.r.s ft8, ft8, %[neg_beta] \n"
+                "vfmul.r.s ft9, ft9, %[beta] \n"
+                "vfmul.r.s fa0, fa0, %[neg_beta] \n"
+                "vfmac.s ft3, ft10, ft1 \n"
+                "vfmac.s ft4, ft11, ft1 \n"
+                "vfmac.s ft5, ft10, ft1 \n"
+                "vfmac.s ft6, ft11, ft1 \n"
+                "vfmac.s ft7, ft10, ft1 \n"
+                "vfmac.s ft8, ft11, ft1 \n"
+                "vfmac.s ft9, ft10, ft1 \n"
+                "vfmac.s fa0, ft11, ft1 \n"
+                
+                "2:\n"                   
+                "frep.o %[n_frep], 12, 0, 0 \n"
+                "vfcpka.s.s ft10, ft0, ft0 \n"
+                "vfcpka.s.s ft11, %[zero], %[zero] \n"
+                "vfsum.s ft11, ft0 \n"
+                "vfsub.r.s ft11, ft10, ft11 \n"
+                
+                "vfmac.s ft3, ft10, ft1 \n"
+                "vfmac.s ft4, ft11, ft1 \n"
+                "vfmac.s ft5, ft10, ft1 \n"
+                "vfmac.s ft6, ft11, ft1 \n"
+                "vfmac.s ft7, ft10, ft1 \n"
+                "vfmac.s ft8, ft11, ft1 \n"
+                "vfmac.s ft9, ft10, ft1 \n"
+                "vfmac.s fa0, ft11, ft1 \n"
+                
+                "vfmul.r.s ft3, ft3, %[alpha] \n"
+                "vfmul.r.s ft4, ft4, %[neg_alpha] \n"
+                "vfmul.r.s ft5, ft5, %[alpha] \n"
+                "vfmul.r.s ft6, ft6, %[neg_alpha] \n"
+                "vfmul.r.s ft7, ft7, %[alpha] \n"
+                "vfmul.r.s ft8, ft8, %[neg_alpha] \n"
+                "vfmul.r.s ft9, ft9, %[alpha] \n"
+                "vfmul.r.s fa0, fa0, %[neg_alpha] \n"
+
+
+                "fsd ft3,  0(%[sum_addr_0]) \n"
+                "fsd ft5,  8(%[sum_addr_0]) \n"
+                "fsd ft7, 16(%[sum_addr_0]) \n"
+                "fsd ft9, 24(%[sum_addr_0]) \n"
+                "fsd ft4,  0(%[sum_addr_1]) \n"
+                "fsd ft6,  8(%[sum_addr_1]) \n"
+                "fsd ft8, 16(%[sum_addr_1]) \n"
+                "fsd fa0, 24(%[sum_addr_1]) \n"
+
+                : 
+                : [ sum_addr_0 ] "r"(_C),[ sum_addr_1 ] "r"(_C + ldA), [ zero ] "f"(zero), [ n_frep ] "r"(n_frep - 1),
+                  [ alpha ] "f"(alp), [ neg_alpha ] "f"(-alp), [ beta ] "f"(bet), [ neg_beta ] "f"(-bet), [ zero_beta ] "r"(zero_beta)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8", "ft9", "ft10", "ft11", "fa0");
+
+                snrt_ssr_disable();
+
+            // progress by 2 columns each iteration of the loop
+            n += unroll * 2;
+        }
+
+        // Clean up of leftover columns: TODO -> cleanup doesn't work with transposed matrices
+
+        for (; n < N; n++) {
+            float c;
+            if (!zero_beta) {
+                if (one_beta)
+                    c = C[m * ldC + n];
+                else
+                    c = C[m * ldC + n] * bet;
+            } else {
+                c = 0.0;
+            }
+            for (uint32_t k = 0; k < K; k++) {
+                c += A[k + m * ldA] * B[k + n * ldB];
+            }
+            C[m * ldC + n] = alp * c;
+        }
+
+        snrt_ssr_enable();
+    }
+
+    snrt_ssr_disable();
+
+
+}
+
+
+
+void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
+                   float* A, const uint32_t ldA, uint32_t ta, float* B, const uint32_t ldB, uint32_t tb,
+                   float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
+                   const uint32_t setup_SSR)
+{
+    if (!ta && tb)
+    {
+        __gemm_fp32_complete_tb (M, N, K, A, ldA, B, ldB, C, ldC, ALPHA, BETA, setup_SSR);
+    }
+    else if (ta && !tb)
+    {
+        __gemm_fp32_complete_ta (M, N, K, A, ldA, B, ldB, C, ldC, ALPHA, BETA, setup_SSR);
+    }
+}
+
+
 
 
 void gemm_fp16_opt(uint32_t M, uint32_t N, uint32_t K, __fp16* A, uint32_t ldA,
@@ -1566,10 +1753,18 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 //                    (double)beta);
                 break;
             case FP32:
-                gemm_fp32_complete(frac_m, n, k, (float*)a + offsetA,
-                    lda_strided,
-                    transa, (float*)b, ldb, transb, (float*)c +
-                    offsetC, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
+                /*FRAC M HAS TO BE MODIFIED because we compute 2 rows at the time*/
+                if (!transa && transb)
+                    gemm_fp32_complete(frac_m, n, k, (float*)a + offsetA,
+                        lda_strided,
+                        transa, (float*)b, ldb, transb, (float*)c +
+                        offsetC, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
+                else if (transa && !transb)
+                    gemm_fp32_complete(frac_m/2, n, k, (float*)a + offsetA*2,
+                        lda_strided,
+                        transa, (float*)b, ldb, transb, (float*)c +
+                        offsetC*2, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
+
                 // gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
                 //                    lda_strided, transa, (float*)b, ldb, transb,
                 //                    (float*)c + offsetC, ldc_strided,

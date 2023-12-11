@@ -1,13 +1,18 @@
 # Copyright 2023 ETH Zurich and University of Bologna.
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Luca Colagrande <colluca@iis.ee.ethz.ch>
+
 
 DIR = ../../../../../../sw/training/gradient/src
 
+
 APP     ?= gradient
 SRCS    ?= $(DIR)/main.c
-INCDIRS += $(DIR)/../data $(DIR)  
+INCDIRS += $(DIR)/../data $(DIR) 
+
 
 include ../../common.mk
+
+
+ 
+

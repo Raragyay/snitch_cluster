@@ -22,19 +22,10 @@ int main(int argc, char *argv[]) {
         #ifdef BASELINE 
             backpropagation_baseline_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K);
         #else
-        //backpropagation_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,1,1,1,1,1,dtype_size);
+        backpropagation_multicore(&alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,1,1,1,1,1,dtype_size);
         
-        backpropagation_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,M_tiles,N_tiles,K_tiles,1,1,dtype_size);
+       // backpropagation_multicore(alpha,A,B,GRAD_C,GRAD_A,GRAD_B,M,N,K,M_tiles,N_tiles,K_tiles,1,1,dtype_size);
         #endif
     #endif
 }   
 
-
-
-        // while(1){
-        //     asm volatile(
-        //     "add a0, a0, %[zero]\n"
-        //     :
-        //     :[ zero ] "r"(0)
-        //     : "a0");
-        // }

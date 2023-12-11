@@ -20,7 +20,7 @@ from data_utils import bytes_to_float, bytes_to_int  # noqa: E402
 
 
 ERR_THRESHOLD = 0.001
-PREC = '32'
+PREC = '64'
 
 NUMPY_TYPES = {
     '64': np.double,

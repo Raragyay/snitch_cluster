@@ -827,9 +827,22 @@ void __main_loop_fp32__(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_TYPE *
 
                             snrt_mcycle();
 
-                            __backpropagation_multicore_computation_grad_A_fp32__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
-                                                                        frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
-                
+                            switch (dtype_size)
+                            {
+                            case 8:
+                                    __backpropagation_multicore_computation_grad_A_fp64__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
+                                                                                    frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
+                                    break;
+                            
+                            case 4:
+                                     __backpropagation_multicore_computation_grad_A_fp32__(alpha,local_GRAD_C,local_B,local_GRAD_RES,
+                                                                                    frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
+
+                                    break;
+
+
+                            }
+                            
 
                             snrt_mcycle();
 

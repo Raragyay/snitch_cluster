@@ -1,0 +1,493 @@
+awk -v min=2900 -v max=30000000 '{if ($2>=min && $2 <=max && $3 == "M") print "core"substr(FILENAME, length(FILENAME)-4,1)$0}' logs/trace_hart_0000000*.txt | sort | sort -k 3,3
+core1       0     2900        M                                           #; (acc) t0  <-- 0
+core0       0     2901        M 0x800001dc fcvt.d.w ft9, zero             #; ac1  = 0
+core0       0     2901        M 0x800001e0 blt     t2, a6, pc + 456       #; t2  = 4, a6  = 1, not taken
+core1       0     2901        M 0x80000200 srli    t0, t0, 1              #; t0  = 0, (wrb) t0  <-- 0
+core3       0     2901        M                                           #; (acc) t0  <-- 0
+core0       0     2902        M                                           #; (f:fpu) ft9  <-- 0.0
+core1       0     2902        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core2       0     2902        M                                           #; (acc) t0  <-- 0
+core3       0     2902        M 0x80000200 srli    t0, t0, 1              #; t0  = 0, (wrb) t0  <-- 0
+core0       0     2903        M 0x800001e8 lw      a6, 4(sp)              #; sp  = 0x1001feb8, a6  <~~ Word[0x1001febc]
+core1       0     2903        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core2       0     2903        M 0x80000200 srli    t0, t0, 1              #; t0  = 0, (wrb) t0  <-- 0
+core3       0     2903        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core4       0     2903        M                                           #; (acc) t0  <-- 0
+core0       0     2904        M 0x800001e4 fsgnj.d ft2, ft9, ft9          #; ft9  = 0.0, ft9  = 0.0
+core1       0     2904        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core2       0     2904        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core3       0     2904        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core4       0     2904        M 0x80000200 srli    t0, t0, 1              #; t0  = 0, (wrb) t0  <-- 0
+core5       0     2904        M                                           #; (acc) t0  <-- 1
+core0       0     2905        M                                           #; (f:fpu) ft2  <-- 0.0
+core1       0     2905        M 0x80000210 sub     t1, t1, t3             #; t1  = 1, t3  = 0, (wrb) t1  <-- 1
+core2       0     2905        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core3       0     2905        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core4       0     2905        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core5       0     2905        M 0x80000200 srli    t0, t0, 1              #; t0  = 1, (wrb) t0  <-- 0
+core6       0     2905        M                                           #; (acc) t0  <-- 1
+core0       0     2906        M                                           #; (lsu) a6  <-- 1
+core1       0     2906        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core2       0     2906        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core3       0     2906        M 0x80000210 sub     t1, t1, t3             #; t1  = 3, t3  = 0, (wrb) t1  <-- 3
+core4       0     2906        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core5       0     2906        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core6       0     2906        M 0x80000200 srli    t0, t0, 1              #; t0  = 1, (wrb) t0  <-- 0
+core7       0     2906        M                                           #; (acc) t0  <-- 1
+core0       0     2907        M 0x800001ec lw      a7, 0(sp)              #; sp  = 0x1001feb8, a7  <~~ Word[0x1001feb8]
+core1       0     2907        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core2       0     2907        M 0x80000210 sub     t1, t1, t3             #; t1  = 2, t3  = 0, (wrb) t1  <-- 2
+core3       0     2907        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core4       0     2907        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core5       0     2907        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core6       0     2907        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core7       0     2907        M 0x80000200 srli    t0, t0, 1              #; t0  = 1, (wrb) t0  <-- 0
+core0       0     2908        M 0x800001f0 csrr    t1, mhartid            #; mhartid = 0, (wrb) t1  <-- 0
+core1       0     2908        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core2       0     2908        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core3       0     2908        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core4       0     2908        M 0x80000210 sub     t1, t1, t3             #; t1  = 4, t3  = 0, (wrb) t1  <-- 4
+core5       0     2908        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core6       0     2908        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core7       0     2908        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core0       0     2909        M 0x800001f4 lui     t0, 0x38e39            #; (wrb) t0  <-- 0x38e39000
+core2       0     2909        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core3       0     2909        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core4       0     2909        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core5       0     2909        M 0x80000210 sub     t1, t1, t3             #; t1  = 5, t3  = 0, (wrb) t1  <-- 5
+core6       0     2909        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core7       0     2909        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core0       0     2910        M 0x800001f8 addi    t0, t0, -455           #; t0  = 0x38e39000, (wrb) t0  <-- 0x38e38e39
+core2       0     2910        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core4       0     2910        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core5       0     2910        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core6       0     2910        M 0x80000210 sub     t1, t1, t3             #; t1  = 6, t3  = 0, (wrb) t1  <-- 6
+core7       0     2910        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core0       0     2911        M 0x800001fc mulhu   t0, t1, t0             #; t1  = 0, t0  = 0x38e38e39, (lsu) a7  <-- 1
+core1       0     2911        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core2       0     2911        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core3       0     2911        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core4       0     2911        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core5       0     2911        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core6       0     2911        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core7       0     2911        M 0x80000210 sub     t1, t1, t3             #; t1  = 7, t3  = 0, (wrb) t1  <-- 7
+core1       0     2912        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core2       0     2912        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core3       0     2912        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core4       0     2912        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core5       0     2912        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core6       0     2912        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core7       0     2912        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core1       0     2913        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core2       0     2913        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core3       0     2913        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core4       0     2913        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core5       0     2913        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core6       0     2913        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core7       0     2913        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core0       0     2914        M                                           #; (acc) t0  <-- 0
+core1       0     2914        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core2       0     2914        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core3       0     2914        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core4       0     2914        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core5       0     2914        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core6       0     2914        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core7       0     2914        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core0       0     2915        M 0x80000200 srli    t0, t0, 1              #; t0  = 0, (wrb) t0  <-- 0
+core1       0     2915        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core2       0     2915        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core3       0     2915        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core4       0     2915        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core5       0     2915        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core6       0     2915        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core7       0     2915        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core0       0     2916        M 0x80000204 slli    t3, t0, 3              #; t0  = 0, (wrb) t3  <-- 0
+core1       0     2916        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core2       0     2916        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core3       0     2916        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core4       0     2916        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core5       0     2916        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core6       0     2916        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core7       0     2916        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core0       0     2917        M 0x80000208 add     t3, t3, t0             #; t3  = 0, t0  = 0, (wrb) t3  <-- 0
+core1       0     2917        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core2       0     2917        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core3       0     2917        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core4       0     2917        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core5       0     2917        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core6       0     2917        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core7       0     2917        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core0       0     2918        M 0x8000020c srli    t0, a4, 3              #; a4  = 32, (wrb) t0  <-- 4
+core4       0     2918        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core5       0     2918        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core6       0     2918        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core7       0     2918        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core0       0     2919        M 0x80000210 sub     t1, t1, t3             #; t1  = 0, t3  = 0, (wrb) t1  <-- 0
+core5       0     2919        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core6       0     2919        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core7       0     2919        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core0       0     2920        M 0x80000214 beqz    t0, pc + 156           #; t0  = 4, not taken
+core1       0     2920        M                                           #; (acc) t3  <-- 7936
+core6       0     2920        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core7       0     2920        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core0       0     2921        M 0x80000218 slli    t3, a5, 3              #; a5  = 32, (wrb) t3  <-- 256
+core1       0     2921        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core3       0     2921        M                                           #; (acc) t3  <-- 7936
+core7       0     2921        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core0       0     2922        M 0x8000021c addi    t5, a3, -1             #; a3  = 32, (wrb) t5  <-- 31
+core2       0     2922        M                                           #; (acc) t3  <-- 7936
+core3       0     2922        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core0       0     2923        M 0x80000220 addi    t4, t0, -1             #; t0  = 4, (wrb) t4  <-- 3
+core1       0     2923        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core2       0     2923        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core3       0     2923        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core4       0     2923        M                                           #; (acc) t3  <-- 7936
+core0       0     2924        M 0x80000224 addi    t2, t2, -1             #; t2  = 4, (wrb) t2  <-- 3
+core1       0     2924        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core2       0     2924        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core3       0     2924        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core4       0     2924        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core5       0     2924        M                                           #; (acc) t3  <-- 7936
+core0       0     2925        M 0x80000228 scfgwi  t5, 64                 #; t5  = 31
+core1       0     2925        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core2       0     2925        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core3       0     2925        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core4       0     2925        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core5       0     2925        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core6       0     2925        M                                           #; (acc) t3  <-- 7936
+core0       0     2926        M 0x8000022c scfgwi  t4, 96                 #; t4  = 3
+core1       0     2926        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core2       0     2926        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core3       0     2926        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core4       0     2926        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core5       0     2926        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core6       0     2926        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core7       0     2926        M                                           #; (acc) t3  <-- 7936
+core0       0     2927        M 0x80000230 scfgwi  t2, 128                #; t2  = 3
+core1       0     2927        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core2       0     2927        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core3       0     2927        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core4       0     2927        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core5       0     2927        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core6       0     2927        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core7       0     2927        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core0       0     2928        M 0x80000234 scfgwi  t3, 192                #; t3  = 256
+core1       0     2928        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core2       0     2928        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core3       0     2928        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core4       0     2928        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core5       0     2928        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core6       0     2928        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core7       0     2928        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core0       0     2929        M 0x80000238 mul     t3, t3, t5             #; t3  = 256, t5  = 31
+core1       0     2929        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core2       0     2929        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core3       0     2929        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core4       0     2929        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core5       0     2929        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core6       0     2929        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core7       0     2929        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core1       0     2930        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core2       0     2930        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core3       0     2930        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core4       0     2930        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core5       0     2930        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core6       0     2930        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core7       0     2930        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core2       0     2931        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core4       0     2931        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core5       0     2931        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core6       0     2931        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core7       0     2931        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core0       0     2932        M                                           #; (acc) t3  <-- 7936
+core4       0     2932        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core5       0     2932        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core6       0     2932        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core7       0     2932        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core0       0     2933        M 0x8000023c sub     a3, zero, t3           #; t3  = 7936, (wrb) a3  <-- -7936
+core5       0     2933        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core6       0     2933        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core7       0     2933        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core0       0     2934        M 0x80000240 scfgwi  a3, 224                #; a3  = -7936
+core6       0     2934        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core7       0     2934        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core0       0     2935        M 0x80000244 li      a3, 64                 #; (wrb) a3  <-- 64
+core1       0     2935        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core2       0     2935        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core3       0     2935        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core4       0     2935        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core5       0     2935        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core6       0     2935        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core7       0     2935        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core0       0     2936        M 0x80000248 sub     a3, a3, t3             #; a3  = 64, t3  = 7936, (wrb) a3  <-- -7872
+core1       0     2936        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core2       0     2936        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core3       0     2936        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core4       0     2936        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core5       0     2936        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core6       0     2936        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core7       0     2936        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core0       0     2937        M 0x8000024c scfgwi  a3, 256                #; a3  = -7872
+core1       0     2937        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core2       0     2937        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core3       0     2937        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core4       0     2937        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core5       0     2937        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core6       0     2937        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core7       0     2937        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core0       0     2938        M 0x80000250 li      t3, 7                  #; (wrb) t3  <-- 7
+core1       0     2938        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core2       0     2938        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core3       0     2938        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core4       0     2938        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core5       0     2938        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core6       0     2938        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core7       0     2938        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core0       0     2939        M 0x80000254 scfgwi  t3, 32                 #; t3  = 7
+core1       0     2939        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core2       0     2939        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core3       0     2939        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core4       0     2939        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core5       0     2939        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core6       0     2939        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core7       0     2939        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core0       0     2940        M 0x80000258 slli    t6, a4, 3              #; a4  = 32, (wrb) t6  <-- 256
+core1       0     2940        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core2       0     2940        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core3       0     2940        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core4       0     2940        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core5       0     2940        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core6       0     2940        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core7       0     2940        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core0       0     2941        M 0x8000025c scfgwi  t3, 65                 #; t3  = 7
+core1       0     2941        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core2       0     2941        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core3       0     2941        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core4       0     2941        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core5       0     2941        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core6       0     2941        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core7       0     2941        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core0       0     2942        M 0x80000260 scfgwi  t5, 97                 #; t5  = 31
+core1       0     2942        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core2       0     2942        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core3       0     2942        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core4       0     2942        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core5       0     2942        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core6       0     2942        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core7       0     2942        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core0       0     2943        M 0x80000264 scfgwi  t4, 129                #; t4  = 3
+core7       0     2943        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core0       0     2944        M 0x80000268 scfgwi  t2, 161                #; t2  = 3
+core0       0     2945        M 0x8000026c li      t2, 8                  #; (wrb) t2  <-- 8
+core1       0     2945        M                                           #; (acc) t3  <-- 7936
+core0       0     2946        M 0x80000270 scfgwi  t2, 193                #; t2  = 8
+core3       0     2946        M                                           #; (acc) t3  <-- 7936
+core0       0     2947        M 0x80000274 addi    a3, t6, -56            #; t6  = 256, (wrb) a3  <-- 200
+core1       0     2947        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core2       0     2947        M                                           #; (acc) t3  <-- 7936
+core3       0     2947        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core0       0     2948        M 0x80000278 scfgwi  a3, 225                #; a3  = 200
+core1       0     2948        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core2       0     2948        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core3       0     2948        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core4       0     2948        M                                           #; (acc) t3  <-- 7936
+core0       0     2949        M 0x8000027c mul     t3, t6, t5             #; t6  = 256, t5  = 31
+core1       0     2949        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core2       0     2949        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core3       0     2949        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core4       0     2949        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core5       0     2949        M                                           #; (acc) t3  <-- 7936
+core1       0     2950        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core2       0     2950        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core3       0     2950        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core4       0     2950        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core5       0     2950        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core6       0     2950        M                                           #; (acc) t3  <-- 7936
+core1       0     2951        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core2       0     2951        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core3       0     2951        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core4       0     2951        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core5       0     2951        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core6       0     2951        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core7       0     2951        M                                           #; (acc) t3  <-- 7936
+core0       0     2952        M                                           #; (acc) t3  <-- 7936
+core1       0     2952        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core2       0     2952        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core3       0     2952        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core4       0     2952        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core5       0     2952        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core6       0     2952        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core7       0     2952        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core0       0     2953        M 0x80000280 sub     a3, t2, t3             #; t2  = 8, t3  = 7936, (wrb) a3  <-- -7928
+core1       0     2953        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core2       0     2953        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core3       0     2953        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core4       0     2953        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core5       0     2953        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core6       0     2953        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core7       0     2953        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core0       0     2954        M 0x80000284 scfgwi  a3, 257                #; a3  = -7928
+core1       0     2954        M 0x8000029c slli    a3, t1, 3              #; t1  = 1, (wrb) a3  <-- 8
+core2       0     2954        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core3       0     2954        M 0x8000029c slli    a3, t1, 3              #; t1  = 3, (wrb) a3  <-- 24
+core4       0     2954        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core5       0     2954        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core6       0     2954        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core7       0     2954        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core0       0     2955        M 0x80000288 slli    a3, t4, 6              #; t4  = 3, (wrb) a3  <-- 192
+core2       0     2955        M 0x8000029c slli    a3, t1, 3              #; t1  = 2, (wrb) a3  <-- 16
+core4       0     2955        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core5       0     2955        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core6       0     2955        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core7       0     2955        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core0       0     2956        M 0x8000028c add     t2, a3, t3             #; a3  = 192, t3  = 7936, (wrb) t2  <-- 8128
+core4       0     2956        M 0x8000029c slli    a3, t1, 3              #; t1  = 4, (wrb) a3  <-- 32
+core5       0     2956        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core6       0     2956        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core7       0     2956        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core0       0     2957        M 0x80000290 li      a3, -56                #; (wrb) a3  <-- -56
+core5       0     2957        M 0x8000029c slli    a3, t1, 3              #; t1  = 5, (wrb) a3  <-- 40
+core6       0     2957        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core7       0     2957        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core0       0     2958        M 0x80000294 sub     a3, a3, t2             #; a3  = -56, t2  = 8128, (wrb) a3  <-- -8184
+core6       0     2958        M 0x8000029c slli    a3, t1, 3              #; t1  = 6, (wrb) a3  <-- 48
+core7       0     2958        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core0       0     2959        M 0x80000298 scfgwi  a3, 289                #; a3  = -8184
+core1       0     2959        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 8, (wrb) a0  <-- 0x10000008
+core2       0     2959        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 16, (wrb) a0  <-- 0x10000010
+core3       0     2959        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 24, (wrb) a0  <-- 0x10000018
+core4       0     2959        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 32, (wrb) a0  <-- 0x10000020
+core5       0     2959        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 40, (wrb) a0  <-- 0x10000028
+core6       0     2959        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 48, (wrb) a0  <-- 0x10000030
+core7       0     2959        M 0x8000029c slli    a3, t1, 3              #; t1  = 7, (wrb) a3  <-- 56
+core0       0     2960        M 0x8000029c slli    a3, t1, 3              #; t1  = 0, (wrb) a3  <-- 0
+core1       0     2960        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000008
+core2       0     2960        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000010
+core3       0     2960        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000018
+core4       0     2960        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000020
+core5       0     2960        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000028
+core6       0     2960        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000030
+core7       0     2960        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 56, (wrb) a0  <-- 0x10000038
+core0       0     2961        M 0x800002a0 add     a0, a0, a3             #; a0  = 0x10000000, a3  = 0, (wrb) a0  <-- 0x10000000
+core1       0     2961        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core2       0     2961        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core3       0     2961        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core4       0     2961        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core5       0     2961        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core6       0     2961        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core7       0     2961        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000038
+core0       0     2962        M 0x800002a4 scfgwi  a0, 864                #; a0  = 0x10000000
+core1       0     2962        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core2       0     2962        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core3       0     2962        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core4       0     2962        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core5       0     2962        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core6       0     2962        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core7       0     2962        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core0       0     2963        M 0x800002a8 scfgwi  a1, 865                #; a1  = 0x10004000
+core1       0     2963        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2962, (wrb) a0  <-- 2962
+core2       0     2963        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2962, (wrb) a0  <-- 2962
+core3       0     2963        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2962, (wrb) a0  <-- 2962
+core4       0     2963        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2962, (wrb) a0  <-- 2962
+core5       0     2963        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2962, (wrb) a0  <-- 2962
+core6       0     2963        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2962, (wrb) a0  <-- 2962
+core7       0     2963        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core0       0     2964        M 0x800002ac j       pc + 0x8               #; goto 0x800002b4
+core1       0     2964        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 1
+core2       0     2964        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 2
+core3       0     2964        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 3
+core4       0     2964        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 4
+core5       0     2964        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 5
+core6       0     2964        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 6
+core7       0     2964        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2963, (wrb) a0  <-- 2963
+core0       0     2965        M 0x800002b4 csrr    a0, mcycle             #; mcycle = 2964, (wrb) a0  <-- 2964
+core7       0     2965        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 7
+core0       0     2966        M 0x800002b8 mul     a0, a4, t1             #; a4  = 32, t1  = 0
+core1       0     2967        M                                           #; (acc) a0  <-- 32
+core1       0     2968        M 0x800002bc slli    a0, a0, 3              #; a0  = 32, (wrb) a0  <-- 256
+core3       0     2968        M                                           #; (acc) a0  <-- 96
+core2       0     2969        M                                           #; (acc) a0  <-- 64
+core3       0     2969        M 0x800002bc slli    a0, a0, 3              #; a0  = 96, (wrb) a0  <-- 768
+core2       0     2970        M 0x800002bc slli    a0, a0, 3              #; a0  = 64, (wrb) a0  <-- 512
+core4       0     2970        M                                           #; (acc) a0  <-- 128
+core4       0     2971        M 0x800002bc slli    a0, a0, 3              #; a0  = 128, (wrb) a0  <-- 1024
+core5       0     2971        M                                           #; (acc) a0  <-- 160
+core5       0     2972        M 0x800002bc slli    a0, a0, 3              #; a0  = 160, (wrb) a0  <-- 1280
+core6       0     2972        M                                           #; (acc) a0  <-- 192
+core6       0     2973        M 0x800002bc slli    a0, a0, 3              #; a0  = 192, (wrb) a0  <-- 1536
+core7       0     2973        M                                           #; (acc) a0  <-- 224
+core0       0     2974        M                                           #; (acc) a0  <-- 0
+core7       0     2974        M 0x800002bc slli    a0, a0, 3              #; a0  = 224, (wrb) a0  <-- 1792
+core0       0     2975        M 0x800002bc slli    a0, a0, 3              #; a0  = 0, (wrb) a0  <-- 0
+core1       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 256, (wrb) a0  <-- 0x10002100
+core2       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 512, (wrb) a0  <-- 0x10002200
+core3       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 768, (wrb) a0  <-- 0x10002300
+core4       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 1024, (wrb) a0  <-- 0x10002400
+core5       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 1280, (wrb) a0  <-- 0x10002500
+core6       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 1536, (wrb) a0  <-- 0x10002600
+core7       0     2975        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 1792, (wrb) a0  <-- 0x10002700
+core0       0     2976        M 0x800002c0 add     a0, a2, a0             #; a2  = 0x10002000, a0  = 0, (wrb) a0  <-- 0x10002000
+core1       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core2       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core3       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core4       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core5       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core6       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core7       0     2976        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core0       0     2977        M 0x800002c4 slli    a1, a4, 6              #; a4  = 32, (wrb) a1  <-- 2048
+core1       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core2       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core3       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core4       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core5       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core6       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core7       0     2977        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core0       0     2978        M 0x800002c8 li      a2, 0                  #; (wrb) a2  <-- 0
+core1       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core1       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002100, (wrb) a4  <-- 0x10002100
+core2       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core2       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002200, (wrb) a4  <-- 0x10002200
+core3       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core3       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002300, (wrb) a4  <-- 0x10002300
+core4       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core4       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002400, (wrb) a4  <-- 0x10002400
+core5       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core5       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002500, (wrb) a4  <-- 0x10002500
+core6       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core6       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002600, (wrb) a4  <-- 0x10002600
+core7       0     2979        M 0x800002cc csrsi   ssr, 1                 #; 
+core7       0     2979        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002700, (wrb) a4  <-- 0x10002700
+core0       0     2980        M 0x800002cc csrsi   ssr, 1                 #; 
+core0       0     2980        M 0x800002d0 mv      a4, a0                 #; a0  = 0x10002000, (wrb) a4  <-- 0x10002000
+core1       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core2       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core3       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core4       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core5       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core6       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core7       0     2981        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core0       0     2982        M 0x800002d8 beqz    a6, pc + 40            #; a6  = 1, not taken
+core0       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core1       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core2       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core3       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core4       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core5       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core6       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core7       0     2994        M 0x800002fc j       pc + 0x24              #; goto 0x80000320
+core0       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core1       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core2       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core3       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core4       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core5       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core6       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core7       0     3000        M 0x80000320 frep    32, 8                  #; outer, 256 issues
+core0       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core1       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core2       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core3       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core4       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core5       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core6       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken
+core7       0     3012        M 0x80000344 beqz    a7, pc + 36            #; a7  = 1, not taken

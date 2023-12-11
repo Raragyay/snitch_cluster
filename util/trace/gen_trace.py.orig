@@ -312,7 +312,7 @@ PRIV_LVL = {'3': 'M', '1': 'S', '0': 'U'}
 # -------------------- FPU helpers  --------------------
 
 
-def flt_oper(extras: dict, port: int, insn_is_vectorized: bool = False) -> (str, str):
+def flt_oper(extras: dict, port: int) -> (str, str):
     op_sel = extras['op_sel_{}'.format(port)]
     oper_type = FPU_OPER_TYPES[op_sel]
     if oper_type == 'acc':
@@ -321,11 +321,10 @@ def flt_oper(extras: dict, port: int, insn_is_vectorized: bool = False) -> (str,
     elif oper_type == 'NONE':
         return oper_type, None
     else:
-        # print("doing an flt_oper", file=sys.stderr)
         fmt = LS_TO_FLOAT[
             extras['ls_size']] if extras['is_store'] else extras['src_fmt']
         return REG_ABI_NAMES_F[extras[oper_type]], flt_lit(
-            extras['op_{}'.format(port)], fmt, op_is_vectorized=insn_is_vectorized)
+            extras['op_{}'.format(port)], fmt)
 
 
 def flt_decode(val: int, fmt: int) -> float:
@@ -333,7 +332,6 @@ def flt_decode(val: int, fmt: int) -> float:
     w_exp, w_mnt = FLOAT_FMTS[fmt]
     width = 1 + w_exp + w_mnt
     bitstr = '{:064b}'.format(val)[-width:]
-    # print("bitstr", bitstr, fmt, width,file=sys.stderr)
     # print(bitstr)
     # Read bit vector slices
     sgn = -1.0 if bitstr[0] == '1' else 1.0
@@ -382,13 +380,8 @@ def int_lit(num: int, size: int = 2, force_hex: bool = False) -> str:
         return str(num_signed)
 
 
-def flt_lit(num: int, fmt: int, width: int = 7, op_is_vectorized: bool = False) -> str:
-    if not op_is_vectorized: 
-        return flt_fmt(flt_decode(num, fmt), width)
-    else:
-        w_exp, w_mnt = FLOAT_FMTS[fmt]
-        flt_width = 1 + w_exp + w_mnt
-        return f"[{', '.join([flt_fmt(flt_decode(num >> shift, fmt), width) for shift in range(0, 64, flt_width)])}]"
+def flt_lit(num: int, fmt: int, width: int = 7) -> str:
+    return flt_fmt(flt_decode(num, fmt), width)
 
 
 # -------------------- DMA --------------------
@@ -409,8 +402,10 @@ def update_dma(insn, extras, dma_trans):
         if mnemonic in ['dmsrc', 'dmdst', 'dmstr']:
             pass
         elif mnemonic == 'dmrep':
+            print(f'DMREP {extras["opa"]}')
             dma_trans[-1]['rep'] = extras['opa']
         elif mnemonic in ['dmcpy', 'dmcpyi']:
+            print(f'DMCPY {extras["opa"]}')
             dma_trans[-1]['size'] = extras['opa']
             # Create new placeholder transaction
             dma_trans.append(dma_trans[-1].copy())
@@ -480,7 +475,7 @@ def eval_dma_metrics(dma_trans, dma_trace):
             prev_trans_end = curr_trans_end
             # Calculate total number of bytes
             n_bytes += transfer['bytes']
-        print(json.dumps(compl_transfers, indent=4))
+        print(compl_transfers)
         print(n_bytes / active_cycles)
 
 
@@ -662,8 +657,6 @@ def annotate_fpu(
         # Everything FPU does may have been issued in a previous section
         curr_sec: int = -1,
         force_hex_addr: bool = True,
-        insn_is_pipelined = True,
-        insn_is_vectorized = False,
         permissive: bool = False) -> str:
     ret = []
     # On issuing of instruction
@@ -671,11 +664,11 @@ def annotate_fpu(
         # If computation initiated: remember FPU destination format
         if extras['use_fpu'] and not extras['fpu_in_acc']:
             fpr_wb_info[extras['fpu_in_rd']].appendleft(
-                (extras['dst_fmt'], cycle, insn_is_vectorized))
+                (extras['dst_fmt'], cycle))
         # Operands: omit on store
         if not extras['is_store']:
             for i_op in range(3):
-                oper_name, val = flt_oper(extras, i_op, insn_is_vectorized=insn_is_vectorized)
+                oper_name, val = flt_oper(extras, i_op)
                 if oper_name != 'NONE':
                     ret.append('{:<4} = {}'.format(oper_name, val))
         # Load / Store requests
@@ -684,29 +677,28 @@ def annotate_fpu(
             if extras['is_load']:
                 perf_metrics[curr_sec]['fpss_loads'] += 1
                 # Load initiated: remember LSU destination format
-                fpr_wb_info[extras['rd']].appendleft((LS_TO_FLOAT[s], cycle, False)) # todo: art is this always false?
+                fpr_wb_info[extras['rd']].appendleft((LS_TO_FLOAT[s], cycle))
                 ret.append('{:<4} <~~ {}[{}]'.format(
                     REG_ABI_NAMES_F[extras['rd']], LS_SIZES[s],
                     int_lit(extras['lsu_qaddr'], force_hex=force_hex_addr)))
             if extras['is_store']:
                 perf_metrics[curr_sec]['fpss_stores'] += 1
-                _, val = flt_oper(extras, 1, insn_is_vectorized=insn_is_vectorized)
+                _, val = flt_oper(extras, 1)
                 ret.append('{} ~~> {}[{}]'.format(
                     val, LS_SIZES[s],
                     int_lit(extras['lsu_qaddr'], force_hex=force_hex_addr)))
     # On FLOP completion
     if extras['fpu_out_hs']:
-        perf_metrics[-1]['fpss_fpu_issues'] += 1 if insn_is_pipelined else 20
+        perf_metrics[-1]['fpss_fpu_issues'] += 1
     # Register writeback
     if extras['fpr_we']:
         writer = 'acc' if extras['acc_q_hs'] and extras['acc_wb_ready'] else (
             'fpu'
             if extras['fpu_out_hs'] and not extras['fpu_out_acc'] else 'lsu')
         fmt = 0  # accelerator bus format is 0 for regular float32
-        wb_insn_is_vectorized = False
         if writer == 'fpu' or writer == 'lsu':
             try:
-                fmt, start_time, wb_insn_is_vectorized = fpr_wb_info[extras['fpr_waddr']].pop()
+                fmt, start_time = fpr_wb_info[extras['fpr_waddr']].pop()
                 if writer == 'lsu':
                     perf_metrics[curr_sec][
                         'fpss_load_latency'] += cycle - start_time
@@ -723,7 +715,7 @@ def annotate_fpu(
                     sys.exit(1)
         ret.append('(f:{}) {:<4} <-- {}'.format(
             writer, REG_ABI_NAMES_F[extras['fpr_waddr']],
-            flt_lit(extras['fpr_wdata'], fmt, op_is_vectorized=wb_insn_is_vectorized)))
+            flt_lit(extras['fpr_wdata'], fmt)))
     return ', '.join(ret)
 
 
@@ -764,8 +756,6 @@ def annotate_insn(
             annot = annotate_snitch(extras, time_info[0], time_info[1],
                                     int(pc_str, 16), gpr_wb_info, perf_metrics,
                                     annot_fseq_offl, force_hex_addr, permissive)
-            if "unknown_7c2" in insn and fseq_info['curr_cfg'] is not None:
-                annot+="; in frep"
             if extras['fpu_offload']:
                 perf_metrics[-1]['snitch_fseq_offloads'] += 1
                 fseq_info['fpss_pcs'].appendleft(
@@ -794,8 +784,6 @@ def annotate_insn(
         # Annotate FPSS
         elif extras['source'] == TRACE_SRCES['fpu']:
             annot_list = []
-            insn_is_pipelined = all(non_pipelined_instr not in insn for non_pipelined_instr in ("fdiv", "fsqrt"))
-            insn_is_vectorized = insn.startswith('v')
             if not extras['acc_q_hs']:
                 insn, pc_str = ('', '')
             else:
@@ -804,14 +792,14 @@ def annotate_insn(
                 fseq_info['curr_sec'] = curr_sec
                 perf_metrics[curr_sec]['end_fpss'] = time_info[
                     1]  # Record cycle in case this was last insn in section
-                perf_metrics[curr_sec]['fpss_issues'] += 1 if insn_is_pipelined else 20
+                perf_metrics[curr_sec]['fpss_issues'] += 1
                 if fseq_annot is not None:
                     annot_list.append('[{} {}:{}]'.format(
                         fseq_pc_str[-4:], *fseq_annot))
             annot_list.append(
                 annotate_fpu(extras, time_info[1], fpr_wb_info, perf_metrics,
-                             fseq_info['curr_sec'], force_hex_addr, insn_is_pipelined,
-                             insn_is_vectorized, permissive))
+                             fseq_info['curr_sec'], force_hex_addr,
+                             permissive))
             annot = ', '.join(annot_list)
         else:
             raise ValueError('Unknown trace source: {}'.format(
@@ -975,7 +963,7 @@ def main():
         for line in line_iter:
             if line:
                 ann_insn, time_info, empty = annotate_insn(
-                    line, gpr_wb_info, fpr_wb_info, fseq_info, perf_metrics, True,
+                    line, gpr_wb_info, fpr_wb_info, fseq_info, perf_metrics, False,
                     time_info, args.offl, not args.saddr, args.permissive, dma_trans)
                 if perf_metrics[0]['start'] is None:
                     perf_metrics[0]['tstart'] = time_info[0] / 1000

@@ -73,9 +73,9 @@ def read_existing_results():
     return results_df
 
 def main():
-    i=20
-    while i <= 64:
-        i += 2
+    i=28
+    while i < 64:
+        i += 4
         try:
             print(f"Running for {i}")
             base_config["M"] = i
@@ -122,7 +122,7 @@ def main():
                         cwd=target_snitch_cluster_path,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=180            
+                        timeout=600            
                     )
             p1.check_returncode()
 

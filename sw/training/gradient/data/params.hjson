@@ -1,6 +1,9 @@
 {
-    M: 36
-    N: 36
-    K: 36
+    M: 32
+    N: 32
+    K: 32
+    M_tiles: 2
+    N_tiles: 2
+    K_tiles: 2
     prec: 64
 }

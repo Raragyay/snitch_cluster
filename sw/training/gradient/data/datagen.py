@@ -68,16 +68,16 @@ def emit_header(**kwargs):
     data_str += [format_scalar_definition('uint32_t', 'M', kwargs['M'])]
     data_str += [format_scalar_definition('uint32_t', 'N', kwargs['N'])]
     data_str += [format_scalar_definition('uint32_t', 'K', kwargs['K'])]
-    divisors = [i for i in range(1, 9) if kwargs['M'] % i == 0]
-    M_tiles = random.choice(divisors)
-    divisors = [i for i in range(1, 9) if kwargs['N'] % i == 0]
-    N_tiles = random.choice(divisors)
-    divisors = [i for i in range(1, 9) if kwargs['K'] % i == 0]
-    K_tiles = random.choice(divisors)
+    # divisors = [i for i in range(1, 9) if kwargs['M'] % i == 0]
+    # M_tiles = random.choice(divisors)
+    # divisors = [i for i in range(1, 9) if kwargs['N'] % i == 0]
+    # N_tiles = random.choice(divisors)
+    # divisors = [i for i in range(1, 9) if kwargs['K'] % i == 0]
+    # K_tiles = random.choice(divisors)
 
-    data_str += [format_scalar_definition('uint32_t', 'M_tiles', M_tiles)]
-    data_str += [format_scalar_definition('uint32_t', 'N_tiles', N_tiles)]
-    data_str += [format_scalar_definition('uint32_t', 'K_tiles', K_tiles)]
+    data_str += [format_scalar_definition('uint32_t', 'M_tiles', kwargs['M_tiles'])]
+    data_str += [format_scalar_definition('uint32_t', 'N_tiles', kwargs['N_tiles'])]
+    data_str += [format_scalar_definition('uint32_t', 'K_tiles', kwargs['K_tiles'])]
 
     data_str += [format_scalar_definition('uint32_t', 'dtype_size', kwargs['prec'] // 8)]
 

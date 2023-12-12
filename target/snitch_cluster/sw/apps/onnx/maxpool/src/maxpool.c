@@ -13,6 +13,8 @@
 #define ENABLE_YES_INDICES 0
 #define ENABLE_NO_INDICES 0
 
+#define ENABLE_COMPREHENSIVE_TEST 0
+
 /*
 typedef struct maxpool_attributes_struct {
   int n_dim; // excludes batch size and # channels
@@ -35,6 +37,26 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 
 int main() {
 
+  compute_output_shape(&attr1, attr1.output_shape);
+  maxpool_f64_1d_no_index(&attr1,
+                ifmap1,
+                output_loc1);
+  
+  // compute_output_shape(&attr2, attr2.output_shape);
+  // maxpool_f64_2d_no_index(&attr2,
+  //               ifmap2,
+  //               output_loc2);
+
+  // compute_output_shape(&attr3, attr3.output_shape);
+  // uint32_t a = snrt_mcycle();
+  // maxpool_f64_3d_no_index(&attr3,
+  //               ifmap3,
+  //               output_loc3);
+  // uint32_t b = snrt_mcycle();
+  // DUMP(b-a);
+
+
+  #if ENABLE_COMPREHENSIVE_TEST
   maxpool_attributes attr_1d = {
     .n_dim = 1,
     .input_shape = {8, 1, 8, -1, -1},
@@ -76,62 +98,40 @@ int main() {
 
   // Go until 4096 = 64x64 matrix elements
   // With 100kb cache, tiling starts at matrix_size = 2048
-  // for (int i = 0; i < 10; ++i) {
-  //   compute_output_shape(&attr_1d, attr_1d.output_shape);
-  //   compute_output_shape(&attr_2d, attr_2d.output_shape);
-  //   compute_output_shape(&attr_3d, attr_3d.output_shape);
+  for (int i = 0; i < 10; ++i) {
+    compute_output_shape(&attr_1d, attr_1d.output_shape);
+    compute_output_shape(&attr_2d, attr_2d.output_shape);
+    compute_output_shape(&attr_3d, attr_3d.output_shape);
 
-  //   snrt_mcycle();
+    uint32_t a1 = snrt_mcycle();
 
-  //   maxpool_f64_1d_no_index(&attr_1d,
-  //     ifmap,
-  //     output_loc);
+    maxpool_f64_1d_no_index(&attr_1d,
+      ifmap,
+      output_loc);
 
-  //   snrt_mcycle();
+    uint32_t b1 = snrt_mcycle();
+    DUMP(b1 - a1);
 
-  //   maxpool_f64_2d_no_index(&attr_2d,
-  //     ifmap,
-  //     output_loc);
+    maxpool_f64_2d_no_index(&attr_2d,
+      ifmap,
+      output_loc);
 
-  //   snrt_mcycle();
+    snrt_mcycle();
 
-  //   maxpool_f64_3d_no_index(&attr_3d,
-  //     ifmap,
-  //     output_loc);
+    maxpool_f64_3d_no_index(&attr_3d,
+      ifmap,
+      output_loc);
 
-  //   snrt_mcycle();
+    snrt_mcycle();
 
-  //   attr_1d.input_shape[2] *= 2;
-  //   attr_2d.input_shape[2 + (i % 2)] *= 2;
-  //   attr_3d.input_shape[2 + (i % 3)] *= 2;
+    attr_1d.input_shape[2] *= 2;
+    attr_2d.input_shape[2 + (i % 2)] *= 2;
+    attr_3d.input_shape[2 + (i % 3)] *= 2;
 
-  //   matrix_size *= 2;
+    matrix_size *= 2;
 
-  // }
-
-  compute_output_shape(&attr1, attr1.output_shape);
-  maxpool_f64_1d_no_index(&attr1,
-      ifmap1,
-      output_loc1);
-
-  // compute_output_shape(&attr1, attr1.output_shape);
-  // maxpool_f64_1d_no_index(&attr1,
-  //               ifmap1,
-  //               output_loc1);
-  
-  // compute_output_shape(&attr2, attr2.output_shape);
-  // maxpool_f64_2d_no_index(&attr2,
-  //               ifmap2,
-  //               output_loc2);
-
-  // compute_output_shape(&attr3, attr3.output_shape);
-  // uint32_t a = snrt_mcycle();
-  // maxpool_f64_3d_no_index(&attr3,
-  //               ifmap3,
-  //               output_loc3);
-  // uint32_t b = snrt_mcycle();
-  // DUMP(b-a);
-
+  }
+  #endif
 
   #if ENABLE_NO_INDICES
 

@@ -43,7 +43,8 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id
     "strides": "iii"
   }
   attribs = bytes_to_struct(elf.get_symbol_contents(attribs_name), attr_map)
-  inputs = np.array(bytes_to_float(elf.get_symbol_contents(input_name), prec="64"))
+  # Truncate to correct size
+  inputs = np.array(bytes_to_float(elf.get_symbol_contents(input_name), prec="64"))[0:np.array(attribs["input_shape"]).prod()]
 
   n_dim = attribs["n_dim"]
   golden_model = None
@@ -63,6 +64,9 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id
     bool(attribs["ceil_mode"]))
   c_golden = c_golden.flatten().detach().cpu().numpy()
   i_golden = i_golden.flatten().detach().cpu().numpy()
+
+  c_actual = np.resize(c_actual, c_golden.shape) # In case excess memory was allocated for the array in C
+  i_actual = np.resize(i_actual, i_golden.shape)
 
   absolute_err = np.absolute(c_golden - c_actual)
   fail = np.any(absolute_err > ERR_THRESHOLD)

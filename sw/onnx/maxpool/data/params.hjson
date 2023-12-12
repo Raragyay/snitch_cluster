@@ -1,18 +1,18 @@
 {
     batches1: [8, 8]
     channels1: [1, 1]
-    batches2: [1, 1]
+    batches2: [8, 8]
     channels2: [1, 1]
     batches3: [1, 1]
     channels3: [1, 1]
     input_dim: {
-        height: [1024, 1024]
-        width: [1, 1]
+        height: [64, 64]
+        width: [64, 64]
         depth: [1, 1]
     }
     kernel_size: {
-        height: [32, 32]
-        width: [1, 1]
+        height: [16, 16]
+        width: [16, 16]
         depth: [1, 1]
     }
     pads: {
@@ -21,12 +21,12 @@
         depth: [0, 0]
     }
     strides: {
-        height: [32, 32]
-        width: [1, 1]
+        height: [16, 16]
+        width: [16, 16]
         depth: [1, 1]
     }
     dilations: {
-        height: [2, 2]
+        height: [1, 1]
         width: [1, 1]
         depth: [1, 1]
     }

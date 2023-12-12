@@ -6,10 +6,15 @@ import traceback
 import pandas as pd
 import time
 
+NAME_FILE = 'tiling_loop.csv'
+
 base_config = {
-    "M" : 8,
-    "N" : 8,
-    "K" : 8,
+    "M" : 64,
+    "N" : 64,
+    "K" : 64,
+    "M_tiles" : 2,
+    "N_tiles" : 2,
+    "K_tiles" : 2,
     "prec" : 64
 }
 
@@ -21,24 +26,12 @@ IMPL_TYPES = {
 }
 
 
-def format_size(C, H, W, tile_ci=None):
-    return {
-        "input_dim": {
-            "channels": C,
-            "height": H,
-            "width": W,
-        },
-        "tile_ci": C if tile_ci is None else tile_ci,
-    }
-
-
-
 base_path = Path(__file__).resolve()
 config_path = base_path.parent/ "data" / "params.hjson"
 target_snitch_cluster_path =  base_path.parent.parent.parent.parent / "target" / "snitch_cluster"
 gradient_res_path = target_snitch_cluster_path / "gradient_results.csv"
 logs_path = target_snitch_cluster_path / "logs" / "hart_00000000_perf.json"
-result_path = base_path.parent / "selected_stats.csv"
+result_path = base_path.parent / NAME_FILE
 
 columns = [
     "prec",
@@ -46,6 +39,9 @@ columns = [
     "M",
     "N",
     "K",
+    "M_tiles",
+    "N_tiles",
+    "K_tiles",
     "cycles_grad_B",
     "total_ipc_grad_B",
     "fpss_fpu_occupancy_grad_B",
@@ -73,14 +69,19 @@ def read_existing_results():
     return results_df
 
 def main():
-    i=28
-    while i < 64:
-        i += 4
+   # tiling = [[2,1,1],[1,2,1],[1,1,2]]
+   # iter = 0
+    i=0
+    while i < 1:
+        i += 1
         try:
             print(f"Running for {i}")
-            base_config["M"] = i
-            base_config["N"] = i  
-            base_config["K"] = i
+            # base_config["M"] = i
+            # base_config["N"] = i  
+            # base_config["K"] = i
+            # base_config["M_tiles"] = tiling[iter][0]
+            # base_config["N_tiles"] = tiling[iter][1]
+            # base_config["K_tiles"] = tiling[iter][2] 
 
             with open(config_path, "w") as f:
                 hjson.dump(base_config, f, indent=4, ensure_ascii=False)
@@ -103,7 +104,8 @@ def main():
 
             p1 = subprocess.run(
                         f"""
-                            make DEBUG=on sw \
+                            make clean-work\
+                            && make DEBUG=on sw \
                         """,
                         shell=True,
                         cwd=target_snitch_cluster_path,
@@ -122,7 +124,7 @@ def main():
                         cwd=target_snitch_cluster_path,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        timeout=600            
+                        timeout=3600            
                     )
             p1.check_returncode()
 
@@ -142,11 +144,14 @@ def main():
             with open(logs_path, "r") as f:
                 data = hjson.load(f)
             selected_stats = {
-                "prec": 64,
+                "prec": base_config["prec"],
                 "impl": "MULTICORE_OPT",
-                "M": i,
-                "N": i,
-                "K": i,
+                "M": base_config["M"],
+                "N": base_config["N"],
+                "K": base_config["K"],
+                "M_tiles": base_config["M_tiles"],
+                "N_tiles": base_config["N_tiles"],
+                "K_tiles": base_config["K_tiles"],
                 "cycles_grad_B": data[1]["cycles"],
                 "total_ipc_grad_B": data[1]["total_ipc"],
                 "fpss_fpu_occupancy_grad_B": data[1]["fpss_fpu_occupancy"],
@@ -163,6 +168,7 @@ def main():
             write_results(selected_stats,selected_stats_df)
         except:
             print("Failed for ", i) 
+        #iter +=1
 
         
 

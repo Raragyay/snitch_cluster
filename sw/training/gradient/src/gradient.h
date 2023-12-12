@@ -445,7 +445,6 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
     uint32_t frac_M = M / M_tiles;
     uint32_t frac_N = N / N_tiles;
     uint32_t frac_K = K / K_tiles;
-
     const uint32_t compute_num = snrt_cluster_compute_core_num();
     const uint32_t compute_id = snrt_cluster_core_idx();
     int32_t c,lb,ub;
@@ -460,6 +459,7 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
     
     snrt_cluster_hw_barrier();
 
+        int iter=0;
 
     if(compute_grad_b){
 
@@ -472,11 +472,11 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
         local_GRAD_RES = local_GRAD_C + size_GRAD_C;
 
         setup_SSR = 1;
-
+        snrt_mcycle();
         for(k=0;k<K_tiles;k++){   
             for(n=0;n<N_tiles;n++){
                 for(m=0;m<M_tiles;m++){
-
+                    if(compute_id==0) printf("iter: %d\n",iter++);
                     if(snrt_is_dm_core()){
                         snrt_dma_load_2d_tile(local_A,A,m,k,frac_M,frac_K,K, 8);
                         snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N, 8);
@@ -504,10 +504,9 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
                             :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
                             :[m] "r"(m),[M_tiles_m_1] "r"(M_tiles-1)
                         :);
-                        snrt_mcycle();
                         __backpropagation_multicore_computation_grad_B_fp64__(alpha_ptr,local_A,local_GRAD_C,local_GRAD_RES,
                                                         frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                                  
-                        snrt_mcycle();
+
                         //C code
                         //if(setup_SSR==1) setup_SSR=0;
                         asm volatile(
@@ -531,6 +530,8 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
                 snrt_cluster_hw_barrier();
             }
         }
+        snrt_mcycle();
+
     }
 
 
@@ -539,7 +540,7 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
     if(compute_grad_a){
 
         local_GRAD_C = (double *)snrt_l1_next();
-        local_B =(N%32!=0) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C + 1;//to make the access on different banks  
+        local_B =(N%32!=0) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C + 4;//to make the access on different banks  
         local_GRAD_RES = local_B + size_B;
 
         c = CEIL(frac_M, compute_num);
@@ -547,59 +548,59 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
         ub = MIN((c * (compute_id + 1)), frac_M);
         setup_SSR = 1;
 
+        snrt_mcycle();
         for(m=0;m<M_tiles;m++){
             for(k=0;k<K_tiles;k++){
                 for(n=0;n<N_tiles;n++){
+                    if(compute_id==0) printf("iter: %d\n",iter++);
 
-                        if(snrt_is_dm_core()){
+                    if(snrt_is_dm_core()){
 
-                            snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,8);
-                            snrt_dma_load_2d_tile(local_B,B,k,n,frac_K,frac_N,N,8);
-                            snrt_dma_wait_all();
+                        snrt_dma_load_2d_tile(local_GRAD_C,GRAD_C,m,n,frac_M,frac_N,N,8);
+                        snrt_dma_load_2d_tile(local_B,B,k,n,frac_K,frac_N,N,8);
+                        snrt_dma_wait_all();
 
-                        }
+                    }
 
-                        snrt_cluster_hw_barrier();
+                    snrt_cluster_hw_barrier();
+                    
+                    if(!snrt_is_dm_core()){
                         
-                        if(!snrt_is_dm_core()){
-                            
-                            //C code
-                            //mult_alpha = (n==N_tiles-1) ? 1 : 0;
-                            //initialize = (n==0) ? 1 : 0;
-                            asm volatile(
-                                "mv %[initialize], zero \n"
-                                "mv %[mult_alpha], zero \n"
+                        //C code
+                        //mult_alpha = (n==N_tiles-1) ? 1 : 0;
+                        //initialize = (n==0) ? 1 : 0;
+                        asm volatile(
+                            "mv %[initialize], zero \n"
+                            "mv %[mult_alpha], zero \n"
 
-                                "bnez %[n], 1f \n"
-                                "addi %[initialize], %[initialize], 1 \n"
+                            "bnez %[n], 1f \n"
+                            "addi %[initialize], %[initialize], 1 \n"
 
-                                "1:\n"
-                                "bne %[n], %[N_tiles_m_1], 2f \n"
-                                "addi %[mult_alpha], %[mult_alpha], 1 \n"
+                            "1:\n"
+                            "bne %[n], %[N_tiles_m_1], 2f \n"
+                            "addi %[mult_alpha], %[mult_alpha], 1 \n"
 
-                                "2:\n"
-                                :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
-                                :[n] "r"(n),[N_tiles_m_1] "r"(N_tiles-1)
-                            :);
+                            "2:\n"
+                            :[mult_alpha] "=r"(mult_alpha),[initialize] "=r"(initialize)
+                            :[n] "r"(n),[N_tiles_m_1] "r"(N_tiles-1)
+                        :);
 
-                            snrt_mcycle();
-                            __backpropagation_multicore_computation_grad_A_fp64__(alpha_ptr,local_GRAD_C,local_B,local_GRAD_RES,
-                                                                            frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                              
-                            snrt_mcycle();
-                            //C code
-                            //if(setup_SSR==1) setup_SSR=0;
-                            asm volatile(
-                                "beqz %[setup_SSR], 1f \n"
-                                "mv %[setup_SSR], zero \n"
-                                "1: \n"
-                            :[setup_SSR] "+r"(setup_SSR)
-                            :
-                            :);
+                        __backpropagation_multicore_computation_grad_A_fp64__(alpha_ptr,local_GRAD_C,local_B,local_GRAD_RES,
+                                                                        frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                              
+                        //C code
+                        //if(setup_SSR==1) setup_SSR=0;
+                        asm volatile(
+                            "beqz %[setup_SSR], 1f \n"
+                            "mv %[setup_SSR], zero \n"
+                            "1: \n"
+                        :[setup_SSR] "+r"(setup_SSR)
+                        :
+                        :);
 
-                        }
+                    }
 
-                        snrt_fpu_fence();
-                        snrt_cluster_hw_barrier();
+                    snrt_fpu_fence();
+                    snrt_cluster_hw_barrier();
                 }
 
                 if (snrt_is_dm_core()) {
@@ -612,6 +613,8 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
 
             }
         }
+        snrt_mcycle();
+
     }
 
 }
@@ -655,6 +658,10 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
             lb = c * compute_id;
             ub = MIN((c * (compute_id + 1)), frac_K);
         }
+        if((ub-lb)%2!=0){
+            lb = (lb%2==0)? lb :lb+1;
+            ub = (ub%2==0)? ub :ub+1;
+        }
 
         if(padding_N_req){
             size_GRAD_C = frac_M * (frac_N+1);
@@ -667,6 +674,7 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
 
         setup_SSR = 1;
 
+        snrt_mcycle();
         for(k=0;k<K_tiles;k++){   
             for(n=0;n<N_tiles;n++){
                 for(m=0;m<M_tiles;m++){
@@ -706,22 +714,19 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
                             :[m] "r"(m),[M_tiles_m_1] "r"(M_tiles-1)
                         :);
 
-                        snrt_mcycle();
-
-                        if(padding_K_req && padding_N_req)
+                        if(padding_K_req && padding_N_req){
                             __backpropagation_multicore_computation_grad_B_fp32__(alpha_ptr,local_A,local_GRAD_C,local_GRAD_RES,
                                                         frac_M,frac_N+1,frac_K+1,lb,ub,mult_alpha,initialize,setup_SSR);                           
-                        else if(padding_K_req)
+                        }else if(padding_K_req){
                             __backpropagation_multicore_computation_grad_B_fp32__(alpha_ptr,local_A,local_GRAD_C,local_GRAD_RES,
                                                         frac_M,frac_N,frac_K+1,lb,ub,mult_alpha,initialize,setup_SSR);
-                        else if(padding_N_req)
+                        }else if(padding_N_req){
                             __backpropagation_multicore_computation_grad_B_fp32__(alpha_ptr,local_A,local_GRAD_C,local_GRAD_RES,
                                                         frac_M,frac_N+1,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
-                        else
+                        }else{
                             __backpropagation_multicore_computation_grad_B_fp32__(alpha_ptr,local_A,local_GRAD_C,local_GRAD_RES,
                                                         frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);                                                       
-                        
-                        snrt_mcycle();
+                        }
 
                         //C code
                         //if(setup_SSR==1) setup_SSR=0;
@@ -750,6 +755,8 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
                 snrt_cluster_hw_barrier();
             }
         }
+        snrt_mcycle();
+
     }
 
     snrt_cluster_hw_barrier();
@@ -770,6 +777,7 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
         ub = MIN((c * (compute_id + 1)), frac_M);
         setup_SSR = 1;
 
+        snrt_mcycle();
         for(m=0;m<M_tiles;m++){
             for(k=0;k<K_tiles;k++){
                 for(n=0;n<N_tiles;n++){
@@ -814,15 +822,9 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
                                 :[n] "r"(n),[N_tiles_m_1] "r"(N_tiles-1)
                             :);
 
-
-                            snrt_mcycle();
-
                             __backpropagation_multicore_computation_grad_A_fp32__(alpha_ptr,local_GRAD_C,local_B,local_GRAD_RES,
                                                                         frac_M,frac_N,frac_K,lb,ub,mult_alpha,initialize,setup_SSR);
                 
-
-                            snrt_mcycle();
-
                             //C code
                             //if(setup_SSR==1) setup_SSR=0;
                             asm volatile(
@@ -849,6 +851,8 @@ void __main_loop_fp32__(float* alpha_ptr, float *A, float *B, float *GRAD_C,floa
 
             }
         }
+        snrt_mcycle();
+
     }
 
 }
@@ -1090,16 +1094,10 @@ void __backpropagation_multicore_computation_grad_A_fp64__(double* alpha_ptr, do
 void __backpropagation_multicore_computation_grad_B_fp32__(float* alpha_ptr, float *local_A, float *local_GRAD_C, float *local_GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR){
 
-    
-    //modify lb and upperbound. Every cycle of K iterates over 2 lines not one
-    float alpha= *alpha_ptr;
+        float alpha= *alpha_ptr;
     register float ZERO=0.0f;
     int32_t dim = ub-lb;
-    if(dim%2!=0){
-        lb = lb*2;
-        ub = MIN(ub*2,K);
-        dim = ub-lb;
-    }
+
     int32_t unroll=8;
     uint32_t i,index_addr;
     register uint32_t n;

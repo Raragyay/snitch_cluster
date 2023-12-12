@@ -6580,7 +6580,7 @@ int idx_loc3_2[240] = {0};
 
 maxpool_attributes attr1_3 = {
   .n_dim = 1,
-  .input_shape = {4, 10, 9, -1, -1},
+  .input_shape = {2, 2, 90, -1, -1},
   .output_shape = {0},
   .auto_pad = NOTSET,
   .ceil_mode = 0,
@@ -9242,16 +9242,16 @@ double ifmap3_3[1350] = {
 	-0.5829098608452269,
 };
 
-double output_loc1_3[120] = {0};
+double output_loc1_3[172] = {0};
 double output_loc2_3[90] = {0};
 double output_loc3_3[81] = {0};
-int idx_loc1_3[120] = {0};
+int idx_loc1_3[172] = {0};
 int idx_loc2_3[90] = {0};
 int idx_loc3_3[81] = {0};
 
 maxpool_attributes attr1_4 = {
   .n_dim = 1,
-  .input_shape = {3, 9, 9, -1, -1},
+  .input_shape = {1, 3, 81, -1, -1},
   .output_shape = {0},
   .auto_pad = NOTSET,
   .ceil_mode = 1,

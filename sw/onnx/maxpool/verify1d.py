@@ -17,7 +17,9 @@ from verify import verify
 
 def main():
   # Run simulation and get outputs
-  args = verification.parse_args()
+  parser = verification.get_parser()
+  parser.add_argument('--no-index', help='Do not check indexes.', action='store_true')
+  args = parser.parse_args()
   raw_results = verification.simulate(
     sim_bin=args.sim_bin,
     snitch_bin=args.snitch_bin,
@@ -32,7 +34,7 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  ret = verify("ifmap1", "attr1", ["output_loc1", "idx_loc1"], elf=elf, raw_results=raw_results, id=1)
+  ret = verify("ifmap1", "attr1", ["output_loc1", "idx_loc1"], elf=elf, raw_results=raw_results, id=1, no_index=args.no_index)
   if ret == 0:
     print("1D good")
 

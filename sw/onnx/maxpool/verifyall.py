@@ -17,7 +17,9 @@ from verify import verify
 
 def main():
   # Run simulation and get outputs
-  args = verification.parse_args()
+  parser = verification.get_parser()
+  parser.add_argument('--no-index', help='Do not check indexes.', action='store_true')
+  args = parser.parse_args()
   raw_results = verification.simulate(
     sim_bin=args.sim_bin,
     snitch_bin=args.snitch_bin,
@@ -37,41 +39,41 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  ret = verify("ifmap1_1", "attr1_1", ["output_loc1_1", "idx_loc1_1"], elf=elf, raw_results=raw_results, id="1_1")
+  ret = verify("ifmap1_1", "attr1_1", ["output_loc1_1", "idx_loc1_1"], elf=elf, raw_results=raw_results, id="1_1", no_index=args.no_index)
   if ret == 0:
     print("1D good 1")
 
-  ret = verify("ifmap2_1", "attr2_1", ["output_loc2_1", "idx_loc2_1"], elf=elf, raw_results=raw_results, id="2_1")
+  ret = verify("ifmap2_1", "attr2_1", ["output_loc2_1", "idx_loc2_1"], elf=elf, raw_results=raw_results, id="2_1", no_index=args.no_index)
   if ret == 0:
     print("2D good 1")
 
-  ret = verify("ifmap3_1", "attr3_1", ["output_loc3_1", "idx_loc3_1"], elf=elf, raw_results=raw_results, id="3_1")
+  ret = verify("ifmap3_1", "attr3_1", ["output_loc3_1", "idx_loc3_1"], elf=elf, raw_results=raw_results, id="3_1", no_index=args.no_index)
   if ret == 0:
     print("3D good 1")
 
 
-  ret = verify("ifmap1_2", "attr1_2", ["output_loc1_2", "idx_loc1_2"], elf=elf, raw_results=raw_results, id="1_2")
+  ret = verify("ifmap1_2", "attr1_2", ["output_loc1_2", "idx_loc1_2"], elf=elf, raw_results=raw_results, id="1_2", no_index=args.no_index)
   if ret == 0:
     print("1D good 2")
 
-  ret = verify("ifmap2_2", "attr2_2", ["output_loc2_2", "idx_loc2_2"], elf=elf, raw_results=raw_results, id="2_2")
+  ret = verify("ifmap2_2", "attr2_2", ["output_loc2_2", "idx_loc2_2"], elf=elf, raw_results=raw_results, id="2_2", no_index=args.no_index)
   if ret == 0:
     print("2D good 2")
 
-  ret = verify("ifmap3_2", "attr3_2", ["output_loc3_2", "idx_loc3_2"], elf=elf, raw_results=raw_results, id="3_2")
+  ret = verify("ifmap3_2", "attr3_2", ["output_loc3_2", "idx_loc3_2"], elf=elf, raw_results=raw_results, id="3_2", no_index=args.no_index)
   if ret == 0:
     print("3D good 2")
 
 
-  ret = verify("ifmap1_3", "attr1_3", ["output_loc1_3", "idx_loc1_3"], elf=elf, raw_results=raw_results, id="1_3")
+  ret = verify("ifmap1_3", "attr1_3", ["output_loc1_3", "idx_loc1_3"], elf=elf, raw_results=raw_results, id="1_3", no_index=args.no_index)
   if ret == 0:
     print("1D good 3")
 
-  ret = verify("ifmap2_3", "attr2_3", ["output_loc2_3", "idx_loc2_3"], elf=elf, raw_results=raw_results, id="2_3")
+  ret = verify("ifmap2_3", "attr2_3", ["output_loc2_3", "idx_loc2_3"], elf=elf, raw_results=raw_results, id="2_3", no_index=args.no_index)
   if ret == 0:
     print("2D good 3")
 
-  ret = verify("ifmap3_3", "attr3_3", ["output_loc3_3", "idx_loc3_3"], elf=elf, raw_results=raw_results, id="3_3")
+  ret = verify("ifmap3_3", "attr3_3", ["output_loc3_3", "idx_loc3_3"], elf=elf, raw_results=raw_results, id="3_3", no_index=args.no_index)
   if ret == 0:
     print("3D good 3")
 

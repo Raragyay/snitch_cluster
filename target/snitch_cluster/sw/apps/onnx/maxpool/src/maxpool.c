@@ -3,15 +3,15 @@
 
 // #include "benchmark_all.h"
 // #include "data1.h"
-// #include "data_all.h"
-#include "data.h"
+#include "data_all.h"
+// #include "data.h"
 
-#define ENABLE_1D 0
+#define ENABLE_1D 1
 #define ENABLE_2D 0
 #define ENABLE_3D 0
 
 #define ENABLE_YES_INDICES 0
-#define ENABLE_NO_INDICES 0
+#define ENABLE_NO_INDICES 1
 
 #define ENABLE_COMPREHENSIVE_TEST 0
 
@@ -37,10 +37,10 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 
 int main() {
 
-  compute_output_shape(&attr1, attr1.output_shape);
-  maxpool_f64_1d_no_index(&attr1,
-                ifmap1,
-                output_loc1);
+  // compute_output_shape(&attr1, attr1.output_shape);
+  // maxpool_f64_1d_no_index(&attr1,
+  //               ifmap1,
+  //               output_loc1);
   
   // compute_output_shape(&attr2, attr2.output_shape);
   // maxpool_f64_2d_no_index(&attr2,

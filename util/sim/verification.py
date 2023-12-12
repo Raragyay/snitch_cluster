@@ -36,6 +36,25 @@ def parse_args():
         help='Redirect simulation output to this log file')
     return parser.parse_args()
 
+def get_parser():
+    # Argument parsing
+    parser = argparse.ArgumentParser(allow_abbrev=True)
+    parser.add_argument(
+        'sim_bin',
+        help='The simulator binary to be used to start the simulation',
+    )
+    parser.add_argument(
+        'snitch_bin',
+        help='The Snitch binary to be executed by the simulated Snitch hardware')
+    parser.add_argument(
+        '--symbols-bin',
+        help='An optional binary containing the I/O symbols. By default, '
+             'these are searched for in snitch_bin. This argument serves as an '
+             'alternative.')
+    parser.add_argument(
+        '--log',
+        help='Redirect simulation output to this log file')
+    return parser
 
 def simulate(sim_bin, snitch_bin, log, output_uids, symbols_bin=None):
     # Open ELF file for processing

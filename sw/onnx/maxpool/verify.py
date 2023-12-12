@@ -27,7 +27,7 @@ ERR_THRESHOLD = 0.001
 # .storage_order = 0,
 # .strides = {2, -1, -1}
 
-def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id=0):
+def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id=0, no_index=False):
   c_actual = np.array(bytes_to_float(raw_results[output_name[0]], prec="64"))
   i_actual = np.array(bytes_to_int(raw_results[output_name[1]], prec="32"))
   attr_map = {
@@ -44,9 +44,12 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id
   }
   attribs = bytes_to_struct(elf.get_symbol_contents(attribs_name), attr_map)
   # Truncate to correct size
-  inputs = np.array(bytes_to_float(elf.get_symbol_contents(input_name), prec="64"))[0:np.array(attribs["input_shape"]).prod()]
-
   n_dim = attribs["n_dim"]
+  inputs = np.array(bytes_to_float(elf.get_symbol_contents(input_name), prec="64"))
+  if len(inputs) < np.array(attribs["input_shape"][0:n_dim + 2]).prod():
+    print("Warning: Actual input size is less than expected input size.")
+  inputs = inputs[0:np.array(attribs["input_shape"][0:n_dim + 2]).prod()]
+
   golden_model = None
   if n_dim == 1:
     golden_model = golden_model_1d
@@ -65,6 +68,10 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id
   c_golden = c_golden.flatten().detach().cpu().numpy()
   i_golden = i_golden.flatten().detach().cpu().numpy()
 
+  if len(c_actual) < len(c_golden):
+    print("Warning: Actual output size is less than expected output size.")
+  if len(i_actual) < len(i_golden):
+    print("Warning: Actual index size is less than expected index size.")
   c_actual = np.resize(c_actual, c_golden.shape) # In case excess memory was allocated for the array in C
   i_actual = np.resize(i_actual, i_golden.shape)
 
@@ -75,16 +82,19 @@ def verify(input_name, attribs_name, output_name, elf=None, raw_results=None, id
     verification.dump_results_to_csv([c_golden, c_actual, absolute_err], Path.cwd() / f"maxpool_values_{id}.csv")
     code = fail
 
-  fail = np.any(i_actual != i_golden)
-  if fail:
-    verification.dump_results_to_csv([i_golden, i_actual, np.absolute(i_golden - i_actual)], Path.cwd() / f"maxpool_index_{id}.csv")
-    code = fail
+  if not no_index:
+    fail = np.any(i_actual != i_golden)
+    if fail:
+      verification.dump_results_to_csv([i_golden, i_actual, np.absolute(i_golden - i_actual)], Path.cwd() / f"maxpool_index_{id}.csv")
+      code = fail
 
   return int(fail)
 
 def main():
   # Run simulation and get outputs
-  args = verification.parse_args()
+  parser = verification.get_parser()
+  parser.add_argument('--no-index', help='Do not check indexes.', action='store_true')
+  args = parser.parse_args()
   raw_results = verification.simulate(
     sim_bin=args.sim_bin,
     snitch_bin=args.snitch_bin,
@@ -99,15 +109,15 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  ret = verify("ifmap1", "attr1", ["output_loc1", "idx_loc1"], elf=elf, raw_results=raw_results, id=1)
+  ret = verify("ifmap1", "attr1", ["output_loc1", "idx_loc1"], elf=elf, raw_results=raw_results, id=1, no_index=args.no_index)
   if ret == 0:
     print("1D good")
 
-  ret = verify("ifmap2", "attr2", ["output_loc2", "idx_loc2"], elf=elf, raw_results=raw_results, id=2)
+  ret = verify("ifmap2", "attr2", ["output_loc2", "idx_loc2"], elf=elf, raw_results=raw_results, id=2, no_index=args.no_index)
   if ret == 0:
     print("2D good")
 
-  ret = verify("ifmap3", "attr3", ["output_loc3", "idx_loc3"], elf=elf, raw_results=raw_results, id=3)
+  ret = verify("ifmap3", "attr3", ["output_loc3", "idx_loc3"], elf=elf, raw_results=raw_results, id=3, no_index=args.no_index)
   if ret == 0:
     print("3D good")
 

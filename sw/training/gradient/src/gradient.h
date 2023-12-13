@@ -8,6 +8,8 @@
 #define DATA_TYPE float
 #endif 
 
+dump_uint(iter, 0);
+
 
 #define CEIL(x, y) ((((x) - 1) / (y)) + 1)
 #define MIN(x, y) ((x) < (y)?(x):(y))
@@ -25,7 +27,6 @@ void backpropagation_one_core(DATA_TYPE alpha, DATA_TYPE *A, DATA_TYPE *B, DATA_
 void backpropagation_multicore(void *alpha, void *A, void *B, void *GRAD_C,void *GRAD_A, void *GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
                     uint32_t compute_grad_a,uint32_t compute_grad_b, uint32_t dtype_size);
-
 
 void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,double *GRAD_A, double *GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
@@ -46,7 +47,8 @@ void __backpropagation_multicore_computation_grad_B_fp32__(float* alpha_ptr, flo
 void __backpropagation_multicore_computation_grad_A_fp32__(float *alpha_ptr, float *local_GRAD_C, float *local_B, float *local_GRAD_A,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize, uint32_t setup_SSR);
 
-inline void __clean_up_grad_A_fp64__(double *local_GRAD_A,double* local_B, double* local_GRAD_C, double alpha,
+static inline void __attribute__((always_inline))
+__clean_up_grad_A_fp64__(double *local_GRAD_A,double* local_B, double* local_GRAD_C, double alpha,
                     int32_t k, int32_t m, uint32_t K, uint32_t N, uint32_t mult_alpha, uint32_t initialize);
 
 // A[M][K]
@@ -437,14 +439,15 @@ void backpropagation_multicore(void  *alpha_ptr, void *A, void *B, void *GRAD_C,
 
 }
 
-
 void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,double *GRAD_A, double *GRAD_B,
                     uint32_t M, uint32_t N, uint32_t K, uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles,
                     uint32_t compute_grad_a,uint32_t compute_grad_b){
 
+
     uint32_t frac_M = M / M_tiles;
     uint32_t frac_N = N / N_tiles;
     uint32_t frac_K = K / K_tiles;
+
     const uint32_t compute_num = snrt_cluster_compute_core_num();
     const uint32_t compute_id = snrt_cluster_core_idx();
     int32_t c,lb,ub;
@@ -459,7 +462,7 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
     
     snrt_cluster_hw_barrier();
 
-        int iter=0;
+    int iter=0;
 
     if(compute_grad_b){
 
@@ -540,7 +543,8 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
     if(compute_grad_a){
 
         local_GRAD_C = (double *)snrt_l1_next();
-        local_B =(N%32!=0) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C + 4;//to make the access on different banks  
+        local_B =(frac_N%32!=0) ? local_GRAD_C + size_GRAD_C : local_GRAD_C + size_GRAD_C + 4;//to make the access on different banks  
+        //local_B = local_GRAD_C + size_GRAD_C;
         local_GRAD_RES = local_B + size_B;
 
         c = CEIL(frac_M, compute_num);
@@ -552,7 +556,8 @@ void __main_loop_fp64__(double* alpha_ptr, double *A, double *B, double *GRAD_C,
         for(m=0;m<M_tiles;m++){
             for(k=0;k<K_tiles;k++){
                 for(n=0;n<N_tiles;n++){
-                    if(compute_id==0) printf("iter: %d\n",iter++);
+                    if(compute_id==0) dump_iter(iter);
+                    iter++;
 
                     if(snrt_is_dm_core()){
 
@@ -988,7 +993,6 @@ void __backpropagation_multicore_computation_grad_B_fp64__(double* alpha_ptr, do
     }
 }
 
-
 void __backpropagation_multicore_computation_grad_A_fp64__(double* alpha_ptr, double *local_GRAD_C, double *local_B, double *local_GRAD_A,
                     uint32_t M, uint32_t N, uint32_t K,int32_t lb,int32_t ub, uint32_t mult_alpha, uint32_t initialize,uint32_t setup_SSR){
 
@@ -1032,6 +1036,7 @@ void __backpropagation_multicore_computation_grad_A_fp64__(double* alpha_ptr, do
             snrt_ssr_enable();
 
             while(k0<loops){
+
                 asm volatile(
                     "beqz %[initialize], 1f\n"
                     "fcvt.d.w %[ZERO], zero\n"
@@ -1043,9 +1048,9 @@ void __backpropagation_multicore_computation_grad_A_fp64__(double* alpha_ptr, do
 
                     "1:\n"
                     "fld ft3, 0(%[sum_addr]) \n"
-                    "fld ft4, 8(%[sum_addr]) \n"
-                    "fld ft5, 16(%[sum_addr]) \n"
-                    "fld ft6, 24(%[sum_addr]) \n"
+                    "fld ft4, 0(%[sum_addr]) \n"
+                    "fld ft5, 0(%[sum_addr]) \n"
+                    "fld ft6, 0(%[sum_addr]) \n"
 
                     "2:\n"
                     "frep.o %[n_frep], 4, 0, 0 \n"
@@ -1053,6 +1058,7 @@ void __backpropagation_multicore_computation_grad_A_fp64__(double* alpha_ptr, do
                     "fmadd.d ft4, ft0, ft1, ft4 \n"
                     "fmadd.d ft5, ft0, ft1, ft5 \n"
                     "fmadd.d ft6, ft0, ft1, ft6 \n"
+                    
 
                     "beqz %[mult_alpha], 3f \n"
                     "fmul.d ft3, %[alpha],ft3 \n"
@@ -1076,7 +1082,6 @@ void __backpropagation_multicore_computation_grad_A_fp64__(double* alpha_ptr, do
                     : "ft0", "ft1", "ft2","ft3","ft4","ft5","ft6");
 
             }
-
             snrt_ssr_disable();
             snrt_fpu_fence();
 
@@ -1377,8 +1382,8 @@ void __backpropagation_multicore_computation_grad_A_fp32__(float *alpha_ptr, flo
 
 }
 
-
-inline void __clean_up_grad_A_fp64__(double *local_GRAD_A,double* local_B, double* local_GRAD_C, double alpha,
+static inline void __attribute__((always_inline))
+__clean_up_grad_A_fp64__(double *local_GRAD_A,double* local_B, double* local_GRAD_C, double alpha,
                     int32_t k, int32_t m, uint32_t K, uint32_t N, uint32_t mult_alpha, uint32_t initialize){
     //C code
     double sum;

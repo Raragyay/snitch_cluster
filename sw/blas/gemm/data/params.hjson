@@ -5,9 +5,9 @@
 // Parameters for a GEMM
 
 {
-    M: 32,
-    N: 32,
-    K: 32,
+    M: 16,
+    N: 16,
+    K: 16,
     alpha: 2,
     beta: 1,
     ta: false,

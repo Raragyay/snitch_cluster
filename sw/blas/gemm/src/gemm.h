@@ -21,6 +21,43 @@ typedef __fp16 v4f16 __attribute__((vector_size(8)));
 typedef char v8f8 __attribute__((vector_size(8)));
 #endif
 
+#define NAMED_DUMP(type, name, reg)                                           \
+    static __attribute__((always_inline)) inline void dump_##name(type val) { \
+        asm volatile("csrw " #reg ", %0" ::"rK"(val));                        \
+    }
+
+#define DUMP(val) ({ asm volatile("csrw 0x7C3, %0" ::"rK"(val)); })
+
+NAMED_DUMP(uint32_t, PERF_RESULT, 0x7C4)
+
+
+static inline void reset_and_start_perf_single_core(
+    uint32_t compute_id, enum snrt_perf_cnt counter_idx,
+    enum snrt_perf_cnt_type counter_type) {
+    if (compute_id == 0) {
+        snrt_reset_perf_counter(counter_idx);
+
+        // Start performance counters
+        snrt_start_perf_counter(counter_idx, counter_type, 0);
+        DUMP(111000 + counter_idx);
+    }
+    snrt_cluster_hw_barrier();
+}
+
+static inline void end_perf_and_dump_single_core(
+    uint32_t compute_id, enum snrt_perf_cnt counter_idx) {
+    uint32_t res;
+    if (compute_id == 0) {
+        snrt_stop_perf_counter(counter_idx);
+
+        res = snrt_get_perf_counter(counter_idx);
+        DUMP(222000 + counter_idx);
+        dump_PERF_RESULT(res);
+    }
+    snrt_cluster_hw_barrier();
+}
+
+
 // Floating-point multiplications by zero cannot be optimized as in some
 // edge cases they do not yield zero:
 // - 0f * NaN = NaN
@@ -1149,6 +1186,155 @@ void __gemm_fp32_complete_ta(const uint32_t M, const uint32_t N, const uint32_t 
 
 }
 
+void __gemm_fp32_complete_ta_tb (const uint32_t M, const uint32_t N, const uint32_t K,
+                   float* A, const uint32_t ldA, float* B, const uint32_t ldB,
+                   float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
+                   const uint32_t setup_SSR) {
+
+
+    /*
+    A^T * B^T = (B * A)^T
+    */
+    float *tmp = A;
+    A = B;
+    B = tmp;
+
+
+
+    // Unrolling factor of most inner loop.
+    // Should be at least as high as the FMA delay
+    // for maximum utilization
+    const uint32_t unroll = 4;
+    const float alp = *ALPHA;
+    const float bet = *BETA / alp;
+    const uint32_t zero_beta = bet == 0.0;
+    const uint32_t one_beta = bet == 1.0;
+
+    register float ZERO = 0.0;
+    // SSR strides and bounds only have to be configured
+    // once in the beginning
+    if (setup_SSR) {
+            const uint32_t ssr0_b[4] = {unroll, K/2, N / (unroll*2), M};
+            const uint32_t ssr0_i[4] = {0, 2 * 4, 0, 4 * ldA};
+
+            snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
+                             ssr0_i[1], ssr0_i[2], ssr0_i[3]);
+            snrt_ssr_repeat(SNRT_SSR_DM0, 2);
+
+            const uint32_t ssr1_b[4] = {unroll, K/2, N / (unroll*2), M};
+            const uint32_t ssr1_i[4] = {2 * 4, ldB * 2 * 4, unroll * 8, 0};
+
+            snrt_ssr_loop_4d(SNRT_SSR_DM1, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                             ssr1_i[3]);
+
+            snrt_ssr_loop_4d(SNRT_SSR_DM2, ssr1_b[0], ssr1_b[1], ssr1_b[2],
+                             ssr1_b[3], ssr1_i[0], ssr1_i[1], ssr1_i[2],
+                             ssr1_i[3]);
+
+    }
+
+    // SSR start address need to be configured each time
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, A);
+    snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, B);
+    snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_4D, B + ldB);
+
+    const uint32_t n_frep = K/2;
+
+    for (uint32_t m = 0; m < M; m++) {
+        uint32_t n = 0;
+        for (uint32_t n0 = 0; n0 < N / (unroll*2); n0++) {
+            float* _C = &C[m * ldC + n];
+            const register float zero = 0.0;
+            const register double zero_d = 0.0;
+
+            snrt_ssr_enable();
+            asm volatile(
+
+
+                "beqz %[zero_beta], 1f\n"               
+                "fmv.d ft3, %[zero_d] \n"
+                "fmv.d ft4, %[zero_d] \n"
+                "fmv.d ft5, %[zero_d] \n"
+                "fmv.d ft6, %[zero_d] \n"
+                "j 2f\n"
+
+                "1:\n"
+                "fld ft3,  0(%[sum_addr_0]) \n"
+                "fld ft4,  8(%[sum_addr_0]) \n"
+                "fld ft5,  16(%[sum_addr_0]) \n"
+                "fld ft6,  24(%[sum_addr_0]) \n"
+
+                "vfmul.r.s ft3, ft3, %[beta] \n"
+                "vfmul.r.s ft4, ft4, %[beta] \n"
+                "vfmul.r.s ft5, ft5, %[beta] \n"
+                "vfmul.r.s ft6, ft6, %[beta] \n"
+
+                "2:\n"                   
+                "frep.o %[n_frep], 12, 0, 0 \n"
+                "vfcpka.s.s ft11, %[zero], %[zero] \n"
+                "vfcpka.s.s ft10, ft0, ft0 \n"
+                "vfsum.s ft11, ft0 \n"
+                "vfsub.r.s ft11, ft10, ft11 \n"
+
+                "vfmac.r.s ft3, ft1, ft10 \n"
+                "vfmac.r.s ft4, ft1, ft10 \n"
+                "vfmac.r.s ft5, ft1, ft10 \n"
+                "vfmac.r.s ft6, ft1, ft10 \n"
+                
+                "vfmre.r.s ft3, ft2, ft11 \n"
+                "vfmre.r.s ft4, ft2, ft11 \n"
+                "vfmre.r.s ft5, ft2, ft11 \n"
+                "vfmre.r.s ft6, ft2, ft11 \n"                
+                
+                "vfmul.r.s ft3, ft3, %[alpha] \n"
+                "vfmul.r.s ft4, ft4, %[alpha] \n"
+                "vfmul.r.s ft5, ft5, %[alpha] \n"
+                "vfmul.r.s ft6, ft6, %[alpha] \n"
+
+
+                "fsd ft3,  0(%[sum_addr_0]) \n"
+                "fsd ft4,  8(%[sum_addr_0]) \n"
+                "fsd ft5, 16(%[sum_addr_0]) \n"
+                "fsd ft6, 24(%[sum_addr_0]) \n"
+
+                : 
+                : [ sum_addr_0 ] "r"(_C), [ zero ] "f"(zero), [ zero_d ] "f"(zero_d), [ n_frep ] "r"(n_frep - 1),
+                  [ alpha ] "f"(alp), [ neg_alpha ] "f"(-alp), [ beta ] "f"(bet), [ neg_beta ] "f"(-bet), [ zero_beta ] "r"(zero_beta)
+                : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8", "ft9", "ft10", "ft11", "fa0");
+
+                snrt_ssr_disable();
+
+            n += unroll*2;
+        }
+
+        // Clean up of leftover columns: TODO -> cleanup doesn't work with transposed matrices
+
+        for (; n < N; n++) {
+            float c;
+            if (!zero_beta) {
+                if (one_beta)
+                    c = C[m * ldC + n];
+                else
+                    c = C[m * ldC + n] * bet;
+            } else {
+                c = 0.0;
+            }
+            for (uint32_t k = 0; k < K; k++) {
+                c += A[k + m * ldA] * B[k + n * ldB];
+            }
+            C[m * ldC + n] = alp * c;
+        }
+
+        snrt_ssr_enable();
+    }
+
+    snrt_ssr_disable();
+
+
+}
+
+
 void __gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
                    float* A, const uint32_t ldA, float* B, const uint32_t ldB,
                    float* C, const uint32_t ldC, const float* ALPHA, const float* BETA,
@@ -1304,6 +1490,10 @@ void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
     else if (ta && !tb)
     {
         __gemm_fp32_complete_ta (M, N, K, A, ldA, B, ldB, C, ldC, ALPHA, BETA, setup_SSR);
+    }
+    else if (ta && tb)
+    {
+        __gemm_fp32_complete(M, N, K, B, ldA, A, ldB, C, ldC, ALPHA, BETA, setup_SSR);
     }
 }
 
@@ -1910,6 +2100,11 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                         lda_strided,
                         transa, (float*)b, ldb, transb, (float*)c +
                         offsetC*2, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
+                else
+                    gemm_fp32_complete(frac_m, n, k, (float*)b + offsetA,
+                        lda_strided,
+                        !transa, (float*)a, ldb, !transb, (float*)c +
+                        offsetC, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
 
                 // gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
                 //                    lda_strided, transa, (float*)b, ldb, transb,
@@ -1959,6 +2154,8 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
          uint32_t n, uint32_t k, void* alpha, void* a, void* b, void* beta,
          void* c) {
     // Calculate tile sizes
+    uint32_t start = snrt_mcycle();
+
     uint32_t frac_m = m / m_tiles;
     uint32_t frac_n = n / n_tiles;
     uint32_t frac_k = k / k_tiles;
@@ -1990,7 +2187,15 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
         m_tiles / snrt_cluster_num() : m_tiles;
     uint32_t k_tiles_per_cluster = parallelize_k ?
         k_tiles / snrt_cluster_num() : k_tiles;
-    
+
+    uint32_t compute_id = snrt_cluster_core_idx();
+
+    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+    //                                  SNRT_PERF_CNT_ICACHE_STALL);
+    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+    //                                  SNRT_PERF_CNT_TCDM_CONGESTED);
+    // uint32_t start_dma_load = snrt_mcycle();    
+
     // Every cluster iterates over its subset of m tiles
     for (uint32_t m_tile = 0; m_tile < m_tiles_per_cluster; m_tile++) {
         for (uint32_t n_tile = 0; n_tile < n_tiles; n_tile++) {
@@ -2051,7 +2256,6 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
                 // Compute
                 if (!snrt_is_dm_core()) {
-                    uint32_t start_cycle = snrt_mcycle();
 
                     volatile uint32_t lda = frac_k;
                     volatile uint32_t ldb = frac_n;
@@ -2076,12 +2280,34 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     } else {
                         beta_k = &one;
                     }
+                    uint32_t start_dma_load = snrt_mcycle();
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
 
                     sc_st_gemm(prec, expand, setup_ssr, transa, transb, frac_m,
                                frac_n, frac_k, alpha, local_a, lda, local_b, ldb,
                                beta_k, local_c_partial, ldc);
+                    uint32_t done = snrt_mcycle();
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
-                    uint32_t end_cycle = snrt_mcycle();
+
+                }
+                else
+                {
+                    uint32_t start_dma_load = snrt_mcycle();
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+
+                    uint32_t done = snrt_mcycle();
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+
                 }
 
                 snrt_cluster_hw_barrier();
@@ -2106,6 +2332,10 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
             }
         }
     }
+    snrt_cluster_hw_barrier();
+    // uint32_t done = snrt_mcycle();
+    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
     return 0;
 }

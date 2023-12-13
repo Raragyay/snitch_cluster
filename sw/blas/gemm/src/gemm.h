@@ -21,6 +21,43 @@ typedef __fp16 v4f16 __attribute__((vector_size(8)));
 typedef char v8f8 __attribute__((vector_size(8)));
 #endif
 
+#define NAMED_DUMP(type, name, reg)                                           \
+    static __attribute__((always_inline)) inline void dump_##name(type val) { \
+        asm volatile("csrw " #reg ", %0" ::"rK"(val));                        \
+    }
+
+#define DUMP(val) ({ asm volatile("csrw 0x7C3, %0" ::"rK"(val)); })
+
+NAMED_DUMP(uint32_t, PERF_RESULT, 0x7C4)
+
+
+static inline void reset_and_start_perf_single_core(
+    uint32_t compute_id, enum snrt_perf_cnt counter_idx,
+    enum snrt_perf_cnt_type counter_type) {
+    if (compute_id == 0) {
+        snrt_reset_perf_counter(counter_idx);
+
+        // Start performance counters
+        snrt_start_perf_counter(counter_idx, counter_type, 0);
+        DUMP(111000 + counter_idx);
+    }
+    snrt_cluster_hw_barrier();
+}
+
+static inline void end_perf_and_dump_single_core(
+    uint32_t compute_id, enum snrt_perf_cnt counter_idx) {
+    uint32_t res;
+    if (compute_id == 0) {
+        snrt_stop_perf_counter(counter_idx);
+
+        res = snrt_get_perf_counter(counter_idx);
+        DUMP(222000 + counter_idx);
+        dump_PERF_RESULT(res);
+    }
+    snrt_cluster_hw_barrier();
+}
+
+
 // Floating-point multiplications by zero cannot be optimized as in some
 // edge cases they do not yield zero:
 // - 0f * NaN = NaN
@@ -2117,6 +2154,8 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
          uint32_t n, uint32_t k, void* alpha, void* a, void* b, void* beta,
          void* c) {
     // Calculate tile sizes
+    uint32_t start = snrt_mcycle();
+
     uint32_t frac_m = m / m_tiles;
     uint32_t frac_n = n / n_tiles;
     uint32_t frac_k = k / k_tiles;
@@ -2148,7 +2187,15 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
         m_tiles / snrt_cluster_num() : m_tiles;
     uint32_t k_tiles_per_cluster = parallelize_k ?
         k_tiles / snrt_cluster_num() : k_tiles;
-    
+
+    uint32_t compute_id = snrt_cluster_core_idx();
+
+    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+    //                                  SNRT_PERF_CNT_ICACHE_STALL);
+    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+    //                                  SNRT_PERF_CNT_TCDM_CONGESTED);
+    // uint32_t start_dma_load = snrt_mcycle();    
+
     // Every cluster iterates over its subset of m tiles
     for (uint32_t m_tile = 0; m_tile < m_tiles_per_cluster; m_tile++) {
         for (uint32_t n_tile = 0; n_tile < n_tiles; n_tile++) {
@@ -2209,7 +2256,6 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
                 // Compute
                 if (!snrt_is_dm_core()) {
-                    uint32_t start_cycle = snrt_mcycle();
 
                     volatile uint32_t lda = frac_k;
                     volatile uint32_t ldb = frac_n;
@@ -2234,12 +2280,34 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     } else {
                         beta_k = &one;
                     }
+                    uint32_t start_dma_load = snrt_mcycle();
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
 
                     sc_st_gemm(prec, expand, setup_ssr, transa, transb, frac_m,
                                frac_n, frac_k, alpha, local_a, lda, local_b, ldb,
                                beta_k, local_c_partial, ldc);
+                    uint32_t done = snrt_mcycle();
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
-                    uint32_t end_cycle = snrt_mcycle();
+
+                }
+                else
+                {
+                    uint32_t start_dma_load = snrt_mcycle();
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+
+                    uint32_t done = snrt_mcycle();
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+
                 }
 
                 snrt_cluster_hw_barrier();
@@ -2264,6 +2332,10 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
             }
         }
     }
+    snrt_cluster_hw_barrier();
+    // uint32_t done = snrt_mcycle();
+    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
     return 0;
 }

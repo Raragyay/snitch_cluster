@@ -1575,8 +1575,9 @@ static inline void batchnorm_backward_training_multicore_fp32(
         max(ceildiv(num_doubles_per_aligned_point, num_compute_cores) * 50 * 7,
             128);
     uint32_t points_loadable = doubles_loadable / num_doubles_per_aligned_point;
-    uint32_t work_in_tile =
-        min(min(points_loadable, tile_size_in_aligned_points), num_points);
+    // uint32_t work_in_tile =
+    //     min(min(points_loadable, tile_size_in_aligned_points), num_points);
+    uint32_t work_in_tile = 4;
         
     bool is_tiling_enabled = work_in_tile != num_points;
     uint32_t work_left = num_points;
@@ -1704,8 +1705,8 @@ static inline void batchnorm_backward_training_multicore_fp32(
         }
 
         work_in_tile = min(tile_size_in_aligned_points, num_points);
-        work_mod_3 = work_in_tile % 3;
-        work_div_3_sub_1 = work_in_tile / 3 - 1;
+        work_mod_4 = work_in_tile % 4;
+        work_div_4_sub_1 = work_in_tile / 4 - 1;
     }
     snrt_cluster_hw_barrier();
 
@@ -1719,8 +1720,8 @@ static inline void batchnorm_backward_training_multicore_fp32(
                           num_bytes_per_packed_point);
         work_left = num_points - work_in_tile;
         dm_comm->num_points_work_in_tile = work_in_tile;
-        dm_comm->work_mod_3 = work_mod_3;
-        dm_comm->work_div_3_sub_1 = work_div_3_sub_1;
+        dm_comm->work_mod_4 = work_mod_4;
+        dm_comm->work_div_4_sub_1 = work_div_4_sub_1;
     } else if (snrt_is_compute_core()) {
         if (num_doubles_work_for_core_per_aligned_point > 0) {
             register v2s num_points_inv_reg asm(
@@ -1798,8 +1799,8 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &weight_times_invstd_scratch[compute_id], &k_scratch[compute_id],
                     &winvstd_times_meank_sub_dmean_scratch[compute_id],
-                    num_bytes_per_aligned_point, work_in_tile, work_mod_3,
-                    work_div_3_sub_1,
+                    num_bytes_per_aligned_point, work_in_tile, work_mod_4,
+                    work_div_4_sub_1,
                     num_doubles_work_for_core_per_aligned_point,
                     num_compute_cores);
             }
@@ -1814,7 +1815,7 @@ static inline void batchnorm_backward_training_multicore_fp32(
                 num_bytes_per_aligned_point,
                 is_point_aligned_to_8_byte_boundary, num_points, work_left, work_in_tile,
                 dm_comm, tile_size_in_aligned_points, grad_ofmap_scratch,
-                ifmap_scratch, grad_ifmap_scratch, buf_flag, 3, 5);
+                ifmap_scratch, grad_ifmap_scratch, buf_flag, 4, 5);
         } else {
             if (num_doubles_work_for_core_per_aligned_point == 0) {
                 uint32_t work_in_tile_temp = work_in_tile;
@@ -1834,8 +1835,8 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     &weight_times_invstd_scratch[compute_id],
                     &k_scratch[compute_id],
                     &winvstd_times_meank_sub_dmean_scratch[compute_id], buf_flag,
-                    num_doubles_per_aligned_point, work_in_tile, work_mod_3,
-                    work_div_3_sub_1, tile_size_in_aligned_points,
+                    num_doubles_per_aligned_point, work_in_tile, work_mod_4,
+                    work_div_4_sub_1, tile_size_in_aligned_points,
                     num_doubles_work_for_core_per_aligned_point,
                     num_compute_cores, dm_comm);
             }

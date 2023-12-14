@@ -1462,7 +1462,7 @@ static inline void batchnorm_backward_training_single_core_opt_fp32(
             grad_ofmap_scratch, grad_ifmap_scratch, ifmap_scratch,
             weight_times_invstd_scratch, k_scratch,
             winvstd_times_meank_sub_dmean_scratch, num_bytes_per_aligned_point,
-            num_points, num_points % 3, num_points / 3 - 1, num_doubles_per_point, 1);
+            num_points, num_points % 4, num_points / 4 - 1, num_doubles_per_point, 1);
     }
     uint32_t end_compute_grad_ifmap = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();

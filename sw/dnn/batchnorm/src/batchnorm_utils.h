@@ -3535,8 +3535,8 @@ batchnorm_backward_training_fp32_no_loop_2(
     const v2s* k_scratch,
     const v2s* winvstd_times_meank_sub_dmean_scratch,
     uint32_t num_bytes_per_point,
-    uint32_t num_points_work_for_core_in_tile, uint32_t work_mod_3,
-    uint32_t work_div_3_sub_1, uint32_t num_doubles_to_process,
+    uint32_t num_points_work_for_core_in_tile, uint32_t work_mod_4,
+    uint32_t work_div_4_sub_1, uint32_t num_doubles_to_process,
     uint32_t channel_stride) {
     snrt_ssr_loop_2d(
         SNRT_SSR_DM_ALL,
@@ -3545,7 +3545,7 @@ batchnorm_backward_training_fp32_no_loop_2(
         num_bytes_per_point,  // stride per inner loop iteration: 1 point
         channel_stride *
             sizeof(double));  // stride per outer loop iteration
-    bool frep = num_points_work_for_core_in_tile >= 3;
+    bool frep = num_points_work_for_core_in_tile >= 4;
     register volatile uint32_t i = 0;
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
@@ -3560,24 +3560,28 @@ batchnorm_backward_training_fp32_no_loop_2(
         snrt_ssr_enable();
         if (frep) {
             asm volatile(
-                "frep.o %[n_frep], 12, 0, 0 \n"
+                "frep.o %[n_frep], 16, 0, 0 \n"
                 "vfmul.s ft3, ft0, %[k]\n"
                 "vfmul.s ft4, ft0, %[k]\n"
                 "vfmul.s ft5, ft0, %[k]\n"
+                "vfmul.s ft6, ft0, %[k]\n"
                 "vfsub.s ft3, ft2, ft3\n"
                 "vfsub.s ft4, ft2, ft4\n"
                 "vfsub.s ft5, ft2, ft5\n"
+                "vfsub.s ft6, ft2, ft6\n"
                 "vfmul.s ft3, ft3, %[weight_times_invstd] \n"
                 "vfmul.s ft4, ft4, %[weight_times_invstd] \n"
                 "vfmul.s ft5, ft5, %[weight_times_invstd] \n"
+                "vfmul.s ft6, ft6, %[weight_times_invstd] \n"
                 "vfadd.s ft1, ft3, %[winvstd_times_meank_sub_dmean] \n"
                 "vfadd.s ft1, ft4, %[winvstd_times_meank_sub_dmean] \n"
                 "vfadd.s ft1, ft5, %[winvstd_times_meank_sub_dmean] \n"
+                "vfadd.s ft1, ft6, %[winvstd_times_meank_sub_dmean] \n"
                 :
                 : [weight_times_invstd] "fr"(weight_times_invstd.f64),
                   [winvstd_times_meank_sub_dmean] "fr"(
                       winvstd_times_meank_sub_dmean.f64),
-                  [k] "fr"(k.f64), [n_frep] "r"(work_div_3_sub_1)
+                  [k] "fr"(k.f64), [n_frep] "r"(work_div_4_sub_1)
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
         }
 
@@ -3603,11 +3607,11 @@ batchnorm_backward_training_fp32_no_loop_2(
 
         register uint32_t mod_temp;
         asm volatile(
-            "beqz %[work_mod_3], 0f\n"              // mod is 0
-            "andi %[mod_temp], %[work_mod_3], 1\n"  // is last bit 1? if no,
+            "beqz %[work_mod_4], 0f\n"              // mod is 0
+            "andi %[mod_temp], %[work_mod_4], 1\n"  // is last bit 1? if no,
                                                     // then mod is 2
             "beqz %[mod_temp], 2f\n"                // jump to 2 if no
-            "andi %[mod_temp], %[work_mod_3], 2\n"  // is last bit 1? if no,
+            "andi %[mod_temp], %[work_mod_4], 2\n"  // is last bit 1? if no,
                                                     // then mod is 1
             "beqz %[mod_temp], 1f\n"                // jump to 1 if no
             "3:\n"
@@ -3644,7 +3648,7 @@ batchnorm_backward_training_fp32_no_loop_2(
             : [weight_times_invstd] "fr"(weight_times_invstd.f64),
               [winvstd_times_meank_sub_dmean] "fr"(
                   winvstd_times_meank_sub_dmean.f64),
-              [k] "fr"(k.f64), [work_mod_3] "r"(work_mod_3)
+              [k] "fr"(k.f64), [work_mod_4] "r"(work_mod_4)
             : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
         snrt_fpu_fence();
         snrt_ssr_disable();
@@ -3661,8 +3665,8 @@ batchnorm_backward_training_tile_fp32_looped_2(
     const v2s* winvstd_times_meank_sub_dmean_scratch,
     uint32_t buf_flag, uint32_t num_doubles_per_aligned_point,
     uint32_t work_in_tile,  // requires: > 0
-    uint32_t work_mod_3,    // precompute to avoid icache branch misses
-    uint32_t work_div_3_sub_1, uint32_t tile_size_in_aligned_points,
+    uint32_t work_mod_4,    // precompute to avoid icache branch misses
+    uint32_t work_div_4_sub_1, uint32_t tile_size_in_aligned_points,
     uint32_t num_doubles_work_for_core_per_point,  //  requires: > 0
     uint32_t channel_stride, dm_comm_t* dm_comm) {
     // access pattern: iterate over the different channels, then over
@@ -3671,7 +3675,7 @@ batchnorm_backward_training_tile_fp32_looped_2(
     // outside loop: channels
     // inside loop: points
     uint32_t prev_work = work_in_tile;
-    register uint32_t next_work_mod_3;
+    register uint32_t next_work_mod_4;
     register uint32_t frep = work_in_tile >= 4;
     register v2s ZERO asm("ft11");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
@@ -3716,24 +3720,28 @@ batchnorm_backward_training_tile_fp32_looped_2(
             k.f64 = k_scratch->f64;
             snrt_ssr_enable();
             asm volatile(
-                "frep.o %[n_frep], 12, 0, 0 \n"
+                "frep.o %[n_frep], 16, 0, 0 \n"
                 "vfmul.s ft3, ft0, %[k]\n"
                 "vfmul.s ft4, ft0, %[k]\n"
                 "vfmul.s ft5, ft0, %[k]\n"
+                "vfmul.s ft6, ft0, %[k]\n"
                 "vfsub.s ft3, ft2, ft3\n"
                 "vfsub.s ft4, ft2, ft4\n"
                 "vfsub.s ft5, ft2, ft5\n"
+                "vfsub.s ft6, ft2, ft5\n"
                 "vfmul.s ft3, ft3, %[weight_times_invstd] \n"
                 "vfmul.s ft4, ft4, %[weight_times_invstd] \n"
                 "vfmul.s ft5, ft5, %[weight_times_invstd] \n"
+                "vfmul.s ft6, ft6, %[weight_times_invstd] \n"
                 "vfadd.s ft1, ft3, %[winvstd_times_meank_sub_dmean] \n"
                 "vfadd.s ft1, ft4, %[winvstd_times_meank_sub_dmean] \n"
                 "vfadd.s ft1, ft5, %[winvstd_times_meank_sub_dmean] \n"
+                "vfadd.s ft1, ft6, %[winvstd_times_meank_sub_dmean] \n"
                 :
                 : [weight_times_invstd] "fr"(weight_times_invstd.f64),
                   [winvstd_times_meank_sub_dmean] "fr"(
                       winvstd_times_meank_sub_dmean.f64),
-                  [k] "fr"(k.f64), [n_frep] "r"(work_div_3_sub_1)
+                  [k] "fr"(k.f64), [n_frep] "r"(work_div_4_sub_1)
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6");
 
             register uint32_t channel_stride_in_bytes;
@@ -3766,8 +3774,8 @@ batchnorm_backward_training_tile_fp32_looped_2(
                 "csrr x0, 0x7C2\n"  // wait for dma to compute parameters
                                     // because I don't want to do math here
                 "lw %[work_in_tile], %[work_in_tile_offset](%[dm_comm])\n"
-                "lw %[next_work_mod_3], %[work_mod_3_offset](%[dm_comm])\n"
-                "lw %[work_div_3_sub_1], %[work_div_3_sub_1_offset](%[dm_comm])\n"
+                "lw %[next_work_mod_4], %[work_mod_4_offset](%[dm_comm])\n"
+                "lw %[work_div_4_sub_1], %[work_div_4_sub_1_offset](%[dm_comm])\n"
                 "slti %[frep], %[work_in_tile], 4\n"  // cmp frep < 4, then
                                                       // negate in next
                                                       // instruction
@@ -3808,9 +3816,9 @@ batchnorm_backward_training_tile_fp32_looped_2(
                   [winvstd_times_meank_sub_dmean_scratch] "+r"(
                       winvstd_times_meank_sub_dmean_scratch),
                   [work_in_tile] "+r"(work_in_tile),
-                  [next_work_mod_3] "=r"(next_work_mod_3),
+                  [next_work_mod_4] "=r"(next_work_mod_4),
                   [prev_work] "+r"(prev_work), [frep] "+r"(frep),
-                  [work_div_3_sub_1] "+r"(work_div_3_sub_1),
+                  [work_div_4_sub_1] "+r"(work_div_4_sub_1),
                   [grad_ofmap_scratch] "+r"(grad_ofmap_scratch),
                   [grad_ifmap_scratch] "+r"(grad_ifmap_scratch),
                   [ifmap_scratch] "+r"(ifmap_scratch)
@@ -3820,9 +3828,9 @@ batchnorm_backward_training_tile_fp32_looped_2(
                   [input_channel_array_reset_dist] "r"(input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
-                  [work_mod_3_offset] "i"(offsetof(dm_comm_t, work_mod_3)),
-                  [work_div_3_sub_1_offset] "i"(
-                      offsetof(dm_comm_t, work_div_3_sub_1)),
+                  [work_mod_4_offset] "i"(offsetof(dm_comm_t, work_mod_4)),
+                  [work_div_4_sub_1_offset] "i"(
+                      offsetof(dm_comm_t, work_div_4_sub_1)),
                   [REG_BOUNDS_PLUS_0] "i"(REG_BOUNDS),
                   [DM_ALL] "i"(SNRT_SSR_DM_ALL),
                   [REG_STRIDES_PLUS_1] "i"(REG_STRIDES + 1),
@@ -3832,11 +3840,11 @@ batchnorm_backward_training_tile_fp32_looped_2(
                 : "ft0", "ft1", "ft2", "x0", "memory");
 
             asm volatile(
-                "beqz %[work_mod_3], 0f\n"              // mod is 0
-                "andi %[mod_temp], %[work_mod_3], 1\n"  // is last bit 1? if no,
+                "beqz %[work_mod_4], 0f\n"              // mod is 0
+                "andi %[mod_temp], %[work_mod_4], 1\n"  // is last bit 1? if no,
                                                         // then mod is 2
                 "beqz %[mod_temp], 2f\n"                // jump to 2 if no
-                "andi %[mod_temp], %[work_mod_3], 2\n"  // is last bit 1? if no,
+                "andi %[mod_temp], %[work_mod_4], 2\n"  // is last bit 1? if no,
                                                         // then mod is 1
                 "beqz %[mod_temp], 1f\n"                // jump to 1 if no
                 "3:\n"
@@ -3873,13 +3881,13 @@ batchnorm_backward_training_tile_fp32_looped_2(
                 : [weight_times_invstd] "fr"(weight_times_invstd.f64),
                   [winvstd_times_meank_sub_dmean] "fr"(
                       winvstd_times_meank_sub_dmean.f64),
-                  [k] "fr"(k.f64), [work_mod_3] "r"(work_mod_3)
+                  [k] "fr"(k.f64), [work_mod_4] "r"(work_mod_4)
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
             snrt_ssr_disable();
         } while (i < num_doubles_work_for_core_per_point);
         // don't need to fpu_fence since last 3 instructions are inconsequential
         __builtin_ssr_barrier(SNRT_SSR_DM1);
-        work_mod_3 = next_work_mod_3;
+        work_mod_4 = next_work_mod_4;
     } while (work_in_tile != 0);
     // notify last tile done
     snrt_cluster_hw_barrier();

@@ -3728,7 +3728,7 @@ batchnorm_backward_training_tile_fp32_looped_2(
                 "vfsub.s ft3, ft2, ft3\n"
                 "vfsub.s ft4, ft2, ft4\n"
                 "vfsub.s ft5, ft2, ft5\n"
-                "vfsub.s ft6, ft2, ft5\n"
+                "vfsub.s ft6, ft2, ft6\n"
                 "vfmul.s ft3, ft3, %[weight_times_invstd] \n"
                 "vfmul.s ft4, ft4, %[weight_times_invstd] \n"
                 "vfmul.s ft5, ft5, %[weight_times_invstd] \n"

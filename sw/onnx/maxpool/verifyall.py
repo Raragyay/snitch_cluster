@@ -77,6 +77,18 @@ def main():
   if ret == 0:
     print("3D good 3")
 
+  ret = verify("ifmap1_4", "attr1_4", ["output_loc1_4", "idx_loc1_4"], elf=elf, raw_results=raw_results, id="1_4", no_index=args.no_index)
+  if ret == 0:
+    print("1D good 4")
+
+  ret = verify("ifmap2_4", "attr2_4", ["output_loc2_4", "idx_loc2_4"], elf=elf, raw_results=raw_results, id="2_4", no_index=args.no_index)
+  if ret == 0:
+    print("2D good 4")
+
+  ret = verify("ifmap3_4", "attr3_4", ["output_loc3_4", "idx_loc3_4"], elf=elf, raw_results=raw_results, id="3_4", no_index=args.no_index)
+  if ret == 0:
+    print("3D good 4")
+
   return 0
 
 

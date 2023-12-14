@@ -200,6 +200,28 @@ int main() {
                 output_loc3_3);
   #endif
 
+
+  #if ENABLE_1D
+  compute_output_shape(&attr1_4, attr1_4.output_shape);
+  maxpool_f64_1d_no_index(&attr1_4,
+                ifmap1_4,
+                output_loc1_4);
+  #endif
+
+  #if ENABLE_2D
+  compute_output_shape(&attr2_4, attr2_4.output_shape);
+  maxpool_f64_2d_no_index(&attr2_4,
+                ifmap2_4,
+                output_loc2_4);
+  #endif
+
+  #if ENABLE_3D
+  compute_output_shape(&attr3_4, attr3_4.output_shape);
+  maxpool_f64_3d_no_index(&attr3_4,
+                ifmap3_4,
+                output_loc3_4);
+  #endif
+
   #endif
 
 
@@ -325,6 +347,47 @@ int main() {
                 ifmap3_3,
                 output_loc3_3,
                 idx_loc3_3);
+  }
+  #endif
+
+
+  #if ENABLE_1D
+  compute_output_shape(&attr1_4, attr1_4.output_shape);
+  maxpool_f64_1d_with_index(&attr1_4,
+                ifmap1_4,
+                output_loc1_4,
+                idx_loc1_4);
+  #endif
+
+  #if ENABLE_2D
+  compute_output_shape(&attr2_4, attr2_4.output_shape);
+  if (attr2_4.storage_order) {
+    maxpool_f64_2d_with_index_col_major(&attr2_4,
+                ifmap2_4,
+                output_loc2_4,
+                idx_loc2_4);
+  }
+  else {
+    maxpool_f64_2d_with_index_row_major(&attr2_4,
+                ifmap2_4,
+                output_loc2_4,
+                idx_loc2_4);
+  }
+  #endif
+
+  #if ENABLE_3D
+  compute_output_shape(&attr3_4, attr3_4.output_shape);
+  if (attr3_4.storage_order) {
+    maxpool_f64_3d_with_index_col_major(&attr3_4,
+                ifmap3_4,
+                output_loc3_4,
+                idx_loc3_4);
+  }
+  else {
+    maxpool_f64_3d_with_index_row_major(&attr3_4,
+                ifmap3_4,
+                output_loc3_4,
+                idx_loc3_4);
   }
   #endif
 

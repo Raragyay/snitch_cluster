@@ -9251,7 +9251,7 @@ int idx_loc3_3[81] = {0};
 
 maxpool_attributes attr1_4 = {
   .n_dim = 1,
-  .input_shape = {1, 3, 81, -1, -1},
+  .input_shape = {9, 3, 9, -1, -1},
   .output_shape = {0},
   .auto_pad = NOTSET,
   .ceil_mode = 1,

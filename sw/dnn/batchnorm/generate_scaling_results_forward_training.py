@@ -101,6 +101,7 @@ def read_existing_results(whole_block):
     else:
         scaling_results_df = pd.DataFrame(columns=columns)
         scaling_results_df.set_index(index, drop=True, inplace=True)
+    scaling_results_df.sort_index(inplace=True)
     return scaling_results_df
 
 
@@ -141,12 +142,13 @@ non_aligned_sizes = [
 config_modifiers = {
     64: {
         # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-        # "SINGLE_CORE_OPT": [
-        #     *small_sizes,
-        #     format_size(16, 8, 8),
-        #     format_size(16, 16, 8),
-        #     format_size(16, 16, 16),
-        # ],
+        "SINGLE_CORE_OPT": [
+            *small_sizes,
+            format_size(16, 8, 8),
+            format_size(16, 16, 8),
+            format_size(16, 16, 16),
+            format_size(32, 16, 16),
+        ],
         "MULTICORE_OPT": [
             *small_sizes,
             format_size(8, 8, 8),
@@ -351,14 +353,14 @@ def main():
                 )
             )
             subprocess.run(
-                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results_fe/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
+                f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results_ft/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,
             ).check_returncode()
             subprocess.run(
-                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results_fe/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
+                f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results_ft/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
                 shell=True,
                 cwd=target_snitch_cluster_path,
                 stdout=subprocess.DEVNULL,

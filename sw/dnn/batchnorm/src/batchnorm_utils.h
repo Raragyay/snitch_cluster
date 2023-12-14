@@ -137,7 +137,7 @@ batchnorm_forward_fp64_no_loop(
             : "ft0", "ft1", "ft2");
 
     } while (i < num_channels_to_process);
-    // don't need to fpu_fence since last 3 instructions are inconsequential
+    snrt_fpu_fence();
     __builtin_ssr_barrier(SNRT_SSR_DM1);
     snrt_ssr_disable();
 }

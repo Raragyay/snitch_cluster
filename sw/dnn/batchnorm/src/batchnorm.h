@@ -157,8 +157,10 @@ static inline void batchnorm_forward_multicore_fp64(batchnorm_layer_t *l) {
                 "frep.o %[n_frep], 5, 0, 0 \n"
                 "fadd.d ft3, ft0, %[eps]\n"
                 "fsqrt.d ft3, ft3\n"
+                // gamma = weight / sqrt(var + eps)
                 "fdiv.d ft3, ft2, ft3\n"
                 "fsgnj.d ft1, ft3, ft3\n"
+                // beta = bias - mean*gamma
                 "fnmsub.d ft1, ft0, ft3, ft2\n"
                 :
                 : [eps] "fr"(eps),

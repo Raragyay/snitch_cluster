@@ -8,10 +8,41 @@
 #include "data.h"
 int main() {
     if (is_forward && is_training) {
-        batchnorm_forward_training_multicore_fp64(&forward_training_layer, temp);
-        return 1;
+        switch (forward_training_layer.dtype) {
+            case FP64:
+                switch (impl_opt_level) {
+                    case SINGLE_CORE_OPT:
+                        batchnorm_forward_training_single_core_opt_fp64(
+                            &forward_training_layer);
+                        break;
+                    case MULTICORE_OPT:
+                        batchnorm_forward_training_multicore_fp64(&forward_training_layer, temp);
+                        break;
+                    default:
+                        return 1;
+                }
+                break;
+            default:
+                return 1;
+        }
     } else if (is_forward && !is_training) {
-        batchnorm_forward_multicore_fp64(&forward_eval_layer);
+        switch (forward_eval_layer.dtype) {
+            case FP64:
+                switch (impl_opt_level) {
+                    case SINGLE_CORE_OPT:
+                        batchnorm_forward_single_core_opt_fp64(
+                            &forward_eval_layer);
+                        break;
+                    case MULTICORE_OPT:
+                        batchnorm_forward_multicore_fp64(&forward_eval_layer);
+                        break;
+                    default:
+                        return 1;
+                }
+                break;
+            default:
+                return 1;
+        }
     } else if (!is_forward && is_training) {
         switch (backward_training_layer.dtype) {
             case FP64:

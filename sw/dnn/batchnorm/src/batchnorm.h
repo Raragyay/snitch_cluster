@@ -1575,9 +1575,8 @@ static inline void batchnorm_backward_training_multicore_fp32(
         max(ceildiv(num_doubles_per_aligned_point, num_compute_cores) * 50 * 7,
             128);
     uint32_t points_loadable = doubles_loadable / num_doubles_per_aligned_point;
-    // uint32_t work_in_tile =
-    //     min(min(points_loadable, tile_size_in_aligned_points), num_points);
-    uint32_t work_in_tile = 4;
+    uint32_t work_in_tile =
+        min(min(points_loadable, tile_size_in_aligned_points), num_points);
         
     bool is_tiling_enabled = work_in_tile != num_points;
     uint32_t work_left = num_points;

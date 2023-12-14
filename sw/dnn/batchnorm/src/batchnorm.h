@@ -157,8 +157,10 @@ static inline void batchnorm_forward_multicore_fp64(batchnorm_layer_t *l) {
                 "frep.o %[n_frep], 5, 0, 0 \n"
                 "fadd.d ft3, ft0, %[eps]\n"
                 "fsqrt.d ft3, ft3\n"
+                // gamma = weight / sqrt(var + eps)
                 "fdiv.d ft3, ft2, ft3\n"
                 "fsgnj.d ft1, ft3, ft3\n"
+                // beta = bias - mean*gamma
                 "fnmsub.d ft1, ft0, ft3, ft2\n"
                 :
                 : [eps] "fr"(eps),
@@ -1218,7 +1220,8 @@ static inline void batchnorm_backward_training_multicore_fp64(
     uint32_t points_loadable = doubles_loadable / C;
     uint32_t work_in_tile =
         min(min(points_loadable, tile_size_in_points), num_points);
-    // uint32_t work_in_tile = 4;
+    // work_in_tile = 4;
+    bool is_tiling_enabled = work_in_tile != num_points;
     uint32_t work_left = num_points;
     uint32_t work_mod_3 = work_in_tile % 3;
     uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
@@ -1241,12 +1244,6 @@ static inline void batchnorm_backward_training_multicore_fp64(
                                              C * sizeof(double));
         weight_load = snrt_dma_start_1d(weight_times_invstd_scratch, l->weight,
                                         C * sizeof(double));
-        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                                            work_in_tile * C * sizeof(double));
-        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
-                                       work_in_tile * C * sizeof(double));
-        current_mean_load = snrt_dma_start_1d(
-            current_mean_scratch, l->current_mean, C * sizeof(double));
         snrt_dma_wait(current_var_load);
         snrt_dma_wait(weight_load);
         buf_flag = !buf_flag;
@@ -1260,6 +1257,12 @@ static inline void batchnorm_backward_training_multicore_fp64(
 
     uint32_t start_invstd_computations = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
+        grad_ofmap_load = snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
+                                            work_in_tile * C * sizeof(double));
+        ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
+                                       work_in_tile * C * sizeof(double));
+        current_mean_load = snrt_dma_start_1d(
+            current_mean_scratch, l->current_mean, C * sizeof(double));
         snrt_dma_wait(grad_ofmap_load);
         snrt_dma_wait(ifmap_load);
         snrt_dma_wait(current_mean_load);
@@ -1294,7 +1297,7 @@ static inline void batchnorm_backward_training_multicore_fp64(
     uint32_t end_invstd_computations = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
-    if (work_in_tile == num_points) {
+    if (!is_tiling_enabled) {
         uint32_t start_main_loop_1 = SNRT_SECTIONED_MCYCLE();
         if (snrt_is_dm_core()) {
         } else {
@@ -1310,8 +1313,8 @@ static inline void batchnorm_backward_training_multicore_fp64(
         uint32_t end_main_loop_1 = SNRT_SECTIONED_MCYCLE();
     } else {
         if (snrt_is_dm_core()) {
-            batchnorm_backward_training_dma_main_loop_fp_agnostic(
-                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+            buf_flag = batchnorm_backward_training_dma_main_loop_fp_agnostic(
+                l, C, C * sizeof(double), C * sizeof(double), true, num_points, work_left,
                 work_in_tile, dm_comm, tile_size_in_points, grad_ofmap_scratch,
                 ifmap_scratch, NULL, buf_flag, 3, 3);
         } else {
@@ -1327,7 +1330,7 @@ static inline void batchnorm_backward_training_multicore_fp64(
                     snrt_cluster_hw_barrier();
                 }
             } else {
-                batchnorm_backward_training_tile_fp64_looped_1(
+                buf_flag = batchnorm_backward_training_tile_fp64_looped_1(
                     &grad_ofmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &current_mean_scratch[compute_id],
                     &grad_bias_scratch[compute_id], &dotp_scratch[compute_id],
@@ -1336,8 +1339,11 @@ static inline void batchnorm_backward_training_multicore_fp64(
                     num_compute_cores, dm_comm);
             }
         }
+
+        work_in_tile = min(tile_size_in_points, num_points);
+        work_mod_4 = work_in_tile % 4;
+        work_div_4_sub_1 = work_in_tile / 4 - 1;
     }
-    snrt_cluster_hw_barrier();
 
     uint32_t start_compute_sum_dotp_reduction_2 = SNRT_SECTIONED_MCYCLE();
     uint32_t end_compute_sum_dotp_reduction_2 = SNRT_SECTIONED_MCYCLE();
@@ -1345,21 +1351,10 @@ static inline void batchnorm_backward_training_multicore_fp64(
     uint32_t start_compute_invstd_k_grad_mean_grad_weight =
         SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, C * sizeof(double));
+        work_left = num_points - work_in_tile;
         dm_comm->num_points_work_in_tile = work_in_tile;
         dm_comm->work_mod_4 = work_mod_4;
         dm_comm->work_div_4_sub_1 = work_div_4_sub_1;
-        buf_flag = 0;
-        if (num_points != work_in_tile) {
-            grad_ofmap_load =
-                snrt_dma_start_1d(grad_ofmap_scratch, l->grad_ofmap,
-                                  work_in_tile * C * sizeof(double));
-            ifmap_load = snrt_dma_start_1d(ifmap_scratch, l->ifmap,
-                                           work_in_tile * C * sizeof(double));
-            snrt_dma_wait(grad_ofmap_load);
-            snrt_dma_wait(ifmap_load);
-            buf_flag = !buf_flag;
-        }
     } else if (snrt_is_compute_core()) {
         if (num_channels_work_for_core > 0) {
             // need to compute
@@ -1419,11 +1414,16 @@ static inline void batchnorm_backward_training_multicore_fp64(
             snrt_ssr_repeat(SNRT_SSR_DM0, 1);
         }
     }
+    snrt_cluster_hw_barrier();
+    if(snrt_is_dm_core()){
+        snrt_dma_start_1d(l->grad_bias, grad_bias_scratch, C * sizeof(double));
+        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
+                          C * sizeof(double));
+    }
     uint32_t end_compute_invstd_k_grad_mean_grad_weight =
         SNRT_SECTIONED_MCYCLE();
     // DUMP(5);
-    snrt_cluster_hw_barrier();
-    if (work_in_tile == num_points) {
+    if (!is_tiling_enabled) {
         uint32_t start_main_loop_2 = SNRT_SECTIONED_MCYCLE();
         if (snrt_is_dm_core()) {
             snrt_cluster_hw_barrier();
@@ -1448,7 +1448,7 @@ static inline void batchnorm_backward_training_multicore_fp64(
         if (snrt_is_dm_core()) {
             // DUMP(56);
             batchnorm_backward_training_dma_main_loop_fp_agnostic(
-                l, C, C * sizeof(double), C * sizeof(double), true, work_left,
+                l, C, C * sizeof(double), C * sizeof(double), true, num_points, work_left,
                 work_in_tile, dm_comm, tile_size_in_points, grad_ofmap_scratch,
                 ifmap_scratch, grad_ifmap_scratch, buf_flag, 4, 2);
         } else {
@@ -1469,8 +1469,8 @@ static inline void batchnorm_backward_training_multicore_fp64(
                     &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &weight_times_invstd_scratch[compute_id],
                     &k_scratch[compute_id],
-                    &winvstd_times_meank_sub_dmean_scratch[compute_id], C,
-                    work_in_tile, work_mod_4, work_div_4_sub_1,
+                    &winvstd_times_meank_sub_dmean_scratch[compute_id],
+                    buf_flag, C, work_in_tile, work_mod_4, work_div_4_sub_1,
                     tile_size_in_points, num_channels_work_for_core,
                     num_compute_cores, dm_comm);
             }
@@ -1478,8 +1478,6 @@ static inline void batchnorm_backward_training_multicore_fp64(
     }
     uint32_t start_dma_writeback = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_start_1d(l->grad_weight, grad_weight_scratch,
-                          C * sizeof(double));
         snrt_dma_wait_all();
     }
     snrt_cluster_hw_barrier();
@@ -1579,7 +1577,8 @@ static inline void batchnorm_backward_training_multicore_fp32(
     uint32_t points_loadable = doubles_loadable / num_doubles_per_aligned_point;
     uint32_t work_in_tile =
         min(min(points_loadable, tile_size_in_aligned_points), num_points);
-    // uint32_t work_in_tile = 4;
+        
+    bool is_tiling_enabled = work_in_tile != num_points;
     uint32_t work_left = num_points;
     uint32_t work_mod_3 = work_in_tile % 3;
     uint32_t work_div_3_sub_1 = work_in_tile / 3 - 1;
@@ -1657,7 +1656,7 @@ static inline void batchnorm_backward_training_multicore_fp32(
     uint32_t end_invstd_computations = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
-    if (work_in_tile == num_points) {
+    if (!is_tiling_enabled) {
         uint32_t start_main_loop_1 = SNRT_SECTIONED_MCYCLE();
         if (snrt_is_dm_core()) {
         } else {
@@ -1674,10 +1673,10 @@ static inline void batchnorm_backward_training_multicore_fp32(
         uint32_t end_main_loop_1 = SNRT_SECTIONED_MCYCLE();
     } else {
         if (snrt_is_dm_core()) {
-            batchnorm_backward_training_dma_main_loop_fp_agnostic(
+            buf_flag = batchnorm_backward_training_dma_main_loop_fp_agnostic(
                 l, num_doubles_per_aligned_point, num_bytes_per_packed_point,
                 num_bytes_per_aligned_point,
-                is_point_aligned_to_8_byte_boundary, work_left, work_in_tile,
+                is_point_aligned_to_8_byte_boundary, num_points, work_left, work_in_tile,
                 dm_comm, tile_size_in_aligned_points, grad_ofmap_scratch,
                 ifmap_scratch, NULL, buf_flag, 3, 4);
         } else {
@@ -1693,7 +1692,7 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     snrt_cluster_hw_barrier();
                 }
             } else {
-                batchnorm_backward_training_tile_fp32_looped_1(
+                buf_flag = batchnorm_backward_training_tile_fp32_looped_1(
                     &grad_ofmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &current_mean_scratch[compute_id], &grad_bias_scratch[compute_id],
                     &dotp_scratch[compute_id], num_doubles_per_aligned_point,
@@ -1703,6 +1702,10 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     num_compute_cores, dm_comm);
             }
         }
+
+        work_in_tile = min(tile_size_in_aligned_points, num_points);
+        work_mod_3 = work_in_tile % 3;
+        work_div_3_sub_1 = work_in_tile / 3 - 1;
     }
     snrt_cluster_hw_barrier();
 
@@ -1714,23 +1717,10 @@ static inline void batchnorm_backward_training_multicore_fp32(
     if (snrt_is_dm_core()) {
         snrt_dma_start_1d(l->grad_bias, grad_bias_scratch,
                           num_bytes_per_packed_point);
+        work_left = num_points - work_in_tile;
         dm_comm->num_points_work_in_tile = work_in_tile;
         dm_comm->work_mod_3 = work_mod_3;
         dm_comm->work_div_3_sub_1 = work_div_3_sub_1;
-        buf_flag = 0;
-        if (num_points != work_in_tile) {
-            grad_ofmap_load = initiate_dma_1d_or_2d(
-                grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
-                num_bytes_per_aligned_point, num_bytes_per_packed_point,
-                work_in_tile, is_point_aligned_to_8_byte_boundary);
-            ifmap_load = initiate_dma_1d_or_2d(
-                ifmap_scratch, l->ifmap, num_bytes_per_packed_point,
-                num_bytes_per_aligned_point, num_bytes_per_packed_point,
-                work_in_tile, is_point_aligned_to_8_byte_boundary);
-            snrt_dma_wait(grad_ofmap_load);
-            snrt_dma_wait(ifmap_load);
-            buf_flag = !buf_flag;
-        }
     } else if (snrt_is_compute_core()) {
         if (num_doubles_work_for_core_per_aligned_point > 0) {
             register v2s num_points_inv_reg asm(
@@ -1792,7 +1782,7 @@ static inline void batchnorm_backward_training_multicore_fp32(
         SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
 
-    if (work_in_tile == num_points) {
+    if (!is_tiling_enabled) {
         uint32_t start_main_loop_2 = SNRT_SECTIONED_MCYCLE();
         if (snrt_is_dm_core()) {
             snrt_cluster_hw_barrier();
@@ -1822,7 +1812,7 @@ static inline void batchnorm_backward_training_multicore_fp32(
             batchnorm_backward_training_dma_main_loop_fp_agnostic(
                 l, num_doubles_per_aligned_point, num_bytes_per_packed_point,
                 num_bytes_per_aligned_point,
-                is_point_aligned_to_8_byte_boundary, work_left, work_in_tile,
+                is_point_aligned_to_8_byte_boundary, num_points, work_left, work_in_tile,
                 dm_comm, tile_size_in_aligned_points, grad_ofmap_scratch,
                 ifmap_scratch, grad_ifmap_scratch, buf_flag, 3, 5);
         } else {
@@ -1843,7 +1833,7 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &weight_times_invstd_scratch[compute_id],
                     &k_scratch[compute_id],
-                    &winvstd_times_meank_sub_dmean_scratch[compute_id],
+                    &winvstd_times_meank_sub_dmean_scratch[compute_id], buf_flag,
                     num_doubles_per_aligned_point, work_in_tile, work_mod_3,
                     work_div_3_sub_1, tile_size_in_aligned_points,
                     num_doubles_work_for_core_per_aligned_point,
@@ -1862,8 +1852,4 @@ static inline void batchnorm_backward_training_multicore_fp32(
     uint32_t done = snrt_mcycle();
     end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
     end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
-    if (work_in_tile == num_points && snrt_is_compute_core() && compute_id == 0)
-        DUMP(0);
-    if (work_in_tile != num_points && snrt_is_compute_core() && compute_id == 0)
-        DUMP(1);
 }

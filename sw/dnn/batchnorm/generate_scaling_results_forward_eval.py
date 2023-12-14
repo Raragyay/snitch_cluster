@@ -137,12 +137,12 @@ non_aligned_sizes = [
 config_modifiers = {
     64: {
         # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-        # "SINGLE_CORE_OPT": [
-        #     *small_sizes,
-        #     format_size(16, 8, 8),
-        #     format_size(16, 16, 8),
-        #     format_size(16, 16, 16),
-        # ],
+        "SINGLE_CORE_OPT": [
+            *small_sizes,
+            format_size(16, 8, 8),
+            format_size(16, 16, 8),
+            format_size(16, 16, 16),
+        ],
         "MULTICORE_OPT": [
             *small_sizes,
             format_size(8, 8, 8),

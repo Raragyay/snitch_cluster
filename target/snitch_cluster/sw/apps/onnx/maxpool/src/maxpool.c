@@ -3,15 +3,15 @@
 
 // #include "benchmark_all.h"
 // #include "data1.h"
-#include "data_all.h"
-// #include "data.h"
+// #include "data_all.h"
+#include "data.h"
 
-#define ENABLE_1D 1
+#define ENABLE_1D 0
 #define ENABLE_2D 0
 #define ENABLE_3D 0
 
 #define ENABLE_YES_INDICES 0
-#define ENABLE_NO_INDICES 1
+#define ENABLE_NO_INDICES 0
 
 #define ENABLE_COMPREHENSIVE_TEST 0
 
@@ -42,10 +42,10 @@ int main() {
   //               ifmap1,
   //               output_loc1);
   
-  // compute_output_shape(&attr2, attr2.output_shape);
-  // maxpool_f64_2d_no_index(&attr2,
-  //               ifmap2,
-  //               output_loc2);
+  compute_output_shape(&attr2, attr2.output_shape);
+  maxpool_f64_2d_no_index(&attr2,
+                ifmap2,
+                output_loc2);
 
   // compute_output_shape(&attr3, attr3.output_shape);
   // uint32_t a = snrt_mcycle();
@@ -103,26 +103,17 @@ int main() {
     compute_output_shape(&attr_2d, attr_2d.output_shape);
     compute_output_shape(&attr_3d, attr_3d.output_shape);
 
-    uint32_t a1 = snrt_mcycle();
-
     maxpool_f64_1d_no_index(&attr_1d,
       ifmap,
       output_loc);
-
-    uint32_t b1 = snrt_mcycle();
-    DUMP(b1 - a1);
 
     maxpool_f64_2d_no_index(&attr_2d,
       ifmap,
       output_loc);
 
-    snrt_mcycle();
-
     maxpool_f64_3d_no_index(&attr_3d,
       ifmap,
       output_loc);
-
-    snrt_mcycle();
 
     attr_1d.input_shape[2] *= 2;
     attr_2d.input_shape[2 + (i % 2)] *= 2;

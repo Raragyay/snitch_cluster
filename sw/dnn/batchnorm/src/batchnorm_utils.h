@@ -2469,7 +2469,7 @@ batchnorm_backward_training_fp64_no_loop_1(
     snrt_ssr_repeat(SNRT_SSR_DM0, 1);
 }
 
-static inline void __attribute__((always_inline))
+static inline uint32_t __attribute__((always_inline))
 batchnorm_backward_training_tile_fp64_looped_1(
     const double* grad_ofmap_scratch, const double* ifmap_scratch,
     const double* current_mean_scratch, double* sum_scratch,
@@ -2694,6 +2694,7 @@ batchnorm_backward_training_tile_fp64_looped_1(
     snrt_ssr_disable();
     snrt_ssr_repeat(SNRT_SSR_DM0, 1);
     snrt_cluster_hw_barrier();
+    return buf_flag;
 }
 
 static inline void __attribute__((always_inline))
@@ -2808,7 +2809,8 @@ batchnorm_backward_training_tile_fp64_looped_2(
         grad_ifmap_scratch,  // no restrict because grad_ifmap and ifmap used
     const double* ifmap_scratch, const double* weight_times_invstd_scratch,
     const double* k_scratch,
-    const double* winvstd_times_meank_sub_dmean_scratch, uint32_t C,
+    const double* winvstd_times_meank_sub_dmean_scratch, uint32_t buf_flag,
+    uint32_t C,
     uint32_t work_in_tile,  // requires: > 0
     uint32_t work_mod_4,    // precompute to avoid icache branch misses
     uint32_t work_div_4_sub_1, uint32_t tile_size_in_points,
@@ -2826,7 +2828,6 @@ batchnorm_backward_training_tile_fp64_looped_2(
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
 
-    uint32_t buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_points * C * sizeof(double);
     const uint32_t input_channel_array_reset_dist =
@@ -2840,6 +2841,12 @@ batchnorm_backward_training_tile_fp64_looped_2(
         inner_loop_stride,        // stride per inner loop iteration: 1 point
         outer_loop_stride);       // stride per outer loop iteration
     snrt_ssr_enable();
+    
+    if (buf_flag) {
+        ifmap_scratch += tile_size_in_points * C;
+        grad_ifmap_scratch += tile_size_in_points * C;
+        grad_ofmap_scratch += tile_size_in_points * C;
+    }
 
     do {
         register volatile uint32_t i =
@@ -3010,11 +3017,11 @@ batchnorm_backward_training_tile_fp64_looped_2(
     snrt_cluster_hw_barrier();
 }
 
-static inline void batchnorm_backward_training_dma_main_loop_fp_agnostic(
+static inline uint32_t batchnorm_backward_training_dma_main_loop_fp_agnostic(
     batchnorm_backward_training_layer_t* l,
     uint32_t num_doubles_per_aligned_point, uint32_t num_bytes_per_packed_point,
     uint32_t num_bytes_per_aligned_point,
-    bool is_point_aligned_to_8_byte_boundary,
+    bool is_point_aligned_to_8_byte_boundary, uint32_t num_points,
     uint32_t work_left,  // only present for dma
     uint32_t initial_work_in_tile, dm_comm_t* dm_comm,
     uint32_t tile_size_in_points, double* grad_ofmap_scratch,
@@ -3031,16 +3038,29 @@ static inline void batchnorm_backward_training_dma_main_loop_fp_agnostic(
     uint32_t work_in_tile = initial_work_in_tile;
     uint32_t prev_point_start = 0;
     uint32_t num_points_work_in_prev_tile = initial_work_in_tile;
-    uint32_t prev_prev_work_in_tile = 0;
     // split the remaining work "nicely"
     uint32_t min_loops = ceildiv(work_left, tile_size_in_points);
     // align up to multiple of 2 because that avoids stalling in fpu the
     // best
-    uint32_t ideal_work_in_tile = min(
-        align_up_non_power_of_2(ceildiv(work_left, min_loops), unroll), tile_size_in_points);
+
+    uint32_t ideal_work_in_tile =
+        min(align_up_non_power_of_2(ceildiv(work_left, min_loops), unroll),
+            tile_size_in_points);
+
+    const uint32_t target_points_for_last_tile =
+        512 / num_doubles_per_aligned_point;
 
     while (work_left > 0) {
+        // TODO: adaptive scaling but only for loop 1
+        if (grad_ifmap_scratch != NULL) {
         work_in_tile = min(ideal_work_in_tile, work_left);
+            if (work_in_tile == work_left &&
+                target_points_for_last_tile * 2 < work_in_tile) {
+                work_in_tile -= target_points_for_last_tile;
+            }
+        } else {
+            work_in_tile = min(ideal_work_in_tile, work_left);
+        }
 
         work_left -= work_in_tile;
         // update comms
@@ -3085,7 +3105,6 @@ static inline void batchnorm_backward_training_dma_main_loop_fp_agnostic(
                 is_point_aligned_to_8_byte_boundary);
         }
         prev_point_start = point_start;
-        prev_prev_work_in_tile = num_points_work_in_prev_tile;
         num_points_work_in_prev_tile = work_in_tile;
         point_start += work_in_tile;
         buf_flag = !buf_flag;
@@ -3093,6 +3112,23 @@ static inline void batchnorm_backward_training_dma_main_loop_fp_agnostic(
     dm_comm->num_points_work_in_tile = 0;
     dm_comm->work_mod_unroll = 0;
     dm_comm->work_div_unroll_sub_1 = 0xdeadbeef;
+    if (grad_ifmap_scratch == NULL) {
+        // load in next batch
+        initiate_dma_1d_or_2d(
+            &grad_ofmap_scratch[tile_size_in_points *
+                                num_doubles_per_aligned_point * buf_flag],
+            &((char*)l->grad_ofmap)[0 * num_bytes_per_packed_point],
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
+            num_bytes_per_packed_point, min(tile_size_in_points, num_points),
+            is_point_aligned_to_8_byte_boundary);
+        initiate_dma_1d_or_2d(
+            &ifmap_scratch[tile_size_in_points * num_doubles_per_aligned_point *
+                           buf_flag],
+            &((char*)l->ifmap)[0 * num_bytes_per_packed_point],
+            num_bytes_per_packed_point, num_bytes_per_aligned_point,
+            num_bytes_per_packed_point, min(tile_size_in_points, num_points),
+            is_point_aligned_to_8_byte_boundary);
+    }
     // signal last iteration that there is no more work
     snrt_cluster_hw_barrier();
     // wait for last tile to finish
@@ -3107,7 +3143,8 @@ static inline void batchnorm_backward_training_dma_main_loop_fp_agnostic(
             num_bytes_per_aligned_point, num_points_work_in_prev_tile,
             is_point_aligned_to_8_byte_boundary);
     }
-    snrt_dma_wait_all();
+    buf_flag = !buf_flag;
+    return buf_flag;
 }
 
 static inline void __attribute__((always_inline))
@@ -3252,7 +3289,7 @@ batchnorm_backward_training_tile_fp32_no_loop_1(
     snrt_ssr_repeat(SNRT_SSR_DM0, 1);
 }
 
-static inline void __attribute__((always_inline))
+static inline uint32_t __attribute__((always_inline))
 batchnorm_backward_training_tile_fp32_looped_1(
     const v2s* grad_ofmap_scratch, const v2s* ifmap_scratch,
     const v2s* current_mean_scratch, v2s* sum_scratch, v2s* dotp_scratch,
@@ -3491,6 +3528,7 @@ batchnorm_backward_training_tile_fp32_looped_1(
     snrt_ssr_disable();
     snrt_ssr_repeat(SNRT_SSR_DM0, 1);
     snrt_cluster_hw_barrier();
+    return buf_flag;
 }
 
 static inline void __attribute__((always_inline))
@@ -3650,7 +3688,7 @@ batchnorm_backward_training_tile_fp32_looped_2(
     const v2s* grad_ofmap_scratch, v2s* grad_ifmap_scratch,
     const v2s* ifmap_scratch, const v2s* current_mean_scratch,
     const v2s* weight_scratch, const v2s* invstd_scratch, const v2s* k_scratch,
-    const v2s* grad_mean_scratch, uint32_t num_doubles_per_aligned_point,
+    const v2s* grad_mean_scratch, uint32_t buf_flag, uint32_t num_doubles_per_aligned_point,
     uint32_t work_in_tile,  // requires: > 0
     uint32_t work_mod_3,    // precompute to avoid icache branch misses
     uint32_t work_div_3_sub_1, uint32_t tile_size_in_aligned_points,
@@ -3668,7 +3706,6 @@ batchnorm_backward_training_tile_fp32_looped_2(
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
 
-    bool buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_aligned_points *
                                      num_doubles_per_aligned_point *
@@ -3684,7 +3721,12 @@ batchnorm_backward_training_tile_fp32_looped_2(
         num_doubles_work_for_core_per_point,  // dimension of outer loop
         inner_loop_stride,   // stride per inner loop iteration: 1 point
         outer_loop_stride);  // stride per outer loop iteration
-    // TODO: fix num_channels_work_for_core == 0.
+
+    if (buf_flag) {
+        ifmap_scratch += tile_size_in_aligned_points * num_doubles_per_aligned_point;
+        grad_ifmap_scratch += tile_size_in_aligned_points * num_doubles_per_aligned_point;
+        grad_ofmap_scratch += tile_size_in_aligned_points * num_doubles_per_aligned_point;
+    }
     do {
         register volatile uint32_t i =
             0;  // updated during frep for pseudo-dual issue
@@ -3694,7 +3736,7 @@ batchnorm_backward_training_tile_fp32_looped_2(
         snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, grad_ofmap_scratch);
         // do 1 loop
         do {  // while (i < num_channels_to_process)
-            // Can only manual unroll 5 times since the max for frep is 16
+            // Can only manual unroll 3 times since the max for frep is 16
             register v2s invstd;
             invstd.f64 = invstd_scratch->f64;
             register v2s current_mean;

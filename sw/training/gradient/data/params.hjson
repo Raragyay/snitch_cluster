@@ -1,9 +1,9 @@
 {
-    M: 64
-    N: 64
-    K: 64
-    M_tiles: 4 
-    N_tiles: 4 
-    K_tiles: 4 
+    M: 32
+    N: 32
+    K: 32
+    M_tiles: 2
+    N_tiles: 2
+    K_tiles: 2
     prec: 64
 }

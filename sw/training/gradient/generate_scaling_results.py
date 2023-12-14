@@ -9,9 +9,9 @@ import time
 NAME_FILE = 'tiling_loop.csv'
 
 base_config = {
-    "M" : 64,
-    "N" : 64,
-    "K" : 64,
+    "M" : 16,
+    "N" : 16,
+    "K" : 16,
     "M_tiles" : 2,
     "N_tiles" : 2,
     "K_tiles" : 2,

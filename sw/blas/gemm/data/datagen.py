@@ -58,6 +58,7 @@ def emit_header(**kwargs):
     k_tiles = kwargs['k_tiles']
     parallelize_m = kwargs['parallelize_m']
     parallelize_k = kwargs['parallelize_k']
+    impl = kwargs['impl']
 
     assert (M % m_tiles) == 0, 'M is not an integer multiple of tile size'
     assert (N % n_tiles) == 0, 'N is not an integer multiple of tile size'
@@ -114,6 +115,7 @@ def emit_header(**kwargs):
     b = b.T if kwargs['tb'] else b
 
     data_str = [emit_license()]
+    data_str += ["#define " + impl]
     data_str += [format_scalar_definition('uint32_t', 'M', M)]
     data_str += [format_scalar_definition('uint32_t', 'N', N)]
     data_str += [format_scalar_definition('uint32_t', 'K', K)]

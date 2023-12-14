@@ -8,6 +8,7 @@ import time
 import progressbar
 
 base_config = {
+    "impl": "MULTICORE_OPT",
     "M": 8,
     "N": 8,
     "K": 8,
@@ -28,6 +29,7 @@ base_config = {
 
 def format_size(M, N, K):
     return {
+    "impl": "MULTICORE_OPT",
     "M": M,
     "N": N,
     "K": K,
@@ -144,7 +146,7 @@ non_aligned_sizes = [
 config_modifiers = {
     64: {
         # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-        "SINGLE_CORE_OPT": [
+        "SINGLECORE_OPT": [
             # *small_sizes,
             format_size(8, 8, 8),
             format_size(16, 16, 16),
@@ -161,7 +163,7 @@ config_modifiers = {
         ],
     },
     32: {
-        "SINGLE_CORE_OPT": [
+        "SINGLECORE_OPT": [
             format_size(8, 8, 8),
             format_size(16, 16, 16),
             format_size(32, 32, 32),
@@ -216,7 +218,7 @@ def main():
             merged_config = {
                 **base_config,
                 **config,
-                # "impl_opt_level": impl,
+                "impl": impl,
                 "prec": prec,
             }
             M = merged_config["M"]
@@ -250,7 +252,7 @@ def main():
             ) as trace_results:
                 trace_df = pd.read_csv(trace_results)
             # Ignore the tile size calculation - that can be assumed to stay static for a given input size
-            cycles = (trace_df["done"] - trace_df["start_main"]).iloc[0]
+            
 
             # currently section 8 is main loop
             with open(
@@ -267,6 +269,9 @@ def main():
             ]
             main_loop_snitch_occupancy = raw_perf_df.loc[
                 0, f"{main_loop_mcycle_section}_snitch_occupancy"
+            ]
+            cycles = raw_perf_df.loc[
+                0, f"{main_loop_mcycle_section}_cycles"
             ]
 
             # grad_ifmap_max_abs_err, grad_ifmap_max_rel_err = pd.read_csv(
@@ -346,20 +351,20 @@ def main():
                     *perf_counters_int,
                 )
             )
-            # subprocess.run(
-            #     f"cp logs/hart_00000000_perf.json ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_hart_00000000_perf.json",
-            #     shell=True,
-            #     cwd=target_snitch_cluster_path,
-            #     stdout=subprocess.DEVNULL,
-            #     stderr=subprocess.STDOUT,
-            # ).check_returncode()
-            # subprocess.run(
-            #     f"cp logs/trace_hart_00000000.txt ../../sw/dnn/batchnorm/scaling_raw_results/{prec}b_{impl}_{C}_{H}_{W}_{TILE_CI}_trace_hart_00000000.txt",
-            #     shell=True,
-            #     cwd=target_snitch_cluster_path,
-            #     stdout=subprocess.DEVNULL,
-            #     stderr=subprocess.STDOUT,
-            # ).check_returncode()
+        subprocess.run(
+            f"cp logs/hart_00000000_perf.json ../../sw/blas/gemm/scaling_raw_results/{prec}b_{impl}_{M}_hart_00000000_perf.json",
+            shell=True,
+            cwd=target_snitch_cluster_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        ).check_returncode()
+        subprocess.run(
+            f"cp logs/trace_hart_00000000.txt ../../sw/blas/gemm/scaling_raw_results/{prec}b_{impl}_{M}_trace_hart_00000000.txt",
+            shell=True,
+            cwd=target_snitch_cluster_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        ).check_returncode()
     except Exception as e:
         traceback.print_exc()
     except KeyboardInterrupt:

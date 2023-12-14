@@ -510,7 +510,12 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
         // First matrix is stored in transposed format
         if (ta) {
             const uint32_t ssr0_b[4] = {unroll, K, N / unroll, M};
+#ifdef MULTICORE_OPT
             const uint32_t ssr0_i[4] = {0, 8 * ldA, 0, 8 * 8};
+#endif
+#ifdef SINGLECORE_OPT
+            const uint32_t ssr0_i[4] = {0, 8 * ldA, 0, 8 * 1};
+#endif
 
             snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
                              ssr0_i[1], ssr0_i[2], ssr0_i[3]);
@@ -1038,8 +1043,12 @@ void __gemm_fp32_complete_ta(const uint32_t M, const uint32_t N, const uint32_t 
     // once in the beginning
     if (setup_SSR) {
             const uint32_t ssr0_b[4] = {unroll/2, K, N / unroll, M};
+#ifdef MULTICORE_OPT
             const uint32_t ssr0_i[4] = {0, 4 * ldA, 0, 8 * 8};
-
+#endif
+#ifdef SINGLECORE_OPT
+            const uint32_t ssr0_i[4] = {0, 4 * ldA, 0, 8 * 1};
+#endif
             snrt_ssr_loop_3d(SNRT_SSR_DM0, ssr0_b[1], ssr0_b[2], ssr0_b[3],
                              ssr0_i[1], ssr0_i[2], ssr0_i[3]);
             snrt_ssr_repeat(SNRT_SSR_DM0, 2);
@@ -2136,6 +2145,83 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
     }
 }
 
+
+void sc_sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
+                uint32_t transa, uint32_t transb, uint32_t m, uint32_t n,
+                uint32_t k, void* alpha, void* a, void* b,
+                void* beta, void* c) {
+    if (snrt_cluster_core_idx() == 0) {
+
+        switch (prec) {
+            case FP64:
+                gemm_fp64_complete(m, n, k, (double*)a,
+                                    k,
+                                    transa, (double*)b, n, transb, (double*)c,
+                                    n, (double*)alpha, (double*)beta, setup_ssr);
+                // gemm_fp64_opt(m, n, k, (double*)a,
+                //                     k,
+                //                     transa, (double*)b, n, transb, (double*)c,
+                //                     n, &beta, setup_ssr);
+                // gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
+                //                    lda_strided, transa, (double*)b, ldb, transb,
+                //                    (double*)c + offsetC, ldc_strided,
+                //                    (double)beta);
+                break;
+            case FP32:
+                /*FRAC M HAS TO BE MODIFIED because we compute 2 rows at the time*/
+                if (!transa && !transb)
+                    gemm_fp32_complete(m, n, k, (float*)a,
+                        k,
+                        transa, (float*)b, n, transb, (float*)c,
+                        n, (float*)alpha, (float*)beta, setup_ssr);
+                else if (!transa && transb)
+                    gemm_fp32_complete(m, n, k, (float*)a,
+                        k,
+                        transa, (float*)b, n, transb, (float*)c,
+                        n, (float*)alpha, (float*)beta, setup_ssr);
+                else if (transa && !transb)
+                    gemm_fp32_complete(m/2, n, k, (float*)a,
+                        k,
+                        transa, (float*)b, n, transb, (float*)c,
+                        n, (float*)alpha, (float*)beta, setup_ssr);
+                else
+                    gemm_fp32_complete(m, n, k, (float*)b,
+                        k,
+                        !transa, (float*)a, n, !transb, (float*)c,
+                        n, (float*)alpha, (float*)beta, setup_ssr);
+
+                // gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
+                //                    lda_strided, transa, (float*)b, ldb, transb,
+                //                    (float*)c + offsetC, ldc_strided,
+                //                    (float)beta);
+                // gemm_fp32_opt(frac_m, n, k, (float*)a + offsetA, lda_strided,
+                //             (float*)b, ldb, (float*)c + offsetC, ldc_strided,
+                //             (uint32_t*)beta, setup_ssr);
+                break;
+            // case FP16:
+            //     if (expand) {
+            //         gemm_fp16_ex_opt(frac_m, n, k, (__fp16*)a + offsetA,
+            //                          lda_strided, (__fp16*)b, ldb,
+            //                          (__fp16*)c + offsetC, ldc_strided, (__fp16*)(&beta),
+            //                          setup_ssr);
+            //     } else {
+            //         gemm_fp16_opt(frac_m, n, k, (__fp16*)a + offsetA,
+            //                       lda_strided, (__fp16*)b, ldb,
+            //                       (__fp16*)c + offsetC, ldc_strided, (__fp16*)(&beta),
+            //                       setup_ssr);
+            //     }
+            //     break;
+            // case FP8:
+            //     gemm_fp8_ex_opt(frac_m, n, k, (char*)a + offsetA, lda, (char*)b,
+            //                     ldb, (char*)c + offsetC, ldc_strided, (char*)&beta,
+            //                     setup_ssr);
+            //     break;
+        }
+    }
+}
+
+
+
 // Multiple-cluster multiple-tile GEMM implementation.
 // If parallelize_m, assigns a distinct subset of M-tiles to distinct clusters.
 // If parallelize_k, then K-tiles are distributed to distinct clusters; a
@@ -2286,9 +2372,18 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
                                      SNRT_PERF_CNT_TCDM_CONGESTED);
 
+                    
+#ifdef MULTICORE_OPT
                     sc_st_gemm(prec, expand, setup_ssr, transa, transb, frac_m,
                                frac_n, frac_k, alpha, local_a, lda, local_b, ldb,
                                beta_k, local_c_partial, ldc);
+#endif
+#ifdef SINGLECORE_OPT
+                    sc_sc_st_gemm(prec, expand, setup_ssr, transa, transb, M,
+                               N, K, alpha, local_a, local_b,
+                               beta_k, local_c_partial);
+#endif
+
                     uint32_t done = snrt_mcycle();
                     end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
                     end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);

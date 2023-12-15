@@ -698,7 +698,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
           // Get an upper bound on the number of kernels that might be affected by rightside padding.
           // There might be a more exact calculation but it seems complicated.
-          int padded_kernels = ceil_div(attr->kernel_shape[0] - 1, attr->strides[0]);
+          int padded_kernels = ceil_div(attr->kernel_shape[0] * attr->dilations[0] - 1, attr->strides[0]);
           for (int i = 0; i < padded_kernels; ++i) {
 
             // Could be negative if kernels use padding on both sides.
@@ -928,7 +928,6 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
       // We can probably use a different algorithm to make this efficient with fewer channels,
       // but this is enough to demonstrate the optimal case.
       attr->input_shape[0] * attr->input_shape[1] >= n_cores) {
-    DUMP(11111);
 
     int input_size = attr->input_shape[2] * attr->input_shape[3];
     int pooled_size = attr->output_shape[2] * attr->output_shape[3];
@@ -990,30 +989,30 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
     int out_h = attr->output_shape[2];
     int out_w = attr->output_shape[3];
 
-    int new_pooled_size = pooled_size;
-    double* in_copy = in;
-    double* out_copy = out;
-
     if (attr->pads[0] != 0 || attr->pads[1] != 0 || attr->pads[2] != 0 || attr->pads[3] != 0) {
 
       int height = attr->input_shape[2];
       int width = attr->input_shape[3];
       int x_step = height * width;
 
-      // int total_els = total_channels * height * width;
-
       int pooled_height = attr->output_shape[2];
       int pooled_width = attr->output_shape[3];
-      int y_step = pooled_height * pooled_width;
+      int y_step = pooled_size;
 
-      int pad_top = ceil_div(attr->pads[1], attr->strides[1]);
-      int pad_bot_bound = attr->output_shape[3] - ceil_div(attr->kernel_shape[1] - 1, attr->strides[1]);
-      int pad_left = ceil_div(attr->pads[0], attr->strides[0]);
-      int pad_right_bound = attr->output_shape[2] - ceil_div(attr->kernel_shape[0] - 1, attr->strides[0]);
-      DUMP(pad_top);
-      DUMP(pad_bot_bound);
-      DUMP(pad_left);
-      DUMP(pad_right_bound);
+      // The bottom and right bounds are a worst case. They can probably be tightened with a better formula.
+      int pad_top = ceil_div(attr->pads[0], attr->strides[0]);
+      int pad_bot_remove = ceil_div(attr->kernel_shape[0] * attr->dilations[0] - 1, attr->strides[0]);
+      int pad_bot_bound = attr->output_shape[2] - pad_bot_remove;
+      int pad_left = ceil_div(attr->pads[1], attr->strides[1]);
+      int pad_right_remove = ceil_div(attr->kernel_shape[1] * attr->dilations[1] - 1, attr->strides[1]);
+      int pad_right_bound = attr->output_shape[3] - pad_right_remove;
+      // if (start_step == 0) DUMP(pad_top);
+      // if (start_step == 0) DUMP(ceil_div(attr->kernel_shape[1] - 1, attr->strides[1]));
+      // if (start_step == 0) DUMP(pad_bot_bound);
+
+      // if (start_step == 0) DUMP(pad_left);
+      // if (start_step == 0) DUMP(ceil_div(attr->kernel_shape[0] - 1, attr->strides[0]));
+      // if (start_step == 0) DUMP(pad_right_bound);
 
       // This is just adapted from the old version of maxpool with SSR/FREP.
       // It's pretty inefficient for computing the kernels with padding and wastes lots of iterations.
@@ -1026,7 +1025,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
         int ph = inst_idx / pooled_width;
         int pw = inst_idx % pooled_width;
         
-        if (ph > pad_left && ph < pad_right_bound && pw > pad_top && pw < pad_bot_bound) continue;
+        if (ph >= pad_top && ph < pad_bot_bound && pw >= pad_left && pw < pad_right_bound) continue;
 
         int x_d = i * x_step;
         int y_d = i * y_step;
@@ -1069,231 +1068,34 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
       }
 
-      in += in_w * pad_top + pad_left;
+      int top_offset = -attr->pads[0] + pad_top * attr->strides[0];
+      int left_offset = -attr->pads[1] + pad_left * attr->strides[1];
+      // if (start_step == 0) DUMP(top_offset);
+      // if (start_step == 0) DUMP(left_offset);
+
+      in += in_w * top_offset + left_offset;
       out += out_w * pad_top + pad_left;
-      out_w -= pad_right_bound;
+      // if (start_step == 0) DUMP(out_w * pad_top + pad_left);
+      // if (start_step == 0) DUMP(out_h);
+      // if (start_step == 0) DUMP(out_w);
+
+      out_h -= pad_top;
+      out_h -= pad_bot_remove;
+
       out_w -= pad_left;
-      out_h -= pad_bot_bound;
-      out_h -= pad_top; 
+      out_w -= pad_right_remove;
+
+      if (out_h <= 0 || out_w <= 0) return;
+
+      // if (start_step == 0) DUMP(out_h);
+      // if (start_step == 0) DUMP(out_w);
+
+      // return;
     }
-
-    // if (attr->pads[0] != 0 || attr->pads[1] != 0 || attr->pads[2] != 0 || attr->pads[3] != 0) {
-
-    //   // The work distribution strategy for padding is only across channels.
-    //   int work_n_channels = n_channels / n_cores;
-    //   if (start_step < n_channels % n_cores) ++work_n_channels;
-
-    //   if (work_n_channels > 0) {
-
-    //     // We first compute all rows that involve top padding, bearing in mind there may also be left and right padding.
-    //     // Split the row into 3: part with left padding, part with only top padding, part with only right padding.
-    //     if (attr->pads[1] != 0) {
-
-    //       int width_left = in_w;
-
-    //       int top_padding_remain = attr->pads[1];
-    //       while (top_padding_remain > 0) {
-
-    //         int kernel_width = attr->kernel_shape[1] - ceil_div(top_padding_remain, attr->dilations[1]);
-    //         if (attr->pads[0] != 0) {
-
-    //           int left_padding_remain = attr->pads[0];
-    //           // Fill in all kernels that include the top and left padding.
-    //           while (left_padding_remain > 0) {
-
-    //             int kernel_height = attr->kernel_shape[0] - ceil_div(left_padding_remain, attr->dilations[0]);
-
-    //             snrt_ssr_loop_3d(SNRT_SSR_DM0,
-    //               kernel_width,
-    //               kernel_height,
-    //               work_n_channels,
-    //               attr->dilations[1] * sizeof(double),
-    //               in_h * attr->dilations[0] * sizeof(double),
-    //               n_cores * input_size * sizeof(double));
-                
-    //             snrt_ssr_loop_1d(SNRT_SSR_DM1,
-    //               work_n_channels,
-    //               n_cores * pooled_size * sizeof(double));
-                
-    //             snrt_ssr_enable(SNRT_SSR_DM0, SNRT_SSR_3D, in + start_step * input_size);
-    //             snrt_ssr_enable(SNRT_SSR_DM1, SNRT_SSR_1D, out + start_step * pooled_size);
-
-    //             snrt_ssr_enable();
-
-    //             const register int n_frep = kernel_height * kernel_width - 2;
-    //             const register int total_iters = work_n_channels;
-
-    //             ssr_asm_no_index_optimized(n_frep, total_iters);
-
-    //             snrt_ssr_disable();
-    //             snrt_fpu_fence();
-
-    //             // if (new_pooled_size < 2) return;
-    //             // --new_pooled_size;
-    //             // --in_w;
-    //             // ++out;
-    //             --width_left;
-    //             left_padding_remain -= attr->strides[0];
-
-    //           }
-
-    //         }
-
-    //         if (attr->pads[2] != 0) {
-
-    //           int padded_kernels = ceil_div(attr->kernel_shape[0] - 1, attr->strides[0]);
-    //           for (int i = 0; i < padded_kernels; ++i) {
-
-    //             int offset = (pooled_size - padded_kernels + i) * attr->strides[0];
-
-    //             int vals_remain = ceil_div(input_size + attr->pads[0] - offset, attr->dilations[0]);
-
-    //             snrt_ssr_loop_4d(SNRT_SSR_DM0,
-    //               vals_remain,
-    //               )
-
-    //           }
-
-    //         }
-
-    //         // Fill in kernels that only include the top padding.
-    //         snrt_ssr_loop_4d(SNRT_SSR_DM0,
-    //           kernel_width,
-    //           attr->kernel_shape[0],
-    //           width_left,
-    //           work_n_channels,
-    //           attr->dilations[1] * sizeof(double),
-    //           in_h * attr->dilations[0] * sizeof(double),
-    //           attr->strides[0] * sizeof(double),
-    //           n_cores * input_size * sizeof(double));
-
-    //         snrt_ssr_loop_1d(SNRT_SSR_DM1,
-    //           work_n_channels,
-    //           n_cores * pooled_size * sizeof(double));
-
-    //         int n_padded = ceil_div(attr->pads[0], attr->strides[0]);
-    //         snrt_ssr_enable(SNRT_SSR_DM0, SNRT_SSR_3D, in - attr->pads[0] + n_padded * attr->strides[0]);
-    //         snrt_ssr_enable(SNRT_SSR_DM1, SNRT_SSR_1D, out + n_padded);
-
-    //         const register int n_frep = attr->kernel_shape[0] * kernel_width - 2;
-    //         const register int total_iters = width_left * work_n_channels;
-
-    //         ssr_asm_no_index_optimized(n_frep, total_iters);
-
-    //         snrt_ssr_disable();
-    //         snrt_fpu_fence();
-
-    //       }
-
-    //     }
-
-    //   }
-
-    // }
-
-    // if (attr->pads[0] != 0 || attr->pads[1] != 0 || attr->pads[2] || attr->pads[3]) {
-
-    //   int work_n_channels = n_channels / n_cores;
-    //   if (start_step < n_channels % n_cores) ++work_n_channels;
-
-    //   if (work_n_channels > 0) {
-
-    //     // If we have padding we special case the first and last kernel(s) of each channel.
-    //     // If stride is less than padding it's possible multiple kernels at the start will include padding.
-    //     // Same can happen at the end regardless of stride.
-    //     if (attr->pads[0] != 0) {
-    //       int padding_left = attr->pads[0];
-    //       while (padding_left > 0) {
-    //         int n_skip = ceil_div(padding_left, attr->dilations[0]);
-
-    //         int kernel_left = attr->kernel_shape[0] - n_skip;
-
-    //         snrt_ssr_loop_2d(SNRT_SSR_DM0,
-    //           kernel_left,
-    //           work_n_channels,
-    //           attr->dilations[0] * sizeof(double),
-    //           n_cores * input_size * sizeof(double));
-
-    //         snrt_ssr_loop_1d(SNRT_SSR_DM1,
-    //           work_n_channels,
-    //           n_cores * pooled_size * sizeof(double));
-
-    //         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in + start_step * input_size);
-    //         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + start_step * pooled_size);
-
-    //         snrt_ssr_enable();
-
-    //         const register int n_frep = kernel_left - 2;
-    //         const register int total_iters = work_n_channels;
-
-    //         ssr_asm_no_index_optimized(n_frep, total_iters);
-
-    //         snrt_ssr_disable();
-    //         snrt_fpu_fence();
-
-    //         if (new_pooled_size == 1) return;
-    //         --new_pooled_size;
-    //         padding_left -= attr->strides[0];
-
-    //       }
-
-    //     }
-
-    //     if (attr->pads[1] != 0) {
-
-    //       // Get an upper bound on the number of kernels that might be affected by rightside padding.
-    //       // There might be a more exact calculation but it seems complicated.
-    //       int padded_kernels = ceil_div(attr->kernel_shape[0] - 1, attr->strides[0]);
-    //       for (int i = 0; i < padded_kernels; ++i) {
-
-    //         // Could be negative if kernels use padding on both sides.
-    //         int offset = (pooled_size - padded_kernels + i) * attr->strides[0];
-    //         // How many vals of actual data we have before reaching padding.
-    //         int vals_left = ceil_div(input_size + attr->pads[0] - offset, attr->dilations[0]);
-
-    //         snrt_ssr_loop_2d(SNRT_SSR_DM0,
-    //           vals_left,
-    //           work_n_channels,
-    //           attr->dilations[0] * sizeof(double),
-    //           n_cores * input_size * sizeof(double));
-
-    //         snrt_ssr_loop_1d(SNRT_SSR_DM1,
-    //           work_n_channels,
-    //           n_cores * pooled_size * sizeof(double));
-            
-    //         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in_copy - attr->pads[0] + offset + start_step * input_size);
-    //         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out_copy + pooled_size - padded_kernels + i + start_step * pooled_size);
-
-    //         snrt_ssr_enable();
-
-    //         const register int n_frep = vals_left - 2;
-    //         const register int total_iters = work_n_channels;
-
-    //         ssr_asm_no_index_optimized(n_frep, total_iters);
-
-    //         snrt_ssr_disable();
-    //         snrt_fpu_fence();
-
-    //         --new_pooled_size;
-    //         if (new_pooled_size < 1) return;
-
-    //       }
-
-    //     }
-    //   }
-
-    //   if (attr->pads[0] != 0) {
-    //     int n_front_pad = ceil_div(attr->pads[0], attr->strides[0]);
-    //     in += -attr->pads[0] + n_front_pad * attr->strides[0];
-    //     out += n_front_pad;
-    //   }
-
-    // }
 
     // The first and simplest strategy is to distribute channels evenly. This is close to optimal at scale
     // as work is unbalanced by at most one channel between any two cores.
     // We are limited to 4D SSR so the channel iteration must be a traditional loop.
-    DUMP(out_w + out_h * 100000);
     for (int i = start_step; i < n_channels; i += n_cores) {
 
       snrt_ssr_loop_4d(SNRT_SSR_DM0,
@@ -1302,16 +1104,19 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
         out_w,
         out_h,
         attr->dilations[1] * sizeof(double),
-        in_h * attr->dilations[0] * sizeof(double),
+        in_w * attr->dilations[0] * sizeof(double),
         attr->strides[1] * sizeof(double),
-        in_h * attr->strides[0] * sizeof(double));
+        in_w * attr->strides[0] * sizeof(double));
       
-      snrt_ssr_loop_1d(SNRT_SSR_DM1,
-        out_w * out_h,
-        sizeof(double));
+      // 2D is necessary in case there is padding
+      snrt_ssr_loop_2d(SNRT_SSR_DM1,
+        out_w,
+        out_h,
+        sizeof(double),
+        attr->output_shape[3] * sizeof(double));
       
       snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + input_size * i);
-      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + pooled_size * i);
+      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + pooled_size * i);
 
       snrt_ssr_enable();
 
@@ -1335,11 +1140,6 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
     // closest multiple of n_cores <= the number of columns, then distribute the remaining columns
     // up to the multiple of n_cores <= number of rows. Then each kernel of the remainder is distributed
     // to one core each. This strategy requires 3 SSR rotations per channel, however.
-    // for (int i = 0; i < n_channels; ++i) {
-
-
-
-    // }
 
   }
   #endif

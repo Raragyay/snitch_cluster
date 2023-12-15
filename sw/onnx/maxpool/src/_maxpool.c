@@ -20,7 +20,7 @@
 #define DMA_INDICES 1
 #define USE_SSR_FREP_1D 1
 #define USE_SSR_FREP_2D 1
-#define USE_SSR_FREP_3D 0
+#define USE_SSR_FREP_3D 1
 #define USE_SSR_FREP_ALL 0
 #define USE_DOUBLE_BUFFERING 1
 #define ENABLE_SPECIALIZED 1
@@ -54,6 +54,12 @@ static inline int align(int);
 
 int align(int a) {
   return (a + 4) - ((a + 4) % 8);
+}
+
+static inline int neg_mod(int, int);
+
+int neg_mod(int x, int y) {
+  return ((-x % y) + y) % y;
 }
 
 static inline void ssr_asm_with_index(int*, int);
@@ -628,7 +634,6 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
                    int n_cores,
                    int end_step) {
 
-                    
   #if ENABLE_SPECIALIZED && !defined(MAXPOOL_ROW_MAJOR) && !defined(MAXPOOL_COL_MAJOR)
   // The optimized algorithm doesn't work if there are kernels that touch padding on both sides.
   if ((attr->kernel_shape[0] - 1) * attr->dilations[0] + 1 <= attr->input_shape[2]) {
@@ -670,8 +675,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
               work_n_channels,
               n_cores * pooled_size * sizeof(double));
 
-            int in_offset = -padding_left % attr->dilations[0];
-            if (in_offset < 0) in_offset += attr->dilations[0];
+            int in_offset = neg_mod(padding_left, attr->dilations[0]);
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in + in_offset + start_step * input_size);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out + out_offset + start_step * pooled_size);
 
@@ -699,12 +703,15 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
           // Get an upper bound on the number of kernels that might be affected by rightside padding.
           // There might be a more exact calculation but it seems complicated.
           int padded_kernels = ceil_div(attr->kernel_shape[0] * attr->dilations[0] - 1, attr->strides[0]);
+
           for (int i = 0; i < padded_kernels; ++i) {
 
             // Could be negative if kernels use padding on both sides.
-            int offset = (pooled_size - padded_kernels + i) * attr->strides[0];
+            int extra = neg_mod(attr->pads[0], attr->strides[0]);
+            int offset = (pooled_size - padded_kernels + i - ceil_div(attr->pads[0], attr->strides[0])) * attr->strides[0] + extra;
+
             // How many vals of actual data we have before reaching padding.
-            int vals_left = ceil_div(input_size + attr->pads[0] - offset, attr->dilations[0]);
+            int vals_left = min(attr->kernel_shape[0], ceil_div(input_size - offset, attr->dilations[0]));
 
             snrt_ssr_loop_2d(SNRT_SSR_DM0,
               vals_left,
@@ -716,7 +723,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
               work_n_channels,
               n_cores * pooled_size * sizeof(double));
             
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in_copy - attr->pads[0] + offset + start_step * input_size);
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in_copy + offset + start_step * input_size);
             snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_1D, out_copy + pooled_size - padded_kernels + i + start_step * pooled_size);
 
             snrt_ssr_enable();
@@ -749,7 +756,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     // If n_channels >= n_cores then we can make it almost optimal by distributing entire
     // matrices between the cores. This strategy works at scale,
     // we could additionally implement special cases for very small inputs if desired.
-    if (pooled_size < n_cores && n_channels >= n_cores) {
+    if (/*pooled_size < n_cores && n_channels >= n_cores*/1) {
 
       int work_n_channels = n_channels / n_cores;
       if (start_step < n_channels % n_cores) ++work_n_channels;
@@ -846,8 +853,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
     if (hstart < 0) {
-      hstart = (hstart % attr->dilations[0]);
-      if (hstart < 0) hstart += attr->dilations[0];
+      hstart = neg_mod(hstart, attr->dilations[0]);
     }
 
     int h_index;
@@ -949,18 +955,18 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
       out_w,
       work_n_rows,
       attr->dilations[1] * sizeof(double),
-      in_h * attr->dilations[0] * sizeof(double),
+      in_w * attr->dilations[0] * sizeof(double),
       attr->strides[1] * sizeof(double),
-      n_cores * in_h * attr->strides[0] * sizeof(double));
+      n_cores * in_w * attr->strides[0] * sizeof(double));
     
     snrt_ssr_loop_2d(SNRT_SSR_DM1,
       out_w,
       work_n_rows,
       sizeof(double),
-      n_cores * out_h * sizeof(double));
+      n_cores * out_w * sizeof(double));
     
-    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + start_step * in_h * attr->strides[0]);
-    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + start_step * out_h);
+    snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + start_step * in_w * attr->strides[0]);
+    snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + start_step * out_w);
 
     snrt_ssr_enable();
 
@@ -1034,16 +1040,14 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
         int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
         if (hstart < 0) {
-          hstart = (hstart % attr->dilations[0]);
-          if (hstart < 0) hstart += attr->dilations[0];
+          hstart = neg_mod(hstart, attr->dilations[0]);
         }
 
         int wstart = pw * attr->strides[1] - attr->pads[1];
         int wend = min(wstart + attr->kernel_shape[1] * attr->dilations[1], width);
 
         if (wstart < 0) {
-          wstart = (wstart % attr->dilations[1]);
-          if (wstart < 0) wstart += attr->dilations[1];
+          wstart = neg_mod(wstart, attr->dilations[1]);
         }
 
         int pool_index = ph * pooled_width + pw;
@@ -1169,16 +1173,14 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
     int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
     if (hstart < 0) {
-      hstart = (hstart % attr->dilations[0]);
-      if (hstart < 0) hstart += attr->dilations[0];
+      hstart = neg_mod(hstart, attr->dilations[0]);
     }
 
     int wstart = pw * attr->strides[1] - attr->pads[1];
     int wend = min(wstart + attr->kernel_shape[1] * attr->dilations[1], width);
 
     if (wstart < 0) {
-      wstart = (wstart % attr->dilations[1]);
-      if (wstart < 0) wstart += attr->dilations[1];
+      wstart = neg_mod(wstart, attr->dilations[1]);
     }
 
     int pool_index = ph * pooled_width + pw;
@@ -1317,24 +1319,21 @@ void MAXPOOL_FN_3D(maxpool_attributes* attr,
     int hend = min(hstart + attr->kernel_shape[0] * attr->dilations[0], height);
 
     if (hstart < 0) {
-      hstart = (hstart % attr->dilations[0]);
-      if (hstart < 0) hstart += attr->dilations[0];
+      hstart = neg_mod(hstart, attr->dilations[0]);
     }
 
     int wstart = pw * attr->strides[1] - attr->pads[1];;
     int wend = min(wstart + attr->kernel_shape[1] * attr->dilations[1], width);
 
     if (wstart < 0) {
-      wstart = (wstart % attr->dilations[1]);
-      if (wstart < 0) wstart += attr->dilations[1];
+      wstart = neg_mod(wstart, attr->dilations[1]);
     }
 
     int dstart = pd * attr->strides[2] - attr->pads[2];
     int dend = min(dstart + attr->kernel_shape[2] * attr->dilations[2], depth);
 
     if (dstart < 0) {
-      dstart = (dstart % attr->dilations[2]);
-      if (dstart < 0) dstart += attr->dilations[2];
+      dstart = neg_mod(dstart, attr->dilations[2]);
     }
 
     int pool_index = ph * pooled_width * pooled_depth + pw * pooled_depth + pd;

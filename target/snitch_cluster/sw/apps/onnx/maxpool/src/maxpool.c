@@ -37,23 +37,45 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 
 int main() {
 
-  // compute_output_shape(&attr1, attr1.output_shape);
-  // maxpool_f64_1d_no_index(&attr1,
-  //               ifmap1,
-  //               output_loc1);
-  
+  if (snrt_global_core_idx() != 0 && !snrt_is_dm_core()) {
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+    snrt_fpu_fence();
+
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+    snrt_fpu_fence();
+
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+    snrt_fpu_fence();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+    snrt_fpu_fence();
+
+    return 0;
+  }
+
+  compute_output_shape(&attr1, attr1.output_shape);
+  maxpool_f64_1d_no_index_single_core(&attr1,
+                ifmap1,
+                output_loc1);
+
   compute_output_shape(&attr2, attr2.output_shape);
-  maxpool_f64_2d_no_index(&attr2,
+  maxpool_f64_2d_no_index_single_core(&attr2,
                 ifmap2,
                 output_loc2);
 
-  // compute_output_shape(&attr3, attr3.output_shape);
-  // uint32_t a = snrt_mcycle();
-  // maxpool_f64_3d_no_index(&attr3,
-  //               ifmap3,
-  //               output_loc3);
-  // uint32_t b = snrt_mcycle();
-  // DUMP(b-a);
+  compute_output_shape(&attr3, attr3.output_shape);
+  maxpool_f64_3d_no_index_single_core(&attr3,
+                ifmap3,
+                output_loc3);
 
 
   #if ENABLE_COMPREHENSIVE_TEST

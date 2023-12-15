@@ -45,4 +45,20 @@ void maxpool_f64_3d_with_index_col_major(maxpool_attributes*, double*, double*, 
 
 void maxpool_f64_3d_no_index(maxpool_attributes*, double*, double*);
 
-void maxpool_fp64_layer(maxpool_attributes*, double*, double*, int*);
+// void maxpool_fp64_layer(maxpool_attributes*, double*, double*, int*);
+
+void maxpool_f64_1d_with_index_single_core(maxpool_attributes*, double*, double*, int*);
+
+void maxpool_f64_1d_no_index_single_core(maxpool_attributes*, double*, double*);
+
+void maxpool_f64_2d_with_index_row_major_single_core(maxpool_attributes*, double*, double*, int*);
+
+void maxpool_f64_2d_with_index_col_major_single_core(maxpool_attributes*, double*, double*, int*);
+
+void maxpool_f64_2d_no_index_single_core(maxpool_attributes*, double*, double*);
+
+void maxpool_f64_3d_with_index_row_major_single_core(maxpool_attributes*, double*, double*, int*);
+
+void maxpool_f64_3d_with_index_col_major_single_core(maxpool_attributes*, double*, double*, int*);
+
+void maxpool_f64_3d_no_index_single_core(maxpool_attributes*, double*, double*);

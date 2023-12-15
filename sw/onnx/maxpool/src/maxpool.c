@@ -209,3 +209,87 @@ void maxpool_f64_3d_no_index(maxpool_attributes* attr, double* in, double* out) 
 }
 #undef MAXPOOL_FN
 #undef MAXPOOL_DIM
+
+
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_1d_with_index_single_core
+#define MAXPOOL_DIM 1
+#define MAXPOOL_ROW_MAJOR
+#include "_maxpool_single_core.c"
+void maxpool_f64_1d_with_index_single_core(maxpool_attributes* attr, double* in, double* out, int* idx) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, idx);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+#undef MAXPOOL_ROW_MAJOR
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_1d_no_index_single_core
+#define MAXPOOL_DIM 1
+#include "_maxpool_single_core.c"
+void maxpool_f64_1d_no_index_single_core(maxpool_attributes* attr, double* in, double* out) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, NULL);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_2d_with_index_row_major_single_core
+#define MAXPOOL_DIM 2
+#define MAXPOOL_ROW_MAJOR
+#include "_maxpool_single_core.c"
+void maxpool_f64_2d_with_index_row_major_single_core(maxpool_attributes* attr, double* in, double* out, int* idx) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, idx);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+#undef MAXPOOL_ROW_MAJOR
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_2d_with_index_col_major_single_core
+#define MAXPOOL_DIM 2
+#define MAXPOOL_COL_MAJOR
+#include "_maxpool_single_core.c"
+void maxpool_f64_2d_with_index_col_major_single_core(maxpool_attributes* attr, double* in, double* out, int* idx) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, idx);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+#undef MAXPOOL_COL_MAJOR
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_2d_no_index_single_core
+#define MAXPOOL_DIM 2
+#include "_maxpool_single_core.c"
+void maxpool_f64_2d_no_index_single_core(maxpool_attributes* attr, double* in, double* out) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, NULL);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_3d_with_index_row_major_single_core
+#define MAXPOOL_DIM 3
+#define MAXPOOL_ROW_MAJOR
+#include "_maxpool_single_core.c"
+void maxpool_f64_3d_with_index_row_major_single_core(maxpool_attributes* attr, double* in, double* out, int* idx) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, idx);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+#undef MAXPOOL_ROW_MAJOR
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_3d_with_index_col_major_single_core
+#define MAXPOOL_DIM 3
+#define MAXPOOL_COL_MAJOR
+#include "_maxpool_single_core.c"
+void maxpool_f64_3d_with_index_col_major_single_core(maxpool_attributes* attr, double* in, double* out, int* idx) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, idx);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM
+#undef MAXPOOL_COL_MAJOR
+
+#define MAXPOOL_FN_SINGLE_CORE _maxpool_f64_3d_no_index_single_core
+#define MAXPOOL_DIM 3
+#include "_maxpool_single_core.c"
+void maxpool_f64_3d_no_index_single_core(maxpool_attributes* attr, double* in, double* out) {
+  MAXPOOL_FN_SINGLE_CORE(attr, in, out, NULL);
+}
+#undef MAXPOOL_FN_SINGLE_CORE
+#undef MAXPOOL_DIM

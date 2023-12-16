@@ -16,9 +16,15 @@ alias verifyall="python3 ../../sw/onnx/maxpool/verifyall.py bin/snitch_cluster.v
 
 alias verifyallno="python3 ../../sw/onnx/maxpool/verifyall.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf --no-index; stty echo"
 
+alias verifyany="python3 ../../sw/onnx/maxpool/verifyany.py bin/snitch_cluster.vlt sw/apps/onnx/maxpool/build/maxpool.elf; stty echo"
+
 alias generate="python3 ../../sw/onnx/maxpool/data/datagen.py --cfg ../../sw/onnx/maxpool/data/params.hjson ../../sw/onnx/maxpool/data/data.h"
 
 alias anal="node ../../sw/onnx/maxpool/data/analyze_benchmark.js"
+
+alias gather="node ../../sw/onnx/maxpool/data/gather_data.js"
+
+alias dma="node ../../sw/onnx/maxpool/data/dma.js"
 
 alias maxpoolold="bin/snitch_cluster.vlt sw/apps/dnn/maxpool/build/maxpool.elf"
 

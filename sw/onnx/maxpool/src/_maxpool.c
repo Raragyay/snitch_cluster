@@ -401,6 +401,12 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   int elems_per_cache = batches_per_cache * elems_per_matrix;
   int outs_per_cache = batches_per_cache * outs_per_matrix;
 
+  maxpool_attributes copy = *attribs;
+  copy.input_shape[0] = batches_per_cache;
+  copy.input_shape[1] = 1;
+  copy.output_shape[0] = batches_per_cache;
+  copy.output_shape[1] = 1;
+
   int num_caches = ceil_div(total_channels, batches_per_cache);
 
   if (snrt_is_dm_core()) {
@@ -448,7 +454,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       snrt_mcycle();
       #endif
       #if MAXPOOL_DIM == 1
-      MAXPOOL_FN_1D(attribs,
+      MAXPOOL_FN_1D(&copy,
         (double*) other_ptr,
         ((double*) other_ptr) + elems_per_cache,
         (int*) idx_ptr,
@@ -456,7 +462,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
         compute_num,
         outs_per_cache);
       #elif MAXPOOL_DIM == 2
-      MAXPOOL_FN_2D(attribs,
+      MAXPOOL_FN_2D(&copy,
         (double*) other_ptr,
         ((double*) other_ptr) + elems_per_cache,
         (int*) idx_ptr,
@@ -464,7 +470,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
         compute_num,
         outs_per_cache);
       #else
-      MAXPOOL_FN_3D(attribs,
+      MAXPOOL_FN_3D(&copy,
         (double*) other_ptr,
         ((double*) other_ptr) + elems_per_cache,
         (int*) idx_ptr,
@@ -543,7 +549,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     #endif
     // do computation on data in other_ptr
     #if MAXPOOL_DIM == 1
-    MAXPOOL_FN_1D(attribs,
+    MAXPOOL_FN_1D(&copy,
       (double*) other_ptr,
       ((double*) other_ptr) + elems_per_cache,
       (int*) idx_ptr,
@@ -551,7 +557,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       compute_num,
       outs_per_cache);
     #elif MAXPOOL_DIM == 2
-    MAXPOOL_FN_2D(attribs,
+    MAXPOOL_FN_2D(&copy,
       (double*) other_ptr,
       ((double*) other_ptr) + elems_per_cache,
       (int*) idx_ptr,
@@ -559,7 +565,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       compute_num,
       outs_per_cache);
     #else
-    MAXPOOL_FN_3D(attribs,
+    MAXPOOL_FN_3D(&copy,
       (double*) other_ptr,
       ((double*) other_ptr) + elems_per_cache,
       (int*) idx_ptr,
@@ -583,11 +589,16 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       #endif
     #endif
 
+    copy.input_shape[0] = batches_left;
+    copy.input_shape[1] = 1;
+    copy.output_shape[0] = batches_left;
+    copy.output_shape[1] = 1;
+
     #if ENABLE_BENCHMARKING
     snrt_mcycle();
     #endif
     #if MAXPOOL_DIM == 1
-    MAXPOOL_FN_1D(attribs,
+    MAXPOOL_FN_1D(&copy,
       (double*) this_ptr,
       ((double*) this_ptr) + elems_per_cache,
       (int*) idx_ptr,
@@ -595,7 +606,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       compute_num,
       outs_left);
     #elif MAXPOOL_DIM == 2
-    MAXPOOL_FN_2D(attribs,
+    MAXPOOL_FN_2D(&copy,
       (double*) this_ptr,
       ((double*) this_ptr) + elems_per_cache,
       (int*) idx_ptr,
@@ -603,7 +614,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       compute_num,
       outs_left);
     #else
-    MAXPOOL_FN_3D(attribs,
+    MAXPOOL_FN_3D(&copy,
       (double*) this_ptr,
       ((double*) this_ptr) + elems_per_cache,
       (int*) idx_ptr,

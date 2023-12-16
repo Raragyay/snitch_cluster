@@ -328,3 +328,16 @@ help:
 	@echo -e "Additional useful targets from the included Makefrag:"
 	@echo -e "${Blue}traces           ${Black}Generate the better readable traces in .logs/trace_hart_<hart_id>.txt with spike-dasm."
 	@echo -e "${Blue}annotate         ${Black}Annotate the better readable traces in .logs/trace_hart_<hart_id>.s with the source code related with the retired instructions."
+
+mcycle-traces: 
+		awk -v mcycle_block=$(mcycle) 'BEGIN { RS="csrr    .[0-9]+, mcycle[^\n]+\n";} FNR-1==mcycle_block {print "CORE "substr(FILENAME, length(FILENAME)-4,1)"\n" $$0}' logs/trace_hart_0000000*.txt | awk '$$1=="CORE" { core_id=$$2;next } {print "core"core_id" "$$0}' | sort | sort -k 3,3
+
+line-bound-traces: 
+		awk -v min=$(min) -v max=$(max) '{if ($$2>=min && $$2 <=max && $$3 == "M") print "core"substr(FILENAME, length(FILENAME)-4,1)$$0}' logs/trace_hart_0000000*.txt | sort | sort -k 3,3
+
+dma-bound-barrier: traces
+		find logs -regex 'logs/trace_hart_[0-9]+.txt' -exec sh -c 'grep -E "mcycle|unknown_7c2" "$$1" > "$${1%.*}_filtered.txt"' sh {} \;
+		awk -v mcycle_block=$(mcycle) 'BEGIN { RS="csrr    .[0-9]+, mcycle[^\n]+\n";} FNR-1==mcycle_block {print "CORE "substr(FILENAME, length(FILENAME)-4-9,1)"\n" $$0}' logs/trace_hart_0000000*_filtered.txt \
+				| awk '$$1=="CORE" { core_id=$$2;next } NF>5 {print core_id" "$$2}' \
+				| sort -t ' ' -n -k2n -k1n,1n \
+				| awk 'BEGIN {OFS=","} {entries[$$1, len[$$1]++] = $$2; if (max_len < len[$$1]) { max_len = len[$$1] } if (max_core < $$1) { max_core = $$1}; } END {for(core = 0; core <= max_core; ++core){ printf "%s%s", "core_"core, (core==max_core?"":OFS)}; print ""; for(barrier = 0; barrier < max_len; barrier++) { for (core = 0; core <= max_core; ++core) { printf "%s%s",entries[core, barrier],(core==max_core?"":OFS)}; printf "%s",ORS }}' > logs/barrier-timings-for-mcycle-$(mcycle).csv

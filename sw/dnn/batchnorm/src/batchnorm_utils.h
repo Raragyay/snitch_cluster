@@ -2841,7 +2841,7 @@ batchnorm_backward_training_tile_fp64_looped_2(
         inner_loop_stride,        // stride per inner loop iteration: 1 point
         outer_loop_stride);       // stride per outer loop iteration
     snrt_ssr_enable();
-    
+
     if (buf_flag) {
         ifmap_scratch += tile_size_in_points * C;
         grad_ifmap_scratch += tile_size_in_points * C;
@@ -3053,7 +3053,7 @@ static inline uint32_t batchnorm_backward_training_dma_main_loop_fp_agnostic(
     while (work_left > 0) {
         // TODO: adaptive scaling but only for loop 1
         if (grad_ifmap_scratch != NULL) {
-        work_in_tile = min(ideal_work_in_tile, work_left);
+            work_in_tile = min(ideal_work_in_tile, work_left);
             if (work_in_tile == work_left &&
                 target_points_for_last_tile * 2 < work_in_tile) {
                 work_in_tile -= target_points_for_last_tile;
@@ -3159,8 +3159,7 @@ batchnorm_backward_training_fp32_no_loop_1(
         num_points_work_for_core_in_tile,  // dimension of inner loop
         num_doubles_to_process,            // dimension of outer loop
         num_bytes_per_point,  // stride per inner loop iteration: 1 point
-        channel_stride *
-            sizeof(double));  // stride per outer loop iteration
+        channel_stride * sizeof(double));  // stride per outer loop iteration
     bool frep = num_points_work_for_core_in_tile >= 3;
     register volatile uint32_t i = 0;
     register v2s ZERO asm("ft9");            // can consider fcvt instead
@@ -3173,28 +3172,25 @@ batchnorm_backward_training_fp32_no_loop_1(
     register v2s dotp_0 = ZERO;
     register v2s dotp_1 = ZERO;
     register v2s dotp_2 = ZERO;
+    register v2s current_mean;
+    current_mean.f64 = current_mean_scratch->f64;
     snrt_ssr_repeat(SNRT_SSR_DM0, 2);
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, ifmap_scratch);
     do {
-        register v2s current_mean;
-        current_mean.f64 = current_mean_scratch->f64;
         snrt_ssr_enable();
         if (frep) {
             asm volatile(
-                "frep.o %[n_frep], 12, 0, 0 \n"
+                "frep.o %[n_frep], 9, 0, 0 \n"
                 "vfsub.s ft4, ft1, %[current_mean]\n"
                 "vfsub.s ft6, ft1, %[current_mean]\n"
                 "vfsub.s ft8, ft1, %[current_mean]\n"
                 "vfadd.s %[sum_0], ft0, %[sum_0] \n"
-                "vfmul.s ft4, ft4, ft0\n"
+                "vfmac.s %[dotp_0], ft4, ft0\n"
                 "vfadd.s %[sum_1], ft0, %[sum_1] \n"
-                "vfmul.s ft6, ft6, ft0\n"
+                "vfmac.s %[dotp_1], ft6, ft0\n"
                 "vfadd.s %[sum_2], ft0, %[sum_2] \n"
-                "vfmul.s ft8, ft8, ft0\n"
-                "vfadd.s %[dotp_0], ft4, %[dotp_0]\n"
-                "vfadd.s %[dotp_1], ft6, %[dotp_1]\n"
-                "vfadd.s %[dotp_2], ft8, %[dotp_2]\n"
+                "vfmac.s %[dotp_2], ft8, ft0\n"
                 : [sum_0] "+fr"(sum_0.f64), [sum_1] "+fr"(sum_1.f64),
                   [sum_2] "+fr"(sum_2.f64), [dotp_0] "+fr"(dotp_0.f64),
                   [dotp_1] "+fr"(dotp_1.f64), [dotp_2] "+fr"(dotp_2.f64)
@@ -3234,17 +3230,14 @@ batchnorm_backward_training_fp32_no_loop_1(
             "vfsub.s ft4, ft1, %[current_mean]\n"
             "vfsub.s ft6, ft1, %[current_mean]\n"
             "vfadd.s %[sum_0], ft0, %[sum_0] \n"
-            "vfmul.s ft4, ft4, ft0\n"
+            "vfmac.s %[dotp_0], ft4, ft0\n"
             "vfadd.s %[sum_1], ft0, %[sum_1] \n"
-            "vfmul.s ft6, ft6, ft0\n"
-            "vfadd.s %[dotp_0], ft4, %[dotp_0]\n"
-            "vfadd.s %[dotp_1], ft6, %[dotp_1]\n"
+            "vfmac.s %[dotp_1], ft6, ft0\n"
             "j 0f\n"
             "1:\n"
             "vfsub.s ft4, ft1, %[current_mean]\n"
             "vfadd.s %[sum_0], ft0, %[sum_0] \n"
-            "vfmul.s ft4, ft4, ft0\n"
-            "vfadd.s %[dotp_0], ft4, %[dotp_0]\n"
+            "vfmac.s %[dotp_0], ft4, ft0\n"
             "0:\n"
             : [sum_0] "+fr"(sum_0.f64), [sum_1] "+fr"(sum_1.f64),
               [sum_2] "+fr"(sum_2.f64), [dotp_0] "+fr"(dotp_0.f64),
@@ -3258,26 +3251,32 @@ batchnorm_backward_training_fp32_no_loop_1(
         asm volatile(
             "fld %[temp_sum], 0(%[sum_scratch])\n"
             "fld %[temp_dotp], 0(%[dotp_scratch])\n"
-            "vfadd.s %[sum_0], %[temp_sum], %[sum_0]\n"
-            "vfadd.s %[dotp_0], %[temp_dotp], %[dotp_0]\n"
-            "vfadd.s %[sum_0], %[sum_1], %[sum_0]\n"
-            "vfadd.s %[dotp_0], %[dotp_1], %[dotp_0]\n"
-            "vfsgnj.s %[sum_1],%[ZERO],%[ZERO]\n"
-            "vfsgnj.s %[dotp_1],%[ZERO],%[ZERO]\n"
-            "vfadd.s %[sum_0], %[sum_2], %[sum_0]\n"
-            "vfadd.s %[dotp_0], %[dotp_2], %[dotp_0]\n"
+            "fld %[current_mean], 0(%[current_mean_scratch])\n"
+            // 1+= 2
+            "vfadd.s %[sum_1], %[sum_1], %[sum_2]\n"
+            "vfadd.s %[dotp_1], %[dotp_1], %[dotp_2]\n"
             "vfsgnj.s %[sum_2],%[ZERO],%[ZERO]\n"
             "vfsgnj.s %[dotp_2],%[ZERO],%[ZERO]\n"
-            "fsd %[sum_0], 0(%[sum_scratch])\n"
-            "fsd %[dotp_0], 0(%[dotp_scratch])\n"
+            // temp+=0
+            "vfadd.s %[temp_sum], %[temp_sum], %[sum_0]\n"
+            "vfadd.s %[temp_dotp], %[temp_dotp], %[dotp_0]\n"
             "vfsgnj.s %[sum_0],%[ZERO],%[ZERO]\n"
             "vfsgnj.s %[dotp_0],%[ZERO],%[ZERO]\n"
+            // temp+=1
+            "vfadd.s %[temp_sum], %[sum_1], %[temp_sum]\n"
+            "vfadd.s %[temp_dotp], %[dotp_1], %[temp_dotp]\n"
+            "vfsgnj.s %[sum_1],%[ZERO],%[ZERO]\n"
+            "vfsgnj.s %[dotp_1],%[ZERO],%[ZERO]\n"
+            "fsd %[temp_sum], 0(%[sum_scratch])\n"
+            "fsd %[temp_dotp], 0(%[dotp_scratch])\n"
             : [temp_sum] "+fr"(temp_sum), [temp_dotp] "+fr"(temp_dotp),
               [sum_0] "+fr"(sum_0.f64), [sum_1] "+fr"(sum_1.f64),
               [sum_2] "+fr"(sum_2.f64), [dotp_0] "+fr"(dotp_0.f64),
-              [dotp_1] "+fr"(dotp_1.f64), [dotp_2] "+fr"(dotp_2.f64)
+              [dotp_1] "+fr"(dotp_1.f64), [dotp_2] "+fr"(dotp_2.f64),
+              [current_mean] "=&fr"(current_mean.f64)
             : [ZERO] "fr"(ZERO.f64), [sum_scratch] "r"(sum_scratch),
-              [dotp_scratch] "r"(dotp_scratch)
+              [dotp_scratch] "r"(dotp_scratch),
+              [current_mean_scratch] "r"(current_mean_scratch)
             : "ft0", "ft1", "ft2");
         snrt_fpu_fence();
         snrt_ssr_disable();
@@ -3317,6 +3316,14 @@ batchnorm_backward_training_tile_fp32_looped_1(
     const uint32_t inner_loop_stride =
         num_doubles_per_aligned_point * sizeof(double);
     const uint32_t outer_loop_stride = channel_stride * sizeof(double);
+    register v2s sum_0 = ZERO;
+    register v2s sum_1 = ZERO;
+    register v2s sum_2 = ZERO;
+    register v2s dotp_0 = ZERO;
+    register v2s dotp_1 = ZERO;
+    register v2s dotp_2 = ZERO;
+    register v2s current_mean;
+    current_mean.f64 = current_mean_scratch->f64;
     snrt_ssr_loop_2d(
         SNRT_SSR_DM_ALL,
         work_in_tile,                         // dimension of inner loop
@@ -3329,14 +3336,6 @@ batchnorm_backward_training_tile_fp32_looped_1(
     do {
         register volatile uint32_t i =
             0;  // updated during frep for pseudo-dual issue
-        register v2s sum_0 = ZERO;
-        register v2s sum_1 = ZERO;
-        register v2s sum_2 = ZERO;
-        register v2s dotp_0 = ZERO;
-        register v2s dotp_1 = ZERO;
-        register v2s dotp_2 = ZERO;
-        register v2s current_mean;
-        current_mean.f64 = current_mean_scratch->f64;
         snrt_cluster_hw_barrier();
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, grad_ofmap_scratch);
         snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_2D, ifmap_scratch);
@@ -3344,19 +3343,16 @@ batchnorm_backward_training_tile_fp32_looped_1(
         do {  // while (i < num_channels_to_process)
             if (frep) {
                 asm volatile(
-                    "frep.o %[n_frep], 12, 0, 0 \n"
+                    "frep.o %[n_frep], 9, 0, 0 \n"
                     "vfsub.s ft4, ft1, %[current_mean]\n"
                     "vfsub.s ft6, ft1, %[current_mean]\n"
                     "vfsub.s ft8, ft1, %[current_mean]\n"
                     "vfadd.s %[sum_0], ft0, %[sum_0] \n"
-                    "vfmul.s ft4, ft4, ft0 \n"
+                    "vfmac.s %[dotp_0], ft4, ft0\n"
                     "vfadd.s %[sum_1], ft0, %[sum_1] \n"
-                    "vfmul.s ft6, ft6, ft0 \n"
+                    "vfmac.s %[dotp_1], ft6, ft0\n"
                     "vfadd.s %[sum_2], ft0, %[sum_2] \n"
-                    "vfmul.s ft8, ft8, ft0 \n"
-                    "vfadd.s %[dotp_0], ft4,%[dotp_0]\n"
-                    "vfadd.s %[dotp_1], ft6,%[dotp_1]\n"
-                    "vfadd.s %[dotp_2], ft8,%[dotp_2]\n"
+                    "vfmac.s %[dotp_2], ft8, ft0\n"
                     : [sum_0] "+fr"(sum_0.f64), [sum_1] "+fr"(sum_1.f64),
                       [sum_2] "+fr"(sum_2.f64), [dotp_0] "+fr"(dotp_0.f64),
                       [dotp_1] "+fr"(dotp_1.f64), [dotp_2] "+fr"(dotp_2.f64)
@@ -3459,17 +3455,14 @@ batchnorm_backward_training_tile_fp32_looped_1(
                 "vfsub.s ft4, ft1, %[current_mean]\n"
                 "vfsub.s ft6, ft1, %[current_mean]\n"
                 "vfadd.s %[sum_0], ft0, %[sum_0] \n"
-                "vfmul.s ft4, ft4, ft0 \n"
+                "vfmac.s %[dotp_0], ft4, ft0\n"
                 "vfadd.s %[sum_1], ft0, %[sum_1] \n"
-                "vfmul.s ft6, ft6, ft0 \n"
-                "vfadd.s %[dotp_0], ft4,%[dotp_0]\n"
-                "vfadd.s %[dotp_1], ft6,%[dotp_1]\n"
+                "vfmac.s %[dotp_1], ft6, ft0\n"
                 "j 0f\n"
                 "1:\n"
                 "vfsub.s ft4, ft1, %[current_mean]\n"
                 "vfadd.s %[sum_0], ft0, %[sum_0] \n"
-                "vfmul.s ft4, ft4, ft0 \n"
-                "vfadd.s %[dotp_0], ft4,%[dotp_0]\n"
+                "vfmac.s %[dotp_0], ft4, ft0\n"
                 "0:\n"
                 : [sum_0] "+fr"(sum_0.f64), [sum_1] "+fr"(sum_1.f64),
                   [sum_2] "+fr"(sum_2.f64), [dotp_0] "+fr"(dotp_0.f64),
@@ -3483,30 +3476,29 @@ batchnorm_backward_training_tile_fp32_looped_1(
             asm volatile(
                 "fld %[temp_sum], 0(%[sum_scratch])\n"
                 "fld %[temp_dotp], 0(%[dotp_scratch])\n"
-                "vfadd.s %[sum_0], %[temp_sum], %[sum_0]\n"
-                "vfadd.s %[dotp_0], %[temp_dotp], %[dotp_0]\n"
-                // interleave 0 resetting and loading between fadd latency
-                // don't need to synchronize here because the integer core can't
-                // issue these instructions until the previous increments have
-                // happened
-                "fld %[current_mean],0(%[current_mean_scratch])\n"
-                "vfadd.s %[sum_0], %[sum_2], %[sum_0]\n"
-                "vfadd.s %[dotp_0], %[dotp_2], %[dotp_0]\n"
+                "fld %[current_mean], 0(%[current_mean_scratch])\n"
+                // 1+= 2
+                "vfadd.s %[sum_1], %[sum_1], %[sum_2]\n"
+                "vfadd.s %[dotp_1], %[dotp_1], %[dotp_2]\n"
                 "vfsgnj.s %[sum_2],%[ZERO],%[ZERO]\n"
                 "vfsgnj.s %[dotp_2],%[ZERO],%[ZERO]\n"
-                "vfadd.s %[sum_0], %[sum_1], %[sum_0]\n"
-                "vfadd.s %[dotp_0], %[dotp_1], %[dotp_0]\n"
-                "vfsgnj.s %[sum_1],%[ZERO],%[ZERO]\n"
-                "vfsgnj.s %[dotp_1],%[ZERO],%[ZERO]\n"
-                "fsd %[sum_0], 0(%[sum_scratch])\n"
-                "fsd %[dotp_0], 0(%[dotp_scratch])\n"
+                // temp+=0
+                "vfadd.s %[temp_sum], %[temp_sum], %[sum_0]\n"
+                "vfadd.s %[temp_dotp], %[temp_dotp], %[dotp_0]\n"
                 "vfsgnj.s %[sum_0],%[ZERO],%[ZERO]\n"
                 "vfsgnj.s %[dotp_0],%[ZERO],%[ZERO]\n"
+                // temp+=1
+                "vfadd.s %[temp_sum], %[sum_1], %[temp_sum]\n"
+                "vfadd.s %[temp_dotp], %[dotp_1], %[temp_dotp]\n"
+                "vfsgnj.s %[sum_1],%[ZERO],%[ZERO]\n"
+                "vfsgnj.s %[dotp_1],%[ZERO],%[ZERO]\n"
+                "fsd %[temp_sum], 0(%[sum_scratch])\n"
+                "fsd %[temp_dotp], 0(%[dotp_scratch])\n"
                 : [temp_sum] "+fr"(temp_sum), [temp_dotp] "+fr"(temp_dotp),
                   [sum_0] "+fr"(sum_0.f64), [sum_1] "+fr"(sum_1.f64),
                   [sum_2] "+fr"(sum_2.f64), [dotp_0] "+fr"(dotp_0.f64),
                   [dotp_1] "+fr"(dotp_1.f64), [dotp_2] "+fr"(dotp_2.f64),
-                  [current_mean] "=fr"(current_mean.f64)
+                  [current_mean] "=&fr"(current_mean.f64)
                 : [ZERO] "fr"(ZERO.f64),
                   [current_mean_scratch] "r"(current_mean_scratch),
                   [sum_scratch] "r"(sum_scratch),
@@ -3532,32 +3524,30 @@ static inline void __attribute__((always_inline))
 batchnorm_backward_training_fp32_no_loop_2(
     const v2s* grad_ofmap_scratch, v2s* grad_ifmap_scratch,
     const v2s* ifmap_scratch, const v2s* weight_times_invstd_scratch,
-    const v2s* k_scratch,
-    const v2s* winvstd_times_meank_sub_dmean_scratch,
-    uint32_t num_bytes_per_point,
-    uint32_t num_points_work_for_core_in_tile, uint32_t work_mod_4,
-    uint32_t work_div_4_sub_1, uint32_t num_doubles_to_process,
-    uint32_t channel_stride) {
+    const v2s* k_scratch, const v2s* winvstd_times_meank_sub_dmean_scratch,
+    uint32_t num_bytes_per_point, uint32_t num_points_work_for_core_in_tile,
+    uint32_t work_mod_4, uint32_t work_div_4_sub_1,
+    uint32_t num_doubles_to_process, uint32_t channel_stride) {
     snrt_ssr_loop_2d(
         SNRT_SSR_DM_ALL,
         num_points_work_for_core_in_tile,  // dimension of inner loop
         num_doubles_to_process,            // dimension of outer loop
         num_bytes_per_point,  // stride per inner loop iteration: 1 point
-        channel_stride *
-            sizeof(double));  // stride per outer loop iteration
+        channel_stride * sizeof(double));  // stride per outer loop iteration
+    snrt_ssr_enable();
     bool frep = num_points_work_for_core_in_tile >= 4;
     register volatile uint32_t i = 0;
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);
     snrt_ssr_read(SNRT_SSR_DM2, SNRT_SSR_2D, grad_ofmap_scratch);
     do {
+        register v2s k;
+        k.f64 = k_scratch->f64;
         register v2s weight_times_invstd;
         weight_times_invstd.f64 = weight_times_invstd_scratch->f64;
         register v2s winvstd_times_meank_sub_dmean;
-        winvstd_times_meank_sub_dmean.f64 = winvstd_times_meank_sub_dmean_scratch->f64;
-        register v2s k;
-        k.f64 = k_scratch->f64;
-        snrt_ssr_enable();
+        winvstd_times_meank_sub_dmean.f64 =
+            winvstd_times_meank_sub_dmean_scratch->f64;
         if (frep) {
             asm volatile(
                 "frep.o %[n_frep], 16, 0, 0 \n"
@@ -3650,19 +3640,16 @@ batchnorm_backward_training_fp32_no_loop_2(
                   winvstd_times_meank_sub_dmean.f64),
               [k] "fr"(k.f64), [work_mod_4] "r"(work_mod_4)
             : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
-        snrt_fpu_fence();
-        snrt_ssr_disable();
     } while (i < num_doubles_to_process);
     __builtin_ssr_barrier(SNRT_SSR_DM1);
+    snrt_ssr_disable();
 }
 
 static inline void __attribute__((always_inline))
 batchnorm_backward_training_tile_fp32_looped_2(
-    const v2s* grad_ofmap_scratch, 
-    v2s* grad_ifmap_scratch,
+    const v2s* grad_ofmap_scratch, v2s* grad_ifmap_scratch,
     const v2s* ifmap_scratch, const v2s* weight_times_invstd_scratch,
-    const v2s* k_scratch,
-    const v2s* winvstd_times_meank_sub_dmean_scratch,
+    const v2s* k_scratch, const v2s* winvstd_times_meank_sub_dmean_scratch,
     uint32_t buf_flag, uint32_t num_doubles_per_aligned_point,
     uint32_t work_in_tile,  // requires: > 0
     uint32_t work_mod_4,    // precompute to avoid icache branch misses
@@ -3696,11 +3683,15 @@ batchnorm_backward_training_tile_fp32_looped_2(
         num_doubles_work_for_core_per_point,  // dimension of outer loop
         inner_loop_stride,   // stride per inner loop iteration: 1 point
         outer_loop_stride);  // stride per outer loop iteration
+    snrt_ssr_enable();
 
     if (buf_flag) {
-        ifmap_scratch += tile_size_in_aligned_points * num_doubles_per_aligned_point;
-        grad_ifmap_scratch += tile_size_in_aligned_points * num_doubles_per_aligned_point;
-        grad_ofmap_scratch += tile_size_in_aligned_points * num_doubles_per_aligned_point;
+        ifmap_scratch +=
+            tile_size_in_aligned_points * num_doubles_per_aligned_point;
+        grad_ifmap_scratch +=
+            tile_size_in_aligned_points * num_doubles_per_aligned_point;
+        grad_ofmap_scratch +=
+            tile_size_in_aligned_points * num_doubles_per_aligned_point;
     }
     do {
         register volatile uint32_t i =
@@ -3712,13 +3703,13 @@ batchnorm_backward_training_tile_fp32_looped_2(
         // do 1 loop
         do {  // while (i < num_channels_to_process)
             // Can only manual unroll 3 times since the max for frep is 16
+            register v2s k;
+            k.f64 = k_scratch->f64;
             register v2s weight_times_invstd;
             weight_times_invstd.f64 = weight_times_invstd_scratch->f64;
             register v2s winvstd_times_meank_sub_dmean;
-            winvstd_times_meank_sub_dmean.f64 = winvstd_times_meank_sub_dmean_scratch->f64;
-            register v2s k;
-            k.f64 = k_scratch->f64;
-            snrt_ssr_enable();
+            winvstd_times_meank_sub_dmean.f64 =
+                winvstd_times_meank_sub_dmean_scratch->f64;
             asm volatile(
                 "frep.o %[n_frep], 16, 0, 0 \n"
                 "vfmul.s ft3, ft0, %[k]\n"
@@ -3825,7 +3816,8 @@ batchnorm_backward_training_tile_fp32_looped_2(
                 : [i] "r"(i),
                   [num_doubles_work_for_core_per_point] "r"(
                       num_doubles_work_for_core_per_point),
-                  [input_channel_array_reset_dist] "r"(input_channel_array_reset_dist),
+                  [input_channel_array_reset_dist] "r"(
+                      input_channel_array_reset_dist),
                   [work_in_tile_offset] "i"(
                       offsetof(dm_comm_t, num_points_work_in_tile)),
                   [work_mod_4_offset] "i"(offsetof(dm_comm_t, work_mod_4)),
@@ -3883,12 +3875,12 @@ batchnorm_backward_training_tile_fp32_looped_2(
                       winvstd_times_meank_sub_dmean.f64),
                   [k] "fr"(k.f64), [work_mod_4] "r"(work_mod_4)
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5");
-            snrt_ssr_disable();
         } while (i < num_doubles_work_for_core_per_point);
         // don't need to fpu_fence since last 3 instructions are inconsequential
-        __builtin_ssr_barrier(SNRT_SSR_DM1);
         work_mod_4 = next_work_mod_4;
+        __builtin_ssr_barrier(SNRT_SSR_DM1);
     } while (work_in_tile != 0);
     // notify last tile done
+    snrt_ssr_disable();
     snrt_cluster_hw_barrier();
 }

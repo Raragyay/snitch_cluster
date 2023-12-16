@@ -1320,23 +1320,12 @@ static inline void batchnorm_backward_training_single_core_opt_fp32(
                                      SNRT_PERF_CNT_ICACHE_STALL);
     reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
                                      SNRT_PERF_CNT_TCDM_CONGESTED);
-
     uint32_t start_dma_load = snrt_mcycle();
     if (snrt_is_dm_core()) {
         curr_var_load = snrt_dma_start_1d(invstd_scratch, l->current_var,
                                           num_bytes_per_packed_point);
         weight_load = snrt_dma_start_1d(weight_times_invstd_scratch, l->weight,
                                         num_bytes_per_packed_point);
-        grad_ofmap_load = initiate_dma_1d_or_2d(
-            grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
-            num_bytes_per_aligned_point, num_bytes_per_packed_point, num_points,
-            is_point_aligned_to_8_byte_boundary);
-        ifmap_load = initiate_dma_1d_or_2d(
-            ifmap_scratch, l->ifmap, dtype_bytes * C,
-            num_bytes_per_aligned_point, num_bytes_per_packed_point, num_points,
-            is_point_aligned_to_8_byte_boundary);
-        curr_mean_load = snrt_dma_start_1d(
-            current_mean_scratch, l->current_mean, num_bytes_per_packed_point);
         snrt_dma_wait(curr_var_load);
         snrt_dma_wait(weight_load);
     } else if (compute_id == 0) {
@@ -1349,9 +1338,17 @@ static inline void batchnorm_backward_training_single_core_opt_fp32(
 
     uint32_t start_invstd_computations = SNRT_SECTIONED_MCYCLE();
     if (snrt_is_dm_core()) {
-        snrt_dma_wait(grad_ofmap_load);
-        snrt_dma_wait(ifmap_load);
-        snrt_dma_wait(curr_mean_load);
+        grad_ofmap_load = initiate_dma_1d_or_2d(
+            grad_ofmap_scratch, l->grad_ofmap, num_bytes_per_packed_point,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point, num_points,
+            is_point_aligned_to_8_byte_boundary);
+        ifmap_load = initiate_dma_1d_or_2d(
+            ifmap_scratch, l->ifmap, dtype_bytes * C,
+            num_bytes_per_aligned_point, num_bytes_per_packed_point, num_points,
+            is_point_aligned_to_8_byte_boundary);
+        curr_mean_load = snrt_dma_start_1d(
+            current_mean_scratch, l->current_mean, num_bytes_per_packed_point);
+        snrt_dma_wait_all();
     } else if (compute_id == 0) {
         snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, invstd_scratch);
         snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, invstd_scratch);
@@ -1478,4 +1475,6 @@ static inline void batchnorm_backward_training_single_core_opt_fp32(
     uint32_t end_dma_writeback = SNRT_SECTIONED_MCYCLE();
     snrt_cluster_hw_barrier();
     uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 }

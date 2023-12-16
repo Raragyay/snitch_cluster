@@ -88,7 +88,7 @@ def flatten_config_list(config_modifiers):
 def get_scaling_results_path(whole_block):
     return (
         base_path.parent
-        / f"scaling_results{'' if not whole_block else '_whole_block'}.csv"
+        / f"be_scaling_results{'' if not whole_block else '_whole_block'}.csv"
     )
 
 

@@ -347,7 +347,7 @@ void MAXPOOL_FN_SINGLE_CORE(maxpool_attributes* attribs_raw, double* in, double*
   snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL, 0);
   snrt_start_perf_counter(SNRT_PERF_CNT1, SNRT_PERF_CNT_TCDM_CONGESTED, 0);
 
-  // snrt_mcycle();
+  snrt_mcycle();
 
   #if DMA_ATTRIBS_SINGLE_CORE
     maxpool_attributes* attribs = (maxpool_attributes*) ptr;
@@ -393,17 +393,17 @@ void MAXPOOL_FN_SINGLE_CORE(maxpool_attributes* attribs_raw, double* in, double*
   #endif
   
   int total_channels = attribs->input_shape[0] * attribs->input_shape[1];
-  if (bytes_per_batch * total_channels <= USABLE_CACHE) {
+  if (bytes_per_batch * total_channels <= USABLE_CACHE_SINGLE_CORE) {
     MAXPOOL_FN_SINGLE_CORE_UNTILED(attribs, in, out, idx, total_ins, total_outs, ptr);
     return;
   }
 
   char* first_ptr = ptr;
-  char* second_ptr = ptr + align(USABLE_CACHE / 2);
+  char* second_ptr = ptr + align(USABLE_CACHE_SINGLE_CORE / 2);
   // whether we should use the second half of available cache
   int use_second = 0;
 
-  int batches_per_cache = HALF_CACHE / bytes_per_batch;
+  int batches_per_cache = HALF_CACHE_SINGLE_CORE / bytes_per_batch;
   // We tile one matrix at a time.
   // Tiling partial matrices is quite complicated due to stride/dilation/padding parameters.
   if (batches_per_cache == 0) {
@@ -657,7 +657,7 @@ void MAXPOOL_FN_SINGLE_CORE_1D(maxpool_attributes* attr, double* in, double* out
 
           snrt_ssr_enable();
 
-          const register int n_frep = kernel_left - 2;
+          const register int n_frep = kernel_left;
           const register int total_iters = n_channels;
 
           ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -704,7 +704,7 @@ void MAXPOOL_FN_SINGLE_CORE_1D(maxpool_attributes* attr, double* in, double* out
 
             snrt_ssr_enable();
 
-            const register int n_frep = vals_left - 2;
+            const register int n_frep = vals_left;
             const register int total_iters = n_channels;
 
             ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -747,7 +747,7 @@ void MAXPOOL_FN_SINGLE_CORE_1D(maxpool_attributes* attr, double* in, double* out
 
     snrt_ssr_enable();
 
-    const register int n_frep = attr->kernel_shape[0] - 2;
+    const register int n_frep = attr->kernel_shape[0];
     const register int total_iters = new_pooled_size * n_channels;
 
     // frep performs kernel shape fmax ops, total of work_per_channel frep's
@@ -881,7 +881,7 @@ void MAXPOOL_FN_SINGLE_CORE_2D(maxpool_attributes* attr, double* in, double* out
 
     snrt_ssr_enable();
 
-    const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1] - 2;
+    const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
     const register int total_iters = total_rows * out_w;
 
     ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -1020,7 +1020,7 @@ void MAXPOOL_FN_SINGLE_CORE_2D(maxpool_attributes* attr, double* in, double* out
 
       snrt_ssr_enable();
 
-      const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1] - 2;
+      const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
       const register int total_iters = out_w * out_h;
 
       ssr_asm_no_index_optimized(n_frep, total_iters);

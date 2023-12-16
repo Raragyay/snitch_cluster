@@ -16,6 +16,14 @@
 #ifndef ___MAXPOOL_C
 #define ___MAXPOOL_C
 
+#define DEBUG_MODE 0
+
+#if DEBUG_MODE
+#define CDUMP(x) DUMP(x)
+#else
+#define CDUMP(x) ;
+#endif
+
 #define DMA_ATTRIBS 1
 #define DMA_INDICES 1
 #define USE_SSR_FREP_1D 1
@@ -89,7 +97,15 @@ static inline void ssr_asm_no_index(int);
 
 void ssr_asm_no_index(int n_iter_minus_two) {
 
-  if (n_iter_minus_two == 0) {
+  if (n_iter_minus_two == -1) {
+    asm volatile( 
+      "fadd.d ft1, %[zero], ft0\n" /* load the initial value */
+      :
+      : [zero] "f"(0.0)
+      : "ft0", "ft1", "ft2", "memory"
+    );
+  }
+  else if (n_iter_minus_two == 0) {
     asm volatile( 
       "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
       "fmax.d ft1, ft3, ft0\n"
@@ -98,14 +114,59 @@ void ssr_asm_no_index(int n_iter_minus_two) {
       : "ft0", "ft1", "ft2", "ft3", "memory"
     );
   }
-  else if (n_iter_minus_two % 2 == 0) {
+  else if (n_iter_minus_two == 1) {
+    CDUMP(20202020);
     asm volatile(
-      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+      "fadd.d ft5, %[zero], ft0\n"
+      "fmax.d ft3, ft3, ft4\n"
+      "fmax.d ft1, ft3, ft5\n"
+
+      :
+      : [zero] "f"(0.0)
+      : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "memory", "zero"
+    );
+  }
+  else if (n_iter_minus_two == 2) {
+    CDUMP(30303030);
+    asm volatile(
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
       "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft4, ft4, ft0\n"
+      "fmax.d ft1, ft3, ft4\n"
+      :
+      : [zero] "f"(0.0)
+      : "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+    );
+  }
+  else if (n_iter_minus_two == 3) {
+    CDUMP(40404040);
+    asm volatile(
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft4, ft4, ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft1, ft3, ft4\n"
+      :
+      : [zero] "f"(0.0)
+      :  "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+    );
+  }
+  else if (n_iter_minus_two % 2 == 0) {
+    CDUMP(50505050);
+    asm volatile(
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+
       "frep.o %[n_frep], 2, 0, 0\n"
-      "fmax.d ft4, ft3, ft0\n"
-      "fmax.d ft3, ft4, ft0\n"
-      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+      "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft4, ft4, ft0\n"
+
+      "fmax.d ft1, ft3, ft4\n"
       :
       : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two / 2 - 1) /* loading initial val takes 1 read */
       : "ft0", "ft1", "ft2", "ft3", "ft4", "memory"
@@ -113,13 +174,17 @@ void ssr_asm_no_index(int n_iter_minus_two) {
   }
   else {
     asm volatile(
-      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+
       "frep.o %[n_frep], 2, 0, 0\n"
-      "fmax.d ft4, ft3, ft0\n"
-      "fmax.d ft3, ft4, ft0\n"
-      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+      "fmax.d ft4, ft4, ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+
+      "fmax.d ft1, ft3, ft4\n"
       :
-      : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two / 2) /* loading initial val takes 1 read */
+      : [zero] "f"(0.0), [n_frep] "r"(n_iter_minus_two / 2 - 1) /* loading initial val takes 1 read */
       : "ft0", "ft1", "ft2", "ft3", "ft4", "memory"
     );
   }
@@ -136,36 +201,18 @@ void ssr_asm_no_index(int n_iter_minus_two) {
 
 static inline void ssr_asm_no_index(int);
 
-void ssr_asm_no_index_optimized(int n_iter_minus_two, int total_iters) {
+void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
 
-  // DUMP(n_iter_minus_two);
-  // DUMP(total_iters);
+  if (total_iters == 1) {
+    CDUMP(843957);
+    CDUMP(n_kernel);
+    ssr_asm_no_index(n_kernel - 2);
+    CDUMP(19191919);
+    return;
+  }
 
-  // asm volatile(
-  //   "li t0, 0\n"
-
-  //   "fadd.d ft3, %[zero], ft0\n"
-  //   "frep.o %[n_frep], 1, 0, 0\n"
-  //   "fmax.d ft3, ft3, ft0\n"
-  //   "fadd.d ft1, %[zero], ft3\n"
-
-  //   "addi t0, t0, 1\n"
-
-  //   // "fmv.x.w %[tmp], fa0\n"
-  //   // "mv      %[tmp], %[tmp]\n"
-
-  //   "bne t0, %[total_iters], -20\n"
-
-  //   :/* [tmp] "+r"(tmp)*/
-  //   : [zero] "f"(0.0),
-  //     // [work_this_core] "r"(work_this_core),
-  //     [n_frep] "r"(n_frep),
-  //     // [n_channels] "r"(n_channels),
-  //     [total_iters] "r"(total_iters)
-  //   : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
-  // );
-
-  if (n_iter_minus_two == 0) {
+  if (n_kernel == 2) {
+    CDUMP(1111111);
     asm volatile(
       "li t0, 0\n"
 
@@ -181,8 +228,12 @@ void ssr_asm_no_index_optimized(int n_iter_minus_two, int total_iters) {
         [total_iters] "r"(total_iters)
       : "t0", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
     );
+    return;
   }
-  else if (n_iter_minus_two == -1) {
+  else if (n_kernel == 1) {
+    CDUMP(2222222);
+    CDUMP(n_kernel);
+    CDUMP(total_iters);
     asm volatile(
       "li t0, 0\n"
 
@@ -197,38 +248,19 @@ void ssr_asm_no_index_optimized(int n_iter_minus_two, int total_iters) {
         [total_iters] "r"(total_iters)
       : "t0", "ft0", "ft1", "ft2", "memory", "zero"
     );
+    CDUMP(88888);
+    return;
   }
-  else if (n_iter_minus_two % 2 == 0) {
+  else if (n_kernel == 3) {
+    CDUMP(3333333);
     asm volatile(
       "li t0, 0\n"
 
-      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
-      "fmax.d ft3, ft3, ft0\n"
-      "frep.o %[n_frep], 2, 0, 0\n"
-      "fmax.d ft4, ft3, ft0\n"
-      "fmax.d ft3, ft4, ft0\n"
-      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
-
-      "addi t0, t0, 1\n"
-
-      "bne t0, %[total_iters], -28\n"
-
-      :
-      : [zero] "f"(0.0),
-        [n_frep] "r"(n_iter_minus_two / 2 - 1),
-        [total_iters] "r"(total_iters)
-      : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
-    );
-  }
-  else {
-    asm volatile(
-      "li t0, 0\n"
-
-      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
-      "frep.o %[n_frep], 2, 0, 0\n"
-      "fmax.d ft4, ft3, ft0\n"
-      "fmax.d ft3, ft4, ft0\n"
-      "fadd.d ft1, %[zero], ft3\n" /* store the final value */
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+      "fadd.d ft5, %[zero], ft0\n"
+      "fmax.d ft3, ft3, ft4\n"
+      "fmax.d ft1, ft3, ft5\n"
 
       "addi t0, t0, 1\n"
 
@@ -236,10 +268,233 @@ void ssr_asm_no_index_optimized(int n_iter_minus_two, int total_iters) {
 
       :
       : [zero] "f"(0.0),
-        [n_frep] "r"(n_iter_minus_two / 2),
         [total_iters] "r"(total_iters)
-      : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+      : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "memory", "zero"
     );
+    return;
+  }
+  else if (n_kernel == 4) {
+    asm volatile(
+      "li t0, 0\n"
+
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft4, ft4, ft0\n"
+      "fmax.d ft1, ft3, ft4\n"
+
+      "addi t0, t0, 1\n"
+
+      "bne t0, %[total_iters], -24\n"
+
+      :
+      : [zero] "f"(0.0),
+        [total_iters] "r"(total_iters)
+      : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+    );
+    return;
+  }
+  else if (n_kernel == 5) {
+    CDUMP(555555555);
+    asm volatile(
+      "li t0, 0\n"
+
+      "fadd.d ft3, %[zero], ft0\n"
+      "fadd.d ft4, %[zero], ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft4, ft4, ft0\n"
+      "fmax.d ft3, ft3, ft0\n"
+      "fmax.d ft1, ft3, ft4\n"
+
+      "addi t0, t0, 1\n"
+
+      "bne t0, %[total_iters], -28\n"
+
+      :
+      : [zero] "f"(0.0),
+        [total_iters] "r"(total_iters)
+      : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+    );
+    return;
+  }
+
+  int mod = n_kernel % 2;
+
+  if (total_iters % 2 == 0) {
+
+    if (mod == 0) {
+      asm volatile(
+        "li t0, 0\n"
+
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+
+        "fadd.d ft5, %[zero], ft0\n"
+        "fadd.d ft6, %[zero], ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft5, ft5, ft0\n"
+        "fmax.d ft6, ft6, ft0\n"
+
+        "fmax.d ft1, ft3, ft4\n"
+        "fmax.d ft1, ft5, ft6\n"
+
+        "addi t0, t0, 2\n"
+
+        "bne t0, %[total_iters], -52\n"
+
+        :/* [tmp] "+r"(tmp)*/
+        : [zero] "f"(0.0),
+          // [work_this_core] "r"(work_this_core),
+          [n_frep] "r"((n_kernel - 2) / 2 - 1),
+          // [n_channels] "r"(n_channels),
+          [total_iters] "r"(total_iters)
+        : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "memory", "zero"
+      );
+
+    }
+    else {
+      CDUMP(44444444);
+      // DUMP(n_kernel);
+      // DUMP(total_iters);
+      asm volatile(
+        "li t0, 0\n"
+
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, ft3, ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+
+        "fadd.d ft5, %[zero], ft0\n"
+        "fadd.d ft6, %[zero], ft0\n"
+        "fmax.d ft5, ft5, ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft5, ft5, ft0\n"
+        "fmax.d ft6, ft6, ft0\n"
+
+        "fmax.d ft1, ft3, ft4\n"
+        "fmax.d ft1, ft5, ft6\n"
+
+        "addi t0, t0, 2\n"
+
+        "bne t0, %[total_iters], -60\n"
+
+        :/* [tmp] "+r"(tmp)*/
+        : [zero] "f"(0.0),
+          // [work_this_core] "r"(work_this_core),
+          [n_frep] "r"((n_kernel - 3) / 2 - 1),
+          // [n_channels] "r"(n_channels),
+          [total_iters] "r"(total_iters)
+        : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "memory", "zero"
+      );
+
+    }
+
+  }
+  else {
+
+    if (mod == 0) {
+      CDUMP(5555556);
+      asm volatile(
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+
+        "fmax.d ft1, ft3, ft4\n"
+
+        "li t0, 0\n"
+
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+
+        "fadd.d ft5, %[zero], ft0\n"
+        "fadd.d ft6, %[zero], ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft5, ft5, ft0\n"
+        "fmax.d ft6, ft6, ft0\n"
+
+        "fmax.d ft1, ft3, ft4\n"
+        "fmax.d ft1, ft5, ft6\n"
+
+        "addi t0, t0, 2\n"
+
+        "bne t0, %[total_iters], -52\n"
+
+        :/* [tmp] "+r"(tmp)*/
+        : [zero] "f"(0.0),
+          // [work_this_core] "r"(work_this_core),
+          [n_frep] "r"((n_kernel - 2) / 2 - 1),
+          // [n_channels] "r"(n_channels),
+          [total_iters] "r"(total_iters - 1)
+        : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "memory", "zero"
+      );
+
+    }
+    else {
+      CDUMP(6666667);
+      asm volatile(
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, ft3, ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+
+        "fmax.d ft1, ft3, ft4\n"
+
+        "li t0, 0\n"
+
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, ft3, ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+
+        "fadd.d ft5, %[zero], ft0\n"
+        "fadd.d ft6, %[zero], ft0\n"
+        "fmax.d ft5, ft5, ft0\n"
+
+        "frep.o %[n_frep], 2, 0, 0\n"
+        "fmax.d ft5, ft5, ft0\n"
+        "fmax.d ft6, ft6, ft0\n"
+
+        "fmax.d ft1, ft3, ft4\n"
+        "fmax.d ft1, ft5, ft6\n"
+
+        "addi t0, t0, 2\n"
+
+        "bne t0, %[total_iters], -60\n"
+
+        :/* [tmp] "+r"(tmp)*/
+        : [zero] "f"(0.0),
+          // [work_this_core] "r"(work_this_core),
+          [n_frep] "r"((n_kernel - 3) / 2 - 1),
+          // [n_channels] "r"(n_channels),
+          [total_iters] "r"(total_iters - 1)
+        : "t0", "t1", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "memory", "zero"
+      );
+      
+    }
+
   }
 }
 
@@ -692,7 +947,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
             snrt_ssr_enable();
 
-            const register int n_frep = kernel_left - 2;
+            const register int n_frep = kernel_left;
             const register int total_iters = work_n_channels;
 
             ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -739,7 +994,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
             snrt_ssr_enable();
 
-            const register int n_frep = vals_left - 2;
+            const register int n_frep = vals_left;
             const register int total_iters = work_n_channels;
 
             ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -767,11 +1022,14 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     // If n_channels >= n_cores then we can make it almost optimal by distributing entire
     // matrices between the cores. This strategy works at scale,
     // we could additionally implement special cases for very small inputs if desired.
-    if (/*pooled_size < n_cores && n_channels >= n_cores*/1) {
-
+    if (pooled_size < n_cores && n_channels >= n_cores) {
+      CDUMP(777111777);
       int work_n_channels = n_channels / n_cores;
       if (start_step < n_channels % n_cores) ++work_n_channels;
+      
       if (work_n_channels < 1) return;
+
+      CDUMP(777222777);
 
       // new_pooled_size represents the number of outputs still needed for each channel after
       // precomputing kernels that involve padding.
@@ -794,7 +1052,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
       snrt_ssr_enable();
 
-      const register int n_frep = attr->kernel_shape[0] - 2;
+      const register int n_frep = attr->kernel_shape[0];
       const register int total_iters = new_pooled_size * work_n_channels;
 
       // frep performs kernel shape fmax ops, total of work_per_channel frep's
@@ -802,6 +1060,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
       snrt_ssr_disable();
       snrt_fpu_fence();
+      CDUMP(777333777);
       return;
 
     }
@@ -832,7 +1091,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
     snrt_ssr_enable();
 
-    const register int n_frep = attr->kernel_shape[0] - 2;
+    const register int n_frep = attr->kernel_shape[0];
     const register int total_iters = work_per_channel * n_channels;
 
     // frep performs kernel shape fmax ops, total of work_per_channel frep's
@@ -981,7 +1240,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
     snrt_ssr_enable();
 
-    const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1] - 2;
+    const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
     const register int total_iters = work_n_rows * out_w;
 
     ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -1135,7 +1394,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
       snrt_ssr_enable();
 
-      const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1] - 2;
+      const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
       const register int total_iters = out_w * out_h;
 
       ssr_asm_no_index_optimized(n_frep, total_iters);

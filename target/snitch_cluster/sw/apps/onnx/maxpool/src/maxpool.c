@@ -1,17 +1,17 @@
 #include "maxpool.h"
 #include "snrt.h"
 
-#include "benchmark_all.h"
+// #include "benchmark_all.h"
 // #include "data1.h"
-// #include "data_all.h"
+#include "data_all.h"
 // #include "data.h"
 
-#define ENABLE_1D 0
-#define ENABLE_2D 0
-#define ENABLE_3D 0
+#define ENABLE_1D 1
+#define ENABLE_2D 1
+#define ENABLE_3D 1
 
 #define ENABLE_YES_INDICES 0
-#define ENABLE_NO_INDICES 0
+#define ENABLE_NO_INDICES 1
 
 #define ENABLE_COMPREHENSIVE_TEST 0
 
@@ -39,7 +39,7 @@ int main() {
 
   maxpool_attributes attr_1d = {
     .n_dim = 1,
-    .input_shape = {8, 1, 2048, -1, -1},
+    .input_shape = {8, 1, 256, -1, -1},
     .output_shape = {0},
     .auto_pad = NOTSET,
     .ceil_mode = 1,
@@ -74,57 +74,57 @@ int main() {
     .strides = {2, 2, 2}
   };
 
-  if (snrt_global_core_idx() != 0 && !snrt_is_dm_core()) {
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
+  // if (snrt_global_core_idx() != 0 && !snrt_is_dm_core()) {
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
 
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
 
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
 
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
-    snrt_cluster_hw_barrier();
-    snrt_cluster_hw_barrier();
-    snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_cluster_hw_barrier();
+  //   snrt_fpu_fence();
 
-    return 0;
-  }
+  //   return 0;
+  // }
   
 
-  compute_output_shape(&attr_1d, attr_1d.output_shape);
+  // compute_output_shape(&attr_1d, attr_1d.output_shape);
 
-  maxpool_f64_1d_no_index_single_core(&attr_1d,
-                ifmap,
-                output_loc);
+  // maxpool_f64_1d_no_index_single_core(&attr_1d,
+  //               ifmap,
+  //               output_loc);
 
 
   // snrt_mcycle();
-  snrt_stop_perf_counter(SNRT_PERF_CNT0);
-  snrt_stop_perf_counter(SNRT_PERF_CNT1);
-  uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
-  DUMP(counter);
-  counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
-  DUMP(counter);
+  // snrt_stop_perf_counter(SNRT_PERF_CNT0);
+  // snrt_stop_perf_counter(SNRT_PERF_CNT1);
+  // uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
+  // DUMP(counter);
+  // counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
+  // DUMP(counter);
 
 
 
-  return 0;
+  // return 0;
 
   // compute_output_shape(&attr2, attr2.output_shape);
   // maxpool_f64_2d_no_index_single_core(&attr2,
@@ -207,12 +207,16 @@ int main() {
 
   #if ENABLE_NO_INDICES
 
+  DUMP(0);
+
   #if ENABLE_1D
   compute_output_shape(&attr1_1, attr1_1.output_shape);
   maxpool_f64_1d_no_index(&attr1_1,
                 ifmap1_1,
                 output_loc1_1);
   #endif
+
+  // DUMP(1);
 
   #if ENABLE_2D
   compute_output_shape(&attr2_1, attr2_1.output_shape);
@@ -221,12 +225,16 @@ int main() {
                 output_loc2_1);
   #endif
 
+  // DUMP(2);
+
   #if ENABLE_3D
   compute_output_shape(&attr3_1, attr3_1.output_shape);
   maxpool_f64_3d_no_index(&attr3_1,
                 ifmap3_1,
                 output_loc3_1);
   #endif
+
+  DUMP(1111);
 
 
   #if ENABLE_1D
@@ -236,6 +244,8 @@ int main() {
                 output_loc1_2);
   #endif
 
+  DUMP(1);
+
   #if ENABLE_2D
   compute_output_shape(&attr2_2, attr2_2.output_shape);
   maxpool_f64_2d_no_index(&attr2_2,
@@ -243,12 +253,16 @@ int main() {
                 output_loc2_2);
   #endif
 
+  DUMP(2);
+
   #if ENABLE_3D
   compute_output_shape(&attr3_2, attr3_2.output_shape);
   maxpool_f64_3d_no_index(&attr3_2,
                 ifmap3_2,
                 output_loc3_2);
   #endif
+
+  DUMP(2222);
 
 
   #if ENABLE_1D
@@ -258,6 +272,8 @@ int main() {
                 output_loc1_3);
   #endif
 
+  // DUMP(1);
+
   #if ENABLE_2D
   compute_output_shape(&attr2_3, attr2_3.output_shape);
   maxpool_f64_2d_no_index(&attr2_3,
@@ -265,12 +281,16 @@ int main() {
                 output_loc2_3);
   #endif
 
+  // DUMP(2);
+
   #if ENABLE_3D
   compute_output_shape(&attr3_3, attr3_3.output_shape);
   maxpool_f64_3d_no_index(&attr3_3,
                 ifmap3_3,
                 output_loc3_3);
   #endif
+
+  DUMP(3333);
 
 
   #if ENABLE_1D
@@ -280,6 +300,8 @@ int main() {
                 output_loc1_4);
   #endif
 
+  // DUMP(1);
+
   #if ENABLE_2D
   compute_output_shape(&attr2_4, attr2_4.output_shape);
   maxpool_f64_2d_no_index(&attr2_4,
@@ -287,12 +309,16 @@ int main() {
                 output_loc2_4);
   #endif
 
+  // DUMP(2);
+
   #if ENABLE_3D
   compute_output_shape(&attr3_4, attr3_4.output_shape);
   maxpool_f64_3d_no_index(&attr3_4,
                 ifmap3_4,
                 output_loc3_4);
   #endif
+
+  DUMP(4444);
 
   #endif
 

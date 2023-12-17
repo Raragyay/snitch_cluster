@@ -3021,11 +3021,11 @@ static inline uint32_t batchnorm_backward_training_dma_main_loop_fp_agnostic(
     batchnorm_backward_training_layer_t* l,
     uint32_t num_doubles_per_aligned_point, uint32_t num_bytes_per_packed_point,
     uint32_t num_bytes_per_aligned_point,
-    bool is_point_aligned_to_8_byte_boundary, uint32_t num_points,
+    uint32_t is_point_aligned_to_8_byte_boundary, uint32_t num_points,
     uint32_t work_left,  // only present for dma
     uint32_t initial_work_in_tile, dm_comm_t* dm_comm,
     uint32_t tile_size_in_points, double* grad_ofmap_scratch,
-    double* ifmap_scratch, double* grad_ifmap_scratch, bool buf_flag,
+    double* ifmap_scratch, double* grad_ifmap_scratch, uint32_t buf_flag,
     uint32_t unroll, uint32_t cycles_per_double) {
     snrt_dma_wait_all();
 
@@ -3160,7 +3160,7 @@ batchnorm_backward_training_fp32_no_loop_1(
         num_doubles_to_process,            // dimension of outer loop
         num_bytes_per_point,  // stride per inner loop iteration: 1 point
         channel_stride * sizeof(double));  // stride per outer loop iteration
-    bool frep = num_points_work_for_core_in_tile >= 3;
+    uint32_t frep = num_points_work_for_core_in_tile >= 3;
     register volatile uint32_t i = 0;
     register v2s ZERO asm("ft9");            // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"  // vfcvt.s.x raises exception
@@ -3302,11 +3302,11 @@ batchnorm_backward_training_tile_fp32_looped_1(
     // inside loop: points
     uint32_t prev_work = work_in_tile;
     register uint32_t next_work_mod_3;
-    register bool frep = work_in_tile >= 3;
+    register uint32_t frep = work_in_tile >= 3;
     register v2s ZERO asm("ft11");  // can consider fcvt instead
     asm volatile("fcvt.d.w %[ZERO], zero\n"
                  : [ZERO] "=r"(ZERO)::"ft0", "ft1", "ft2");
-    bool buf_flag = 0;
+    uint32_t buf_flag = 0;
     // consider: inlining these as well later
     const uint32_t buf_flag_offset = tile_size_in_aligned_points *
                                      num_doubles_per_aligned_point *
@@ -3535,7 +3535,7 @@ batchnorm_backward_training_fp32_no_loop_2(
         num_bytes_per_point,  // stride per inner loop iteration: 1 point
         channel_stride * sizeof(double));  // stride per outer loop iteration
     snrt_ssr_enable();
-    bool frep = num_points_work_for_core_in_tile >= 4;
+    uint32_t frep = num_points_work_for_core_in_tile >= 4;
     register volatile uint32_t i = 0;
     snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, ifmap_scratch);
     snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, grad_ifmap_scratch);

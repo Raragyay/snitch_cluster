@@ -1844,9 +1844,9 @@ static inline void batchnorm_backward_training_multicore_fp32(
                     &grad_ifmap_scratch[compute_id], &ifmap_scratch[compute_id],
                     &weight_times_invstd_scratch[compute_id],
                     &k_scratch[compute_id],
-                    &winvstd_times_meank_sub_dmean_scratch[compute_id],
-                    buf_flag, num_doubles_per_aligned_point, work_in_tile,
-                    work_mod_4, work_div_4_sub_1, tile_size_in_aligned_points,
+                    &winvstd_times_meank_sub_dmean_scratch[compute_id], buf_flag,
+                    num_doubles_per_aligned_point, work_in_tile, work_mod_4,
+                    work_div_4_sub_1, tile_size_in_aligned_points,
                     num_doubles_work_for_core_per_aligned_point,
                     num_compute_cores, dm_comm);
             }

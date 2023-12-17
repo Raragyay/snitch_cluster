@@ -145,36 +145,43 @@ non_aligned_sizes = [
 # print(target_snitch_cluster_path.absolute())
 config_modifiers = {
     64: {
-        # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
-        "SINGLECORE_OPT": [
-            # *small_sizes,
-            format_size(8, 8, 8),
-            format_size(16, 16, 16),
-            format_size(32, 32, 32),
-        ],
+    #     # "SINGLE_CORE": [*small_sizes, format_size(16, 8, 8)],
+    #     "SINGLECORE_OPT": [
+    #         # *small_sizes,
+    #         format_size(8, 8, 8),
+    #         format_size(16, 16, 16),
+    #         format_size(32, 32, 32),
+    #         format_size(48, 48, 48),
+    #         format_size(64, 64, 64),
+    #     ],
         "MULTICORE_OPT": [
             # *small_sizes,
-            format_size(8, 8, 8),
-            format_size(16, 16, 16),
-            format_size(32, 32, 32),
+            # format_size(8, 8, 8),
+            # format_size(16, 16, 16),
+            # format_size(32, 32, 32),
+            format_size(48, 48, 48),
             format_size(64, 64, 64),
             # format_size(128, 128, 128),
             # format_size(256, 256, 256),
         ],
-    },
-    32: {
-        "SINGLECORE_OPT": [
-            format_size(8, 8, 8),
-            format_size(16, 16, 16),
-            format_size(32, 32, 32),
-        ],
-        "MULTICORE_OPT": [
-            format_size(8, 8, 8),
-            format_size(16, 16, 16),
-            format_size(32, 32, 32),
-            format_size(64, 64, 64),
-        ],
-    },
+    # },
+    # 32: {
+    #     "SINGLECORE_OPT": [
+    #         format_size(8, 8, 8),
+    #         format_size(16, 16, 16),
+    #         format_size(32, 32, 32),
+    #         format_size(48, 48, 48),
+    #         format_size(64, 64, 64),
+    #     ],
+    #     "MULTICORE_OPT": [
+    #         format_size(8, 8, 8),
+    #         format_size(16, 16, 16),
+    #         format_size(32, 32, 32),
+    #         format_size(48, 48, 48),
+    #         format_size(64, 64, 64),
+    #         format_size(96, 96, 96),
+    #     ],
+    # },
     # 16: {
     #     "SINGLE_CORE_OPT": [
     #         *small_sizes,
@@ -183,7 +190,7 @@ config_modifiers = {
     #         format_size(16, 16, 8),
     #         format_size(16, 16, 16),
     #     ],
-    # },
+    },
 }
 
 # config_modifiers = {32: {"SINGLE_CORE_OPT": [format_size(16, 16, 16)]}}
@@ -351,27 +358,27 @@ def main():
                     *perf_counters_int,
                 )
             )
-        subprocess.run(
-            f"cp logs/hart_00000000_perf.json ../../sw/blas/gemm/scaling_raw_results/{prec}b_{impl}_{M}_hart_00000000_perf.json",
-            shell=True,
-            cwd=target_snitch_cluster_path,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        ).check_returncode()
-        subprocess.run(
-            f"cp logs/trace_hart_00000000.txt ../../sw/blas/gemm/scaling_raw_results/{prec}b_{impl}_{M}_trace_hart_00000000.txt",
-            shell=True,
-            cwd=target_snitch_cluster_path,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        ).check_returncode()
+            write_results(data, scaling_results_df, args.whole_block)
+            subprocess.run(
+                f"cp logs/hart_00000000_perf.json ../../sw/blas/gemm/scaling_raw_results/{prec}b_{impl}_{M}_hart_00000000_perf.json",
+                shell=True,
+                cwd=target_snitch_cluster_path,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            ).check_returncode()
+            subprocess.run(
+                f"cp logs/trace_hart_00000000.txt ../../sw/blas/gemm/scaling_raw_results/{prec}b_{impl}_{M}_trace_hart_00000000.txt",
+                shell=True,
+                cwd=target_snitch_cluster_path,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            ).check_returncode()
     except Exception as e:
         traceback.print_exc()
     except KeyboardInterrupt:
         write_results(data, scaling_results_df, args.whole_block)
         exit(130)
 
-    write_results(data, scaling_results_df, args.whole_block)
 
 
 if __name__ == "__main__":

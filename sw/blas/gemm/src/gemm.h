@@ -163,7 +163,7 @@ void gemm_fp64_baseline(uint32_t M, uint32_t N, uint32_t K, double* A,
     } else {
         for (uint32_t m = 0; m < M; m++) {
             for (uint32_t n = 0; n < N; n++) {
-                double c0 = multiply_opt(C[m * ldC + n], BETA);
+                double c0 = C[m * ldC + n] * BETA;
                 for (uint32_t k = 0; k < K; k++) {
                     c0 += A[k * M * ldA + m * ldA] * B[k + n * ldB];
                 }
@@ -2079,21 +2079,41 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
         switch (prec) {
             case FP64:
-                gemm_fp64_complete(frac_m, n, k, (double*)a + offsetA,
-                                    lda_strided,
-                                    transa, (double*)b, ldb, transb, (double*)c +
-                                    offsetC, ldc_strided, (double*)alpha, (double*)beta, setup_ssr);
+                {
+                // uint32_t start_dma_load = snrt_mcycle();
+                // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                //                     SNRT_PERF_CNT_ICACHE_STALL);
+                // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                //                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+
+                // gemm_fp64_complete(frac_m, n, k, (double*)a + offsetA,
+                //                     lda_strided,
+                //                     transa, (double*)b, ldb, transb, (double*)c +
+                //                     offsetC, ldc_strided, (double*)alpha, (double*)beta, setup_ssr);
                 // gemm_fp64_opt(frac_m, n, k, (double*)a + offsetA,
                 //                     lda_strided,
                 //                     transa, (double*)b, ldb, transb, (double*)c +
                 //                     offsetC, ldc_strided, &beta, setup_ssr);
-                // gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
-                //                    lda_strided, transa, (double*)b, ldb, transb,
-                //                    (double*)c + offsetC, ldc_strided,
-                //                    (double)beta);
+                gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
+                                   lda_strided, transa, (double*)b, ldb, transb,
+                                   (double*)c + offsetC, ldc_strided,
+                                   *((double*)(beta)));
+                // uint32_t done = snrt_mcycle();
+                // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+                }
                 break;
             case FP32:
                 /*FRAC M HAS TO BE MODIFIED because we compute 2 rows at the time*/
+                {
+
+                // uint32_t start_dma_load = snrt_mcycle();
+                // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                //                     SNRT_PERF_CNT_ICACHE_STALL);
+                // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                //                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
                 if (!transa && !transb)
                     gemm_fp32_complete(frac_m, n, k, (float*)a + offsetA,
                         lda_strided,
@@ -2122,6 +2142,11 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 // gemm_fp32_opt(frac_m, n, k, (float*)a + offsetA, lda_strided,
                 //             (float*)b, ldb, (float*)c + offsetC, ldc_strided,
                 //             (uint32_t*)beta, setup_ssr);
+                // uint32_t done = snrt_mcycle();
+                // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+                }
+
                 break;
             case FP16:
                 if (expand) {
@@ -2150,10 +2175,20 @@ void sc_sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 uint32_t transa, uint32_t transb, uint32_t m, uint32_t n,
                 uint32_t k, void* alpha, void* a, void* b,
                 void* beta, void* c) {
-    if (snrt_cluster_core_idx() == 0) {
+    uint32_t compute_id = snrt_cluster_core_idx();
+    if ( compute_id == 0) {
 
         switch (prec) {
             case FP64:
+                {
+                // uint32_t start_dma_load = snrt_mcycle();
+                // reset_and_start_perf_single_core(0, SNRT_PERF_CNT0,
+                //                     SNRT_PERF_CNT_ICACHE_STALL);
+                // reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
+                //                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+
+
                 gemm_fp64_complete(m, n, k, (double*)a,
                                     k,
                                     transa, (double*)b, n, transb, (double*)c,
@@ -2166,9 +2201,22 @@ void sc_sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 //                    lda_strided, transa, (double*)b, ldb, transb,
                 //                    (double*)c + offsetC, ldc_strided,
                 //                    (double)beta);
+                // uint32_t done = snrt_mcycle();
+                // end_perf_and_dump_single_core(0, SNRT_PERF_CNT0);
+                // end_perf_and_dump_single_core(0, SNRT_PERF_CNT1);
+                }
+
                 break;
             case FP32:
+                {
                 /*FRAC M HAS TO BE MODIFIED because we compute 2 rows at the time*/
+                // uint32_t start_dma_load = snrt_mcycle();
+                // reset_and_start_perf_single_core(0, SNRT_PERF_CNT0,
+                //                     SNRT_PERF_CNT_ICACHE_STALL);
+                // reset_and_start_perf_single_core(0, SNRT_PERF_CNT1,
+                //                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+
                 if (!transa && !transb)
                     gemm_fp32_complete(m, n, k, (float*)a,
                         k,
@@ -2197,6 +2245,11 @@ void sc_sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 // gemm_fp32_opt(frac_m, n, k, (float*)a + offsetA, lda_strided,
                 //             (float*)b, ldb, (float*)c + offsetC, ldc_strided,
                 //             (uint32_t*)beta, setup_ssr);
+                
+                // uint32_t done = snrt_mcycle();
+                // end_perf_and_dump_single_core(0, SNRT_PERF_CNT0);
+                // end_perf_and_dump_single_core(0, SNRT_PERF_CNT1);
+                }
                 break;
             // case FP16:
             //     if (expand) {
@@ -2217,6 +2270,20 @@ void sc_sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
             //                     setup_ssr);
             //     break;
         }
+    }
+    else
+    {
+        // uint32_t start_dma_load = snrt_mcycle();
+        // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+        //                     SNRT_PERF_CNT_ICACHE_STALL);
+        // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+        //                     SNRT_PERF_CNT_TCDM_CONGESTED);
+
+
+        // uint32_t done = snrt_mcycle();
+        // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+        // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+
     }
 }
 
@@ -2256,7 +2323,7 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
     void *heap_ptr = (void*)snrt_l1_next();
     if (load_a) {
         local_a = heap_ptr;
-        heap_ptr += size_frac_a;
+        heap_ptr += size_frac_a + 8 * 8 * 4;
     } else local_a = a;
     if (load_b) {
         local_b = heap_ptr;
@@ -2276,11 +2343,11 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
     uint32_t compute_id = snrt_cluster_core_idx();
 
-    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
-    //                                  SNRT_PERF_CNT_ICACHE_STALL);
-    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
-    //                                  SNRT_PERF_CNT_TCDM_CONGESTED);
-    // uint32_t start_dma_load = snrt_mcycle();    
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                                     SNRT_PERF_CNT_ICACHE_STALL);
+    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+    uint32_t start_dma_load = snrt_mcycle();    
 
     // Every cluster iterates over its subset of m tiles
     for (uint32_t m_tile = 0; m_tile < m_tiles_per_cluster; m_tile++) {
@@ -2366,11 +2433,11 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                     } else {
                         beta_k = &one;
                     }
-                    uint32_t start_dma_load = snrt_mcycle();
-                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
-                                     SNRT_PERF_CNT_ICACHE_STALL);
-                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
-                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+                    // uint32_t start_dma_load = snrt_mcycle();
+                    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                    //                  SNRT_PERF_CNT_ICACHE_STALL);
+                    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                    //                  SNRT_PERF_CNT_TCDM_CONGESTED);
 
                     
 #ifdef MULTICORE_OPT
@@ -2384,9 +2451,9 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                                beta_k, local_c_partial);
 #endif
 
-                    uint32_t done = snrt_mcycle();
-                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
-                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+                    // uint32_t done = snrt_mcycle();
+                    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
 
                 }
@@ -2428,9 +2495,9 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
         }
     }
     snrt_cluster_hw_barrier();
-    // uint32_t done = snrt_mcycle();
-    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
-    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+    uint32_t done = snrt_mcycle();
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
     return 0;
 }

@@ -31,9 +31,13 @@
 #define USE_SSR_FREP_3D 1
 #define USE_SSR_FREP_ALL 0
 #define USE_DOUBLE_BUFFERING 1
+
+// Note: Dilation > 1 only works in this mode when ceil_mode = 0.
+// This can be fixed by special casing kernels whos dilation would normally
+// reach past the bounds of the input similar to how padding is handled.
 #define ENABLE_SPECIALIZED 1
 
-#define ENABLE_BENCHMARKING 1
+#define ENABLE_BENCHMARKING 0
 
 // Assume we have ~100kb of free cache
 #define BASE_USABLE_CACHE 100000
@@ -98,6 +102,7 @@ static inline void ssr_asm_no_index(int);
 void ssr_asm_no_index(int n_iter_minus_two) {
 
   if (n_iter_minus_two == -1) {
+    CDUMP(10101010);
     asm volatile( 
       "fadd.d ft1, %[zero], ft0\n" /* load the initial value */
       :
@@ -106,6 +111,7 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else if (n_iter_minus_two == 0) {
+    CDUMP(123123123);
     asm volatile( 
       "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
       "fmax.d ft1, ft3, ft0\n"
@@ -173,6 +179,7 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else {
+    CDUMP(121212111);
     asm volatile(
       "fadd.d ft3, %[zero], ft0\n"
       "fadd.d ft4, %[zero], ft0\n"
@@ -210,112 +217,114 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
     CDUMP(19191919);
     return;
   }
+  if (n_kernel < 6) {
+    if (n_kernel == 2) {
+      CDUMP(1111111);
+      asm volatile(
+        "li t0, 0\n"
 
-  if (n_kernel == 2) {
-    CDUMP(1111111);
-    asm volatile(
-      "li t0, 0\n"
+        "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
+        "fmax.d ft1, ft3, ft0\n"
 
-      "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
-      "fmax.d ft1, ft3, ft0\n"
+        "addi t0, t0, 1\n"
 
-      "addi t0, t0, 1\n"
+        "bne t0, %[total_iters], -12\n"
 
-      "bne t0, %[total_iters], -12\n"
+        :
+        : [zero] "f"(0.0),
+          [total_iters] "r"(total_iters)
+        : "t0", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
+      );
+      return;
+    }
+    else if (n_kernel == 1) {
+      CDUMP(2222222);
+      CDUMP(n_kernel);
+      CDUMP(total_iters);
+      asm volatile(
+        "li t0, 0\n"
 
-      :
-      : [zero] "f"(0.0),
-        [total_iters] "r"(total_iters)
-      : "t0", "ft0", "ft1", "ft2", "ft3", "memory", "zero"
-    );
-    return;
-  }
-  else if (n_kernel == 1) {
-    CDUMP(2222222);
-    CDUMP(n_kernel);
-    CDUMP(total_iters);
-    asm volatile(
-      "li t0, 0\n"
+        "fadd.d ft1, %[zero], ft0\n"
 
-      "fadd.d ft1, %[zero], ft0\n"
+        "addi t0, t0, 1\n"
 
-      "addi t0, t0, 1\n"
+        "bne t0, %[total_iters], -8\n"
 
-      "bne t0, %[total_iters], -8\n"
+        :
+        : [zero] "f"(0.0),
+          [total_iters] "r"(total_iters)
+        : "t0", "ft0", "ft1", "ft2", "memory", "zero"
+      );
+      CDUMP(88888);
+      return;
+    }
+    else if (n_kernel == 3) {
+      CDUMP(3333333);
+      asm volatile(
+        "li t0, 0\n"
 
-      :
-      : [zero] "f"(0.0),
-        [total_iters] "r"(total_iters)
-      : "t0", "ft0", "ft1", "ft2", "memory", "zero"
-    );
-    CDUMP(88888);
-    return;
-  }
-  else if (n_kernel == 3) {
-    CDUMP(3333333);
-    asm volatile(
-      "li t0, 0\n"
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+        "fadd.d ft5, %[zero], ft0\n"
+        "fmax.d ft3, ft3, ft4\n"
+        "fmax.d ft1, ft3, ft5\n"
 
-      "fadd.d ft3, %[zero], ft0\n"
-      "fadd.d ft4, %[zero], ft0\n"
-      "fadd.d ft5, %[zero], ft0\n"
-      "fmax.d ft3, ft3, ft4\n"
-      "fmax.d ft1, ft3, ft5\n"
+        "addi t0, t0, 1\n"
 
-      "addi t0, t0, 1\n"
+        "bne t0, %[total_iters], -24\n"
 
-      "bne t0, %[total_iters], -24\n"
+        :
+        : [zero] "f"(0.0),
+          [total_iters] "r"(total_iters)
+        : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "memory", "zero"
+      );
+      return;
+    }
+    else if (n_kernel == 4) {
+      CDUMP(190190);
+      asm volatile(
+        "li t0, 0\n"
 
-      :
-      : [zero] "f"(0.0),
-        [total_iters] "r"(total_iters)
-      : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "memory", "zero"
-    );
-    return;
-  }
-  else if (n_kernel == 4) {
-    asm volatile(
-      "li t0, 0\n"
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+        "fmax.d ft1, ft3, ft4\n"
 
-      "fadd.d ft3, %[zero], ft0\n"
-      "fadd.d ft4, %[zero], ft0\n"
-      "fmax.d ft3, ft3, ft0\n"
-      "fmax.d ft4, ft4, ft0\n"
-      "fmax.d ft1, ft3, ft4\n"
+        "addi t0, t0, 1\n"
 
-      "addi t0, t0, 1\n"
+        "bne t0, %[total_iters], -24\n"
 
-      "bne t0, %[total_iters], -24\n"
+        :
+        : [zero] "f"(0.0),
+          [total_iters] "r"(total_iters)
+        : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+      );
+      return;
+    }
+    else if (n_kernel == 5) {
+      CDUMP(555555555);
+      asm volatile(
+        "li t0, 0\n"
 
-      :
-      : [zero] "f"(0.0),
-        [total_iters] "r"(total_iters)
-      : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
-    );
-    return;
-  }
-  else if (n_kernel == 5) {
-    CDUMP(555555555);
-    asm volatile(
-      "li t0, 0\n"
+        "fadd.d ft3, %[zero], ft0\n"
+        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft4, ft4, ft0\n"
+        "fmax.d ft3, ft3, ft0\n"
+        "fmax.d ft1, ft3, ft4\n"
 
-      "fadd.d ft3, %[zero], ft0\n"
-      "fadd.d ft4, %[zero], ft0\n"
-      "fmax.d ft3, ft3, ft0\n"
-      "fmax.d ft4, ft4, ft0\n"
-      "fmax.d ft3, ft3, ft0\n"
-      "fmax.d ft1, ft3, ft4\n"
+        "addi t0, t0, 1\n"
 
-      "addi t0, t0, 1\n"
+        "bne t0, %[total_iters], -28\n"
 
-      "bne t0, %[total_iters], -28\n"
-
-      :
-      : [zero] "f"(0.0),
-        [total_iters] "r"(total_iters)
-      : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
-    );
-    return;
+        :
+        : [zero] "f"(0.0),
+          [total_iters] "r"(total_iters)
+        : "t0", "ft0", "ft1", "ft2", "ft3", "ft4", "memory", "zero"
+      );
+      return;
+    }
   }
 
   int mod = n_kernel % 2;
@@ -323,18 +332,19 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
   if (total_iters % 2 == 0) {
 
     if (mod == 0) {
+      CDUMP(98989898);
       asm volatile(
         "li t0, 0\n"
 
-        "fadd.d ft3, %[zero], ft0\n"
-        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, %[ninf], ft0\n"
+        "fmax.d ft4, %[ninf], ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft3, ft3, ft0\n"
         "fmax.d ft4, ft4, ft0\n"
 
-        "fadd.d ft5, %[zero], ft0\n"
-        "fadd.d ft6, %[zero], ft0\n"
+        "fmax.d ft5, %[ninf], ft0\n"
+        "fmax.d ft6, %[ninf], ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft5, ft5, ft0\n"
@@ -348,7 +358,7 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
         "bne t0, %[total_iters], -52\n"
 
         :/* [tmp] "+r"(tmp)*/
-        : [zero] "f"(0.0),
+        : [ninf] "f"(-1e5000f),
           // [work_this_core] "r"(work_this_core),
           [n_frep] "r"((n_kernel - 2) / 2 - 1),
           // [n_channels] "r"(n_channels),
@@ -364,16 +374,16 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
       asm volatile(
         "li t0, 0\n"
 
-        "fadd.d ft3, %[zero], ft0\n"
-        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, %[ninf], ft0\n"
+        "fmax.d ft4, %[ninf], ft0\n"
         "fmax.d ft3, ft3, ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft3, ft3, ft0\n"
         "fmax.d ft4, ft4, ft0\n"
 
-        "fadd.d ft5, %[zero], ft0\n"
-        "fadd.d ft6, %[zero], ft0\n"
+        "fmax.d ft5, %[ninf], ft0\n"
+        "fmax.d ft6, %[ninf], ft0\n"
         "fmax.d ft5, ft5, ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
@@ -388,7 +398,7 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
         "bne t0, %[total_iters], -60\n"
 
         :/* [tmp] "+r"(tmp)*/
-        : [zero] "f"(0.0),
+        : [ninf] "f"(-1e5000f),
           // [work_this_core] "r"(work_this_core),
           [n_frep] "r"((n_kernel - 3) / 2 - 1),
           // [n_channels] "r"(n_channels),
@@ -404,8 +414,8 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
     if (mod == 0) {
       CDUMP(5555556);
       asm volatile(
-        "fadd.d ft3, %[zero], ft0\n"
-        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, %[ninf], ft0\n"
+        "fmax.d ft4, %[ninf], ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft3, ft3, ft0\n"
@@ -415,15 +425,15 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
 
         "li t0, 0\n"
 
-        "fadd.d ft3, %[zero], ft0\n"
-        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, %[ninf], ft0\n"
+        "fmax.d ft4, %[ninf], ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft3, ft3, ft0\n"
         "fmax.d ft4, ft4, ft0\n"
 
-        "fadd.d ft5, %[zero], ft0\n"
-        "fadd.d ft6, %[zero], ft0\n"
+        "fmax.d ft5, %[ninf], ft0\n"
+        "fmax.d ft6, %[ninf], ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft5, ft5, ft0\n"
@@ -437,7 +447,7 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
         "bne t0, %[total_iters], -52\n"
 
         :/* [tmp] "+r"(tmp)*/
-        : [zero] "f"(0.0),
+        : [ninf] "f"(-1e5000f),
           // [work_this_core] "r"(work_this_core),
           [n_frep] "r"((n_kernel - 2) / 2 - 1),
           // [n_channels] "r"(n_channels),
@@ -449,8 +459,8 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
     else {
       CDUMP(6666667);
       asm volatile(
-        "fadd.d ft3, %[zero], ft0\n"
-        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, %[ninf], ft0\n"
+        "fmax.d ft4, %[ninf], ft0\n"
         "fmax.d ft3, ft3, ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
@@ -461,16 +471,16 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
 
         "li t0, 0\n"
 
-        "fadd.d ft3, %[zero], ft0\n"
-        "fadd.d ft4, %[zero], ft0\n"
+        "fmax.d ft3, %[ninf], ft0\n"
+        "fmax.d ft4, %[ninf], ft0\n"
         "fmax.d ft3, ft3, ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
         "fmax.d ft3, ft3, ft0\n"
         "fmax.d ft4, ft4, ft0\n"
 
-        "fadd.d ft5, %[zero], ft0\n"
-        "fadd.d ft6, %[zero], ft0\n"
+        "fmax.d ft5, %[ninf], ft0\n"
+        "fmax.d ft6, %[ninf], ft0\n"
         "fmax.d ft5, ft5, ft0\n"
 
         "frep.o %[n_frep], 2, 0, 0\n"
@@ -485,7 +495,7 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
         "bne t0, %[total_iters], -60\n"
 
         :/* [tmp] "+r"(tmp)*/
-        : [zero] "f"(0.0),
+        : [ninf] "f"(-1e5000f),
           // [work_this_core] "r"(work_this_core),
           [n_frep] "r"((n_kernel - 3) / 2 - 1),
           // [n_channels] "r"(n_channels),
@@ -531,12 +541,15 @@ void MAXPOOL_FN_UNTILED(maxpool_attributes* attribs,
     snrt_cluster_hw_barrier(); // 2: computation finished
 
     snrt_dma_start_1d(out, ptr, sizeof(double) * total_outs);
+
+    #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
     ptr += sizeof(double) * total_outs;
     ptr += ((size_t) ptr) % 8;
 
     #if DMA_INDICES
     snrt_dma_wait_all();
     snrt_dma_start_1d(idx, ptr, sizeof(int) * total_outs);
+    #endif
     #endif
 
     snrt_dma_wait_all();
@@ -556,19 +569,12 @@ void MAXPOOL_FN_UNTILED(maxpool_attributes* attribs,
     int* idx_out = idx;
     #endif
 
-    #if ENABLE_BENCHMARKING
-    uint32_t a = snrt_mcycle();
-    #endif
     #if MAXPOOL_DIM == 1
     MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #elif MAXPOOL_DIM == 2
     MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #elif MAXPOOL_DIM == 3
     MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
-    #endif
-    #if ENABLE_BENCHMARKING
-    uint32_t b = snrt_mcycle();
-    // if (snrt_global_core_idx() == 0) DUMP(b - a);
     #endif
 
     snrt_fpu_fence();
@@ -586,8 +592,13 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   uint32_t compute_num = snrt_cluster_compute_core_num();
   uint32_t compute_id = snrt_global_core_idx();
 
+  snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL, 0);
+  snrt_start_perf_counter(SNRT_PERF_CNT1, SNRT_PERF_CNT_TCDM_CONGESTED, 0);
+
   char* ptr = (char*) snrt_l1_next();
   
+  snrt_mcycle();
+
   #if DMA_ATTRIBS
     maxpool_attributes* attribs = (maxpool_attributes*) ptr;
     if (snrt_is_dm_core()) {
@@ -705,9 +716,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     }
     if (snrt_is_compute_core()) {
       // do computation on data in other_ptr
-      #if ENABLE_BENCHMARKING
-      snrt_mcycle();
-      #endif
       #if MAXPOOL_DIM == 1
       MAXPOOL_FN_1D(&copy,
         (double*) other_ptr,
@@ -732,9 +740,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
         compute_id,
         compute_num,
         outs_per_cache);
-      #endif
-      #if ENABLE_BENCHMARKING
-      snrt_mcycle();
       #endif
 
       snrt_cluster_hw_barrier(); // 1
@@ -799,9 +804,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
 
   }
   if (snrt_is_compute_core()) {
-    #if ENABLE_BENCHMARKING
-    snrt_mcycle();
-    #endif
     // do computation on data in other_ptr
     #if MAXPOOL_DIM == 1
     MAXPOOL_FN_1D(&copy,
@@ -828,9 +830,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       compute_num,
       outs_per_cache);
     #endif
-    #if ENABLE_BENCHMARKING
-    snrt_mcycle();
-    #endif
 
     snrt_cluster_hw_barrier(); // 1
 
@@ -849,9 +848,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     copy.output_shape[0] = batches_left;
     copy.output_shape[1] = 1;
 
-    #if ENABLE_BENCHMARKING
-    snrt_mcycle();
-    #endif
     #if MAXPOOL_DIM == 1
     MAXPOOL_FN_1D(&copy,
       (double*) this_ptr,
@@ -876,9 +872,6 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
       compute_id,
       compute_num,
       outs_left);
-    #endif
-    #if ENABLE_BENCHMARKING
-    snrt_mcycle();
     #endif
 
     snrt_fpu_fence();
@@ -1197,19 +1190,22 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
   // Check the special case of a very nice input: 1 dilation, stride = kernel, no padding, kernel tiles perfectly.
   // If the input is like this we can reduce the dimensions of the loop by 1 and do it all in SSR.
+  // The condition may be overspecified: other inputs might be permissible.
+  // Dilation > 1 in one dimension may be allowed: If height dilation > 1 then compute column by column.
+  // If width dilation > 1 then compute row by row.
   if (attr->pads[0] == 0 && attr->pads[1] == 0 && attr->pads[2] == 0 && attr->pads[3] == 0 &&
       attr->dilations[0] == 1 && attr->dilations[1] == 1 &&
       attr->strides[0] == attr->kernel_shape[0] && attr->strides[1] == attr->kernel_shape[1] &&
       attr->input_shape[2] % attr->kernel_shape[0] == 0 && attr->input_shape[3] % attr->kernel_shape[1] == 0 &&
       // We can probably use a different algorithm to make this efficient with fewer channels,
       // but this is enough to demonstrate the optimal case.
-      attr->input_shape[0] * attr->input_shape[1] >= n_cores) {
-
+      attr->input_shape[0] * attr->input_shape[1] * attr->output_shape[2] >= n_cores) {
+    
     int input_size = attr->input_shape[2] * attr->input_shape[3];
     int pooled_size = attr->output_shape[2] * attr->output_shape[3];
     int n_channels = attr->input_shape[0] * attr->input_shape[1];
     int total_rows = n_channels * attr->output_shape[2];
-
+    
     int in_h = attr->input_shape[2];
     int in_w = attr->input_shape[3];
     int out_h = attr->output_shape[2];
@@ -1255,7 +1251,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
   // Inputs that have a kernel affected by multiple paddings is not supported.
   // A more complicated special casing algorithm may resolve this.
   if ((attr->kernel_shape[0] - 1) * attr->dilations[0] + 1 <= attr->input_shape[2] && (attr->kernel_shape[1] - 1) * attr->dilations[1] + 1 <= attr->input_shape[3]) {
-    
+
     int input_size = attr->input_shape[2] * attr->input_shape[3];
     int pooled_size = attr->output_shape[2] * attr->output_shape[3];
     int n_channels = attr->input_shape[0] * attr->input_shape[1];
@@ -1367,35 +1363,80 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
       // return;
     }
 
-    // The first and simplest strategy is to distribute channels evenly. This is close to optimal at scale
-    // as work is unbalanced by at most one channel between any two cores.
-    // We are limited to 4D SSR so the channel iteration must be a traditional loop.
-    for (int i = start_step; i < n_channels; i += n_cores) {
+    if (n_channels >= n_cores) {
 
+      // The first and simplest strategy is to distribute channels evenly. This is close to optimal at scale
+      // as work is unbalanced by at most one channel between any two cores.
+      // We are limited to 4D SSR so the channel iteration must be a traditional loop.
+      for (int i = start_step; i < n_channels; i += n_cores) {
+
+        snrt_ssr_loop_4d(SNRT_SSR_DM0,
+          attr->kernel_shape[1],
+          attr->kernel_shape[0],
+          out_w,
+          out_h,
+          attr->dilations[1] * sizeof(double),
+          in_w * attr->dilations[0] * sizeof(double),
+          attr->strides[1] * sizeof(double),
+          in_w * attr->strides[0] * sizeof(double));
+        
+        // 2D is necessary in case there is padding
+        snrt_ssr_loop_2d(SNRT_SSR_DM1,
+          out_w,
+          out_h,
+          sizeof(double),
+          attr->output_shape[3] * sizeof(double));
+        
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + input_size * i);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + pooled_size * i);
+
+        snrt_ssr_enable();
+
+        const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
+        const register int total_iters = out_w * out_h;
+
+        ssr_asm_no_index_optimized(n_frep, total_iters);
+
+        snrt_ssr_disable();
+        snrt_fpu_fence();
+
+      }
+
+      return;
+
+    }
+
+    int rows_per_channel = out_h / n_cores;
+    if (start_step < out_h % n_cores) ++rows_per_channel;
+
+    if (rows_per_channel < 1) return;
+
+    for (int i = 0; i < n_channels; ++i) {
+      
       snrt_ssr_loop_4d(SNRT_SSR_DM0,
         attr->kernel_shape[1],
         attr->kernel_shape[0],
         out_w,
-        out_h,
+        rows_per_channel,
         attr->dilations[1] * sizeof(double),
         in_w * attr->dilations[0] * sizeof(double),
         attr->strides[1] * sizeof(double),
-        in_w * attr->strides[0] * sizeof(double));
+        n_cores * in_w * attr->strides[0] * sizeof(double));
       
       // 2D is necessary in case there is padding
       snrt_ssr_loop_2d(SNRT_SSR_DM1,
         out_w,
-        out_h,
+        rows_per_channel,
         sizeof(double),
-        attr->output_shape[3] * sizeof(double));
+        n_cores * out_w * sizeof(double));
       
-      snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + input_size * i);
-      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + pooled_size * i);
+      snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + start_step * in_w * attr->strides[0] + input_size * i);
+      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + start_step * out_w + pooled_size * i);
 
       snrt_ssr_enable();
 
       const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
-      const register int total_iters = out_w * out_h;
+      const register int total_iters = out_w * rows_per_channel;
 
       ssr_asm_no_index_optimized(n_frep, total_iters);
 
@@ -1405,15 +1446,6 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
     }
 
     return;
-
-    // Another distribution strategy can be to share work evenly in a single channel.
-    // We can't use a naive method of work splitting due to limitations of SSR stride.
-    // We could distribute each row evenly, but that results in uneven distribution when
-    // number of columns is not a multiple of n_cores.
-    // An even distribution strategy could be to distribute each row evenly up to the
-    // closest multiple of n_cores <= the number of columns, then distribute the remaining columns
-    // up to the multiple of n_cores <= number of rows. Then each kernel of the remainder is distributed
-    // to one core each. This strategy requires 3 SSR rotations per channel, however.
 
   }
   #endif

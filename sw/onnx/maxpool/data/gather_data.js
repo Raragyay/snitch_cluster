@@ -4,6 +4,7 @@ const fs = require("fs");
 const files = fs.readdirSync("logs");
 
 const benchmarks = files.filter((file) => file.endsWith(".json")).slice(0, -1);
+console.log(benchmarks);
 
 let cycles_min = 99999999;
 let cycles_avg = 0;

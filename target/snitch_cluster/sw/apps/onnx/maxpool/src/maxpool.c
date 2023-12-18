@@ -1,17 +1,17 @@
 #include "maxpool.h"
 #include "snrt.h"
 
-// #include "benchmark_all.h"
+#include "benchmark_all.h"
 // #include "data1.h"
-#include "data_all.h"
+// #include "data_all.h"
 // #include "data.h"
 
-#define ENABLE_1D 1
-#define ENABLE_2D 1
-#define ENABLE_3D 1
+#define ENABLE_1D 0
+#define ENABLE_2D 0
+#define ENABLE_3D 0
 
 #define ENABLE_YES_INDICES 0
-#define ENABLE_NO_INDICES 1
+#define ENABLE_NO_INDICES 0
 
 #define ENABLE_COMPREHENSIVE_TEST 0
 
@@ -39,39 +39,39 @@ int main() {
 
   maxpool_attributes attr_1d = {
     .n_dim = 1,
-    .input_shape = {8, 1, 256, -1, -1},
+    .input_shape = {8, 1, 992, -1, -1},
     .output_shape = {0},
     .auto_pad = NOTSET,
-    .ceil_mode = 1,
+    .ceil_mode = 0,
     .dilations = {1, -1, -1},
-    .kernel_shape = {8, -1, -1},
-    .pads = {0, 0, -1, -1, -1, -1},
+    .kernel_shape = {64, -1, -1},
+    .pads = {16, 16, -1, -1, -1, -1},
     .storage_order = 0,
-    .strides = {8, -1, -1}
+    .strides = {64, -1, -1}
   };
   maxpool_attributes attr_2d = {
     .n_dim = 2,
-    .input_shape = {8, 1, 2, 4, -1},
+    .input_shape = {8, 1, 24, 24, -1},
     .output_shape = {0},
     .auto_pad = NOTSET,
     .ceil_mode = 1,
     .dilations = {1, 1, -1},
-    .kernel_shape = {2, 4, -1},
-    .pads = {0, 0, 0, 0, -1, -1},
+    .kernel_shape = {8, 8, -1},
+    .pads = {4, 4, 4, 4, -1, -1},
     .storage_order = 0,
-    .strides = {2, 4, -1}
+    .strides = {8, 8, -1}
   };
   maxpool_attributes attr_3d = {
     .n_dim = 3,
-    .input_shape = {8, 1, 2, 2, 2},
+    .input_shape = {8, 1, 6, 6, 14},
     .output_shape = {0},
     .auto_pad = NOTSET,
     .ceil_mode = 1,
     .dilations = {1, 1, 1},
-    .kernel_shape = {2, 2, 2},
-    .pads = {0, 0, 0, 0, 0, 0},
+    .kernel_shape = {4, 4, 4},
+    .pads = {1, 1, 1, 1, 1, 1},
     .storage_order = 0,
-    .strides = {2, 2, 2}
+    .strides = {4, 4, 4}
   };
 
   // if (snrt_global_core_idx() != 0 && !snrt_is_dm_core()) {
@@ -107,20 +107,23 @@ int main() {
   // }
   
 
-  // compute_output_shape(&attr_1d, attr_1d.output_shape);
+  compute_output_shape(&attr_3d, attr_3d.output_shape);
+  DUMP(attr_3d.output_shape[2]);
+  DUMP(attr_3d.output_shape[3]);
+  DUMP(attr_3d.output_shape[4]);
 
-  // maxpool_f64_1d_no_index_single_core(&attr_1d,
-  //               ifmap,
-  //               output_loc);
+  maxpool_f64_3d_no_index(&attr_3d,
+                ifmap,
+                output_loc);
 
 
-  // snrt_mcycle();
-  // snrt_stop_perf_counter(SNRT_PERF_CNT0);
-  // snrt_stop_perf_counter(SNRT_PERF_CNT1);
-  // uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
-  // DUMP(counter);
-  // counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
-  // DUMP(counter);
+  snrt_mcycle();
+  snrt_stop_perf_counter(SNRT_PERF_CNT0);
+  snrt_stop_perf_counter(SNRT_PERF_CNT1);
+  uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
+  DUMP(counter);
+  counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
+  DUMP(counter);
 
 
 
@@ -234,8 +237,6 @@ int main() {
                 output_loc3_1);
   #endif
 
-  DUMP(1111);
-
 
   #if ENABLE_1D
   compute_output_shape(&attr1_2, attr1_2.output_shape);
@@ -244,8 +245,6 @@ int main() {
                 output_loc1_2);
   #endif
 
-  DUMP(1);
-
   #if ENABLE_2D
   compute_output_shape(&attr2_2, attr2_2.output_shape);
   maxpool_f64_2d_no_index(&attr2_2,
@@ -253,16 +252,12 @@ int main() {
                 output_loc2_2);
   #endif
 
-  DUMP(2);
-
   #if ENABLE_3D
   compute_output_shape(&attr3_2, attr3_2.output_shape);
   maxpool_f64_3d_no_index(&attr3_2,
                 ifmap3_2,
                 output_loc3_2);
   #endif
-
-  DUMP(2222);
 
 
   #if ENABLE_1D
@@ -290,8 +285,6 @@ int main() {
                 output_loc3_3);
   #endif
 
-  DUMP(3333);
-
 
   #if ENABLE_1D
   compute_output_shape(&attr1_4, attr1_4.output_shape);
@@ -317,8 +310,6 @@ int main() {
                 ifmap3_4,
                 output_loc3_4);
   #endif
-
-  DUMP(4444);
 
   #endif
 

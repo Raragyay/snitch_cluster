@@ -293,3 +293,84 @@ void maxpool_f64_3d_no_index_single_core(maxpool_attributes* attr, double* in, d
 }
 #undef MAXPOOL_FN_SINGLE_CORE
 #undef MAXPOOL_DIM
+
+void maxpool_backprop_f64_1d(maxpool_attributes* attr, double* vals, int* idx, double* out) {
+
+  int total_ins = attr->input_shape[0] * attr->input_shape[1] * attr->input_shape[2];
+  if (snrt_is_dm_core()) {
+    snrt_dma_memset(out, 0.0, total_ins * sizeof(double));
+
+    snrt_dma_wait_all();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+  }
+  if (snrt_is_compute_core()) {
+    int n_channels = attr->input_shape[0] * attr->input_shape[1];
+    int outs_per_channel = attr->output_shape[2];
+    snrt_cluster_hw_barrier();
+
+    for (int i = 0; i < n_channels; ++i) {
+      for (int j = 0; j < outs_per_channel; ++j) {
+        int index = i * outs_per_channel + j;
+        out[idx[index]] = vals[index];
+      }
+    }
+
+    snrt_cluster_hw_barrier();
+  }
+
+}
+
+void maxpool_backprop_f64_2d(maxpool_attributes* attr, double* vals, int* idx, double* out) {
+
+  int total_ins = attr->input_shape[0] * attr->input_shape[1] * attr->input_shape[2] * attr->input_shape[3];
+  if (snrt_is_dm_core()) {
+    snrt_dma_memset(out, 0.0, total_ins * sizeof(double));
+
+    snrt_dma_wait_all();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+  }
+  if (snrt_is_compute_core()) {
+    int n_channels = attr->input_shape[0] * attr->input_shape[1];
+    int outs_per_channel = attr->output_shape[2] * attr->output_shape[3];
+    snrt_cluster_hw_barrier();
+
+    for (int i = 0; i < n_channels; ++i) {
+      for (int j = 0; j < outs_per_channel; ++j) {
+        int index = i * outs_per_channel + j;
+        out[idx[index]] = vals[index];
+      }
+    }
+
+    snrt_cluster_hw_barrier();
+  }
+
+}
+
+void maxpool_backprop_f64_3d(maxpool_attributes* attr, double* vals, int* idx, double* out) {
+
+  int total_ins = attr->input_shape[0] * attr->input_shape[1] * attr->input_shape[2] * attr->input_shape[3] * attr->input_shape[4];
+  if (snrt_is_dm_core()) {
+    snrt_dma_memset(out, 0.0, total_ins * sizeof(double));
+
+    snrt_dma_wait_all();
+    snrt_cluster_hw_barrier();
+    snrt_cluster_hw_barrier();
+  }
+  if (snrt_is_compute_core()) {
+    int n_channels = attr->input_shape[0] * attr->input_shape[1];
+    int outs_per_channel = attr->output_shape[2] * attr->output_shape[3] * attr->output_shape[4];
+    snrt_cluster_hw_barrier();
+
+    for (int i = 0; i < n_channels; ++i) {
+      for (int j = 0; j < outs_per_channel; ++j) {
+        int index = i * outs_per_channel + j;
+        out[idx[index]] = vals[index];
+      }
+    }
+
+    snrt_cluster_hw_barrier();
+  }
+
+}

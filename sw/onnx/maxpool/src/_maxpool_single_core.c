@@ -298,12 +298,15 @@ void MAXPOOL_FN_SINGLE_CORE_UNTILED(maxpool_attributes* attribs,
     snrt_cluster_hw_barrier(); // 2: computation finished
 
     snrt_dma_start_1d(out, ptr, sizeof(double) * total_outs);
+
+    #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
     ptr += sizeof(double) * total_outs;
     ptr += ((size_t) ptr) % 8;
 
     #if DMA_INDICES_SINGLE_CORE
     snrt_dma_wait_all();
     snrt_dma_start_1d(idx, ptr, sizeof(int) * total_outs);
+    #endif
     #endif
 
     snrt_dma_wait_all();

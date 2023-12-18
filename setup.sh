@@ -24,7 +24,7 @@ alias anal="node ../../sw/onnx/maxpool/data/analyze_benchmark.js"
 
 alias gather="node ../../sw/onnx/maxpool/data/gather_data.js"
 
-alias dma="node ../../sw/onnx/maxpool/data/dma.js"
+alias dma="make mcycle=1 dma-bound-barrier; node ../../sw/onnx/maxpool/data/dma.js"
 
 alias maxpoolold="bin/snitch_cluster.vlt sw/apps/dnn/maxpool/build/maxpool.elf"
 

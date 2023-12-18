@@ -62,3 +62,9 @@ void maxpool_f64_3d_with_index_row_major_single_core(maxpool_attributes*, double
 void maxpool_f64_3d_with_index_col_major_single_core(maxpool_attributes*, double*, double*, int*);
 
 void maxpool_f64_3d_no_index_single_core(maxpool_attributes*, double*, double*);
+
+void maxpool_backprop_f64_1d(maxpool_attributes*, double*, int*, double*);
+
+void maxpool_backprop_f64_2d(maxpool_attributes*, double*, int*, double*);
+
+void maxpool_backprop_f64_3d(maxpool_attributes*, double*, int*, double*);

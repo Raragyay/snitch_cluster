@@ -501,8 +501,8 @@ void gemm_fp64_complete(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t 
     const uint32_t one_beta = bet == 1.0;
     register double ZERO = 0.0;
 
-    if (M==0)
-        return;
+    // if (M==0)
+    //     return;
 
     // SSR strides and bounds only have to be configured
     // once in the beginning
@@ -2087,18 +2087,18 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 //                     SNRT_PERF_CNT_TCDM_CONGESTED);
 
 
-                // gemm_fp64_complete(frac_m, n, k, (double*)a + offsetA,
-                //                     lda_strided,
-                //                     transa, (double*)b, ldb, transb, (double*)c +
-                //                     offsetC, ldc_strided, (double*)alpha, (double*)beta, setup_ssr);
+                gemm_fp64_complete(frac_m, n, k, (double*)a + offsetA,
+                                    lda_strided,
+                                    transa, (double*)b, ldb, transb, (double*)c +
+                                    offsetC, ldc_strided, (double*)alpha, (double*)beta, setup_ssr);
                 // gemm_fp64_opt(frac_m, n, k, (double*)a + offsetA,
                 //                     lda_strided,
                 //                     transa, (double*)b, ldb, transb, (double*)c +
                 //                     offsetC, ldc_strided, &beta, setup_ssr);
-                gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
-                                   lda_strided, transa, (double*)b, ldb, transb,
-                                   (double*)c + offsetC, ldc_strided,
-                                   *((double*)(beta)));
+                // gemm_fp64_baseline(frac_m, n, k, (double*)a + offsetA,
+                //                    lda_strided, transa, (double*)b, ldb, transb,
+                //                    (double*)c + offsetC, ldc_strided,
+                //                    *((double*)(beta)));
                 // uint32_t done = snrt_mcycle();
                 // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
                 // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
@@ -2459,16 +2459,16 @@ int gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                 }
                 else
                 {
-                    uint32_t start_dma_load = snrt_mcycle();
-                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
-                                     SNRT_PERF_CNT_ICACHE_STALL);
-                    reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
-                                     SNRT_PERF_CNT_TCDM_CONGESTED);
+                    // uint32_t start_dma_load = snrt_mcycle();
+                    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT0,
+                    //                  SNRT_PERF_CNT_ICACHE_STALL);
+                    // reset_and_start_perf_single_core(compute_id, SNRT_PERF_CNT1,
+                    //                  SNRT_PERF_CNT_TCDM_CONGESTED);
 
 
-                    uint32_t done = snrt_mcycle();
-                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
-                    end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
+                    // uint32_t done = snrt_mcycle();
+                    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT0);
+                    // end_perf_and_dump_single_core(compute_id, SNRT_PERF_CNT1);
 
                 }
 

@@ -1,17 +1,17 @@
 {
-  impl: SINGLECORE_OPT
-  M: 8
-  N: 8
-  K: 8
+  impl: MULTICORE_OPT
+  M: 128
+  N: 128
+  K: 128
   alpha: 1
   beta: 0
   ta: false
   tb: false
   prec: 64
   expand: 0
-  m_tiles: 1
-  k_tiles: 1
-  n_tiles: 1
+  m_tiles: 2
+  k_tiles: 2
+  n_tiles: 2
   parallelize_k: 0
   parallelize_m: 1
 }

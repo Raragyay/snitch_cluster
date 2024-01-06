@@ -1201,15 +1201,6 @@ void __gemm_fp32_complete_ta_tb (const uint32_t M, const uint32_t N, const uint3
                    const uint32_t setup_SSR) {
 
 
-    /*
-    A^T * B^T = (B * A)^T
-    */
-    float *tmp = A;
-    A = B;
-    B = tmp;
-
-
-
     // Unrolling factor of most inner loop.
     // Should be at least as high as the FMA delay
     // for maximum utilization
@@ -1253,7 +1244,21 @@ void __gemm_fp32_complete_ta_tb (const uint32_t M, const uint32_t N, const uint3
     for (uint32_t m = 0; m < M; m++) {
         uint32_t n = 0;
         for (uint32_t n0 = 0; n0 < N / (unroll*2); n0++) {
-            float* _C = &C[m * ldC + n];
+            float* _C = &C[n * ldC + m * 8];
+            float tmp_c[8];
+
+            for (int i = 0; i < 8; i++)
+            {
+                asm volatile (
+
+                    "flw fs1, 0(%[C])\n"
+                    "fsw fs1, 0(%[tmp_c])\n"
+                
+                :
+                : [ C ] "r"(_C + i*ldC), [ tmp_c ] "r"(tmp_c + i)
+                : "fs1", "memory");
+            }
+
             const register float zero = 0.0;
             const register double zero_d = 0.0;
 
@@ -1308,12 +1313,24 @@ void __gemm_fp32_complete_ta_tb (const uint32_t M, const uint32_t N, const uint3
                 "fsd ft6, 24(%[sum_addr_0]) \n"
 
                 : 
-                : [ sum_addr_0 ] "r"(_C), [ zero ] "f"(zero), [ zero_d ] "f"(zero_d), [ n_frep ] "r"(n_frep - 1),
+                : [ sum_addr_0 ] "r"(tmp_c), [ zero ] "f"(zero), [ zero_d ] "f"(zero_d), [ n_frep ] "r"(n_frep - 1),
                   [ alpha ] "f"(alp), [ neg_alpha ] "f"(-alp), [ beta ] "f"(bet), [ neg_beta ] "f"(-bet), [ zero_beta ] "r"(zero_beta)
                 : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "ft8", "ft9", "ft10", "ft11", "fa0");
 
                 snrt_ssr_disable();
+            
+            for (int i = 0; i < 8; i++)
+            {
+                asm volatile (
 
+                    "flw fs1, 0(%[tmp_c])\n"
+                    "fsw fs1, 0(%[C])\n"
+                
+                :
+                : [ C ] "r"(_C + i*ldC), [ tmp_c ] "r"(tmp_c + i)
+                : "fs1", "memory");
+            }
+ 
             n += unroll*2;
         }
 
@@ -1502,7 +1519,7 @@ void gemm_fp32_complete(const uint32_t M, const uint32_t N, const uint32_t K,
     }
     else if (ta && tb)
     {
-        __gemm_fp32_complete(M, N, K, B, ldA, A, ldB, C, ldC, ALPHA, BETA, setup_SSR);
+        __gemm_fp32_complete_ta_tb(M, N, K, A, ldA, B, ldB, C, ldC, ALPHA, BETA, setup_SSR);
     }
 }
 
@@ -2062,18 +2079,36 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
 
         // Compute cores work not on contiguous blocks but on strided rows
         uint32_t lda_strided = compute_num * lda;
-        if (transa)
+        
+        if (transa && transb && prec == FP32)
+        {
+            lda_strided = compute_num * ldb;
+            ldb = lda;
+
+            void* tmp = a;
+            a = b;
+            b = tmp;
+        }
+        else if (transa)
             lda_strided = lda;
+
+
         uint32_t ldc_strided = compute_num * ldc;
 
         // Compute cores access A and C at offsets of one row from each other
         uint32_t offsetA = compute_id * lda;
-        if (transa)
+        if (transa && transb && prec == FP32)
+        {
+            offsetA = compute_id * ldb;
+        }
+        else if (transa)
             offsetA = compute_id;
+
         uint32_t offsetC = compute_id * ldc;
 
         // Compute fraction of C rows every core computes
         uint32_t frac_m = m / compute_num;
+        
         if (compute_id < m % compute_num)
             frac_m++;
 
@@ -2130,10 +2165,17 @@ void sc_st_gemm(precision_t prec, uint32_t expand, uint32_t setup_ssr,
                         transa, (float*)b, ldb, transb, (float*)c +
                         offsetC*2, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
                 else
-                    gemm_fp32_complete(frac_m, n, k, (float*)b + offsetA,
+                {
+                    uint32_t frac_k = k / compute_num;
+        
+                    if (compute_id < k % compute_num)
+                        frac_k++;
+
+                    gemm_fp32_complete(frac_k, n, k, (float*)a + offsetA,
                         lda_strided,
-                        !transa, (float*)a, ldb, !transb, (float*)c +
-                        offsetC, ldc_strided, (float*)alpha, (float*)beta, setup_ssr);
+                        transa, (float*)b, ldb, transb, (float*)c +
+                        compute_id, ldc, (float*)alpha, (float*)beta, setup_ssr);
+                }
 
                 // gemm_fp32_baseline(frac_m, n, k, (float*)a + offsetA,
                 //                    lda_strided, transa, (float*)b, ldb, transb,

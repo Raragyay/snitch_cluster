@@ -5,6 +5,7 @@
 // #include "data1.h"
 // #include "data_all.h"
 // #include "data.h"
+// #include "scratch.h"
 
 #define ENABLE_1D 0
 #define ENABLE_2D 0
@@ -37,42 +38,42 @@ void populate_defaults(maxpool_attributes* attr, int n_dim);
 
 int main() {
 
-  maxpool_attributes attr_1d = {
-    .n_dim = 1,
-    .input_shape = {8, 1, 992, -1, -1},
-    .output_shape = {0},
-    .auto_pad = NOTSET,
-    .ceil_mode = 0,
-    .dilations = {1, -1, -1},
-    .kernel_shape = {64, -1, -1},
-    .pads = {16, 16, -1, -1, -1, -1},
-    .storage_order = 0,
-    .strides = {64, -1, -1}
-  };
-  maxpool_attributes attr_2d = {
-    .n_dim = 2,
-    .input_shape = {8, 1, 24, 24, -1},
-    .output_shape = {0},
-    .auto_pad = NOTSET,
-    .ceil_mode = 1,
-    .dilations = {1, 1, -1},
-    .kernel_shape = {8, 8, -1},
-    .pads = {4, 4, 4, 4, -1, -1},
-    .storage_order = 0,
-    .strides = {8, 8, -1}
-  };
-  maxpool_attributes attr_3d = {
-    .n_dim = 3,
-    .input_shape = {8, 1, 6, 6, 14},
-    .output_shape = {0},
-    .auto_pad = NOTSET,
-    .ceil_mode = 1,
-    .dilations = {1, 1, 1},
-    .kernel_shape = {4, 4, 4},
-    .pads = {1, 1, 1, 1, 1, 1},
-    .storage_order = 0,
-    .strides = {4, 4, 4}
-  };
+  // maxpool_attributes attr_1d = {
+  //   .n_dim = 1,
+  //   .input_shape = {8, 1, 992, -1, -1},
+  //   .output_shape = {0},
+  //   .auto_pad = NOTSET,
+  //   .ceil_mode = 0,
+  //   .dilations = {1, -1, -1},
+  //   .kernel_shape = {64, -1, -1},
+  //   .pads = {16, 16, -1, -1, -1, -1},
+  //   .storage_order = 0,
+  //   .strides = {64, -1, -1}
+  // };
+  // maxpool_attributes attr_2d = {
+  //   .n_dim = 2,
+  //   .input_shape = {8, 1, 24, 24, -1},
+  //   .output_shape = {0},
+  //   .auto_pad = NOTSET,
+  //   .ceil_mode = 1,
+  //   .dilations = {1, 1, -1},
+  //   .kernel_shape = {8, 8, -1},
+  //   .pads = {4, 4, 4, 4, -1, -1},
+  //   .storage_order = 0,
+  //   .strides = {8, 8, -1}
+  // };
+  // maxpool_attributes attr_3d = {
+  //   .n_dim = 3,
+  //   .input_shape = {8, 1, 6, 6, 14},
+  //   .output_shape = {0},
+  //   .auto_pad = NOTSET,
+  //   .ceil_mode = 1,
+  //   .dilations = {1, 1, 1},
+  //   .kernel_shape = {4, 4, 4},
+  //   .pads = {1, 1, 1, 1, 1, 1},
+  //   .storage_order = 0,
+  //   .strides = {4, 4, 4}
+  // };
 
   // if (snrt_global_core_idx() != 0 && !snrt_is_dm_core()) {
   //   snrt_cluster_hw_barrier();
@@ -107,32 +108,48 @@ int main() {
   // }
   
 
-  compute_output_shape(&attr_3d, attr_3d.output_shape);
-  DUMP(attr_3d.output_shape[2]);
-  DUMP(attr_3d.output_shape[3]);
-  DUMP(attr_3d.output_shape[4]);
+  // compute_output_shape(&attr_3d, attr_3d.output_shape);
+  // DUMP(attr_3d.output_shape[2]);
+  // DUMP(attr_3d.output_shape[3]);
+  // DUMP(attr_3d.output_shape[4]);
 
-  maxpool_f64_3d_no_index(&attr_3d,
-                ifmap,
-                output_loc);
+  // maxpool_f64_3d_no_index(&attr_3d,
+  //               ifmap,
+  //               output_loc);
 
 
-  snrt_mcycle();
-  snrt_stop_perf_counter(SNRT_PERF_CNT0);
-  snrt_stop_perf_counter(SNRT_PERF_CNT1);
-  uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
-  DUMP(counter);
-  counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
-  DUMP(counter);
+  // snrt_mcycle();
+  // snrt_stop_perf_counter(SNRT_PERF_CNT0);
+  // snrt_stop_perf_counter(SNRT_PERF_CNT1);
+  // uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
+  // DUMP(counter);
+  // counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
+  // DUMP(counter);
 
 
 
   // return 0;
 
+  // compute_output_shape(&attr1, attr1.output_shape);
+  // maxpool_f64_1d_no_index_single_core(&attr1,
+  //               ifmap1,
+  //               output_loc1);
+
+  // compute_output_shape(&attr1_1, attr1_1.output_shape);
+  // maxpool_f64_1d_no_index(&attr1_1,
+  //               ifmap1_1,
+  //               output_loc1_1);
+
+  // compute_output_shape(&attr1_2, attr1_2.output_shape);
+  // maxpool_f64_1d_no_index(&attr1_2,
+  //               ifmap1_2,
+  //               output_loc1_2);
+
   // compute_output_shape(&attr2, attr2.output_shape);
-  // maxpool_f64_2d_no_index_single_core(&attr2,
   //               ifmap2,
   //               output_loc2);
+
+  // return 0;
 
   // compute_output_shape(&attr3, attr3.output_shape);
   // maxpool_f64_3d_no_index_single_core(&attr3,

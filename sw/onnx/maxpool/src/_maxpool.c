@@ -102,7 +102,6 @@ static inline void ssr_asm_no_index(int);
 void ssr_asm_no_index(int n_iter_minus_two) {
 
   if (n_iter_minus_two == -1) {
-    CDUMP(10101010);
     asm volatile( 
       "fadd.d ft1, %[zero], ft0\n" /* load the initial value */
       :
@@ -111,7 +110,6 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else if (n_iter_minus_two == 0) {
-    CDUMP(123123123);
     asm volatile( 
       "fadd.d ft3, %[zero], ft0\n" /* load the initial value */
       "fmax.d ft1, ft3, ft0\n"
@@ -121,7 +119,6 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else if (n_iter_minus_two == 1) {
-    CDUMP(20202020);
     asm volatile(
 
       "fadd.d ft3, %[zero], ft0\n"
@@ -136,7 +133,6 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else if (n_iter_minus_two == 2) {
-    CDUMP(30303030);
     asm volatile(
       "fadd.d ft3, %[zero], ft0\n"
       "fadd.d ft4, %[zero], ft0\n"
@@ -149,7 +145,6 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else if (n_iter_minus_two == 3) {
-    CDUMP(40404040);
     asm volatile(
       "fadd.d ft3, %[zero], ft0\n"
       "fadd.d ft4, %[zero], ft0\n"
@@ -163,7 +158,6 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else if (n_iter_minus_two % 2 == 0) {
-    CDUMP(50505050);
     asm volatile(
       "fadd.d ft3, %[zero], ft0\n"
       "fadd.d ft4, %[zero], ft0\n"
@@ -179,7 +173,6 @@ void ssr_asm_no_index(int n_iter_minus_two) {
     );
   }
   else {
-    CDUMP(121212111);
     asm volatile(
       "fadd.d ft3, %[zero], ft0\n"
       "fadd.d ft4, %[zero], ft0\n"
@@ -211,15 +204,11 @@ static inline void ssr_asm_no_index(int);
 void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
 
   if (total_iters == 1) {
-    CDUMP(843957);
-    CDUMP(n_kernel);
     ssr_asm_no_index(n_kernel - 2);
-    CDUMP(19191919);
     return;
   }
   if (n_kernel < 6) {
     if (n_kernel == 2) {
-      CDUMP(1111111);
       asm volatile(
         "li t0, 0\n"
 
@@ -238,9 +227,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
       return;
     }
     else if (n_kernel == 1) {
-      CDUMP(2222222);
-      CDUMP(n_kernel);
-      CDUMP(total_iters);
       asm volatile(
         "li t0, 0\n"
 
@@ -255,11 +241,9 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
           [total_iters] "r"(total_iters)
         : "t0", "ft0", "ft1", "ft2", "memory", "zero"
       );
-      CDUMP(88888);
       return;
     }
     else if (n_kernel == 3) {
-      CDUMP(3333333);
       asm volatile(
         "li t0, 0\n"
 
@@ -281,7 +265,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
       return;
     }
     else if (n_kernel == 4) {
-      CDUMP(190190);
       asm volatile(
         "li t0, 0\n"
 
@@ -303,7 +286,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
       return;
     }
     else if (n_kernel == 5) {
-      CDUMP(555555555);
       asm volatile(
         "li t0, 0\n"
 
@@ -332,7 +314,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
   if (total_iters % 2 == 0) {
 
     if (mod == 0) {
-      CDUMP(98989898);
       asm volatile(
         "li t0, 0\n"
 
@@ -368,7 +349,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
 
     }
     else {
-      CDUMP(44444444);
       // DUMP(n_kernel);
       // DUMP(total_iters);
       asm volatile(
@@ -412,7 +392,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
   else {
 
     if (mod == 0) {
-      CDUMP(5555556);
       asm volatile(
         "fmax.d ft3, %[ninf], ft0\n"
         "fmax.d ft4, %[ninf], ft0\n"
@@ -457,7 +436,6 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
 
     }
     else {
-      CDUMP(6666667);
       asm volatile(
         "fmax.d ft3, %[ninf], ft0\n"
         "fmax.d ft4, %[ninf], ft0\n"
@@ -508,24 +486,105 @@ void ssr_asm_no_index_optimized(int n_kernel, int total_iters) {
   }
 }
 
+typedef struct maxpool_props_internal_struct {
+  int total_ins;
+  int total_outs;
+  int elems_per_matrix;
+  int outs_per_matrix;
+  int bytes_per_batch;
+  int total_channels;
+
+  // for tiling
+  int batches_per_cache;
+  int elems_per_cache;
+  int outs_per_cache;
+  int num_caches;
+  int batches_left;
+  int ins_left;
+  int outs_left;
+
+  // for 1d specialized algo
+  int use_specialized_1d;
+  int padding_present_1d;
+  int work_n_channels_1d;
+
+  // 2d good input
+  int is_good_input_2d;
+  int input_size_2d;
+  int pooled_size_2d;
+  int total_rows_2d;
+  int work_n_rows_2d;
+
+  // 2d specialized case
+  int use_specialized_2d;
+  int padding_present_2d;
+  int pad_top_2d;
+  int pad_bot_remove_2d;
+  int pad_bot_bound_2d;
+  int pad_left_2d;
+  int pad_right_remove_2d;
+  int pad_right_bound_2d;
+
+  // 2d specialized, not good input
+  // int rows_per_channel_2d;
+} maxpool_props_internal;
+
+// Props that depend on number of channels may need to be recomputed for tiling purposes.
+
+static inline void recompute_props_internal_1d(maxpool_attributes*, maxpool_props_internal*, int, int);
+
+void recompute_props_internal_1d(maxpool_attributes* attribs, maxpool_props_internal* props, int compute_num, int compute_id) {
+  props->total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+
+  props->work_n_channels_1d = props->total_channels / compute_num;
+  if (compute_id < props->total_channels % compute_num) ++props->work_n_channels_1d;
+}
+
+static inline void recompute_props_internal_2d(maxpool_attributes*, maxpool_props_internal*, int, int);
+
+void recompute_props_internal_2d(maxpool_attributes* attribs, maxpool_props_internal* props, int compute_num, int compute_id) {
+  props->total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+
+  props->is_good_input_2d = attribs->pads[0] == 0 && attribs->pads[1] == 0 &&
+    attribs->pads[2] == 0 && attribs->pads[3] == 0 &&
+    attribs->dilations[0] == 1 && attribs->dilations[1] == 1 &&
+    attribs->strides[0] == attribs->kernel_shape[0] && attribs->strides[1] == attribs->kernel_shape[1] &&
+    attribs->input_shape[2] % attribs->kernel_shape[0] == 0 &&
+    attribs->input_shape[3] % attribs->kernel_shape[1] == 0 &&
+    // We can probably use a different algorithm to make this efficient with fewer channels,
+    // but this is enough to demonstrate the optimal case.
+    attribs->input_shape[0] * attribs->input_shape[1] * attribs->output_shape[2] >= compute_num;
+
+  props->total_rows_2d = props->total_channels * attribs->output_shape[2];
+    
+  props->work_n_rows_2d = props->total_rows_2d / compute_num;
+  if (compute_id < props->total_rows_2d % compute_num) ++props->work_n_rows_2d;
+}
+
+static inline void recompute_props_internal_3d(maxpool_attributes*, maxpool_props_internal*, int, int);
+
+void recompute_props_internal_3d(maxpool_attributes* attribs, maxpool_props_internal* props, int compute_num, int compute_id) {
+  props->total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+}
+
 #endif
 
-static inline void MAXPOOL_FN_1D(maxpool_attributes*, double*, double*, int*, int, int, int);
-static inline void MAXPOOL_FN_2D(maxpool_attributes*, double*, double*, int*, int, int, int);
-static inline void MAXPOOL_FN_3D(maxpool_attributes*, double*, double*, int*, int, int, int);
+static inline void MAXPOOL_FN_1D(maxpool_attributes*, maxpool_props_internal*, double*, double*, int*, int, int, int);
+static inline void MAXPOOL_FN_2D(maxpool_attributes*, maxpool_props_internal*, double*, double*, int*, int, int, int);
+static inline void MAXPOOL_FN_3D(maxpool_attributes*, maxpool_props_internal*, double*, double*, int*, int, int, int);
 
-static inline void MAXPOOL_FN_UNTILED(maxpool_attributes*, double*, double*, int*, int, int, int, int, char*);
+static inline void MAXPOOL_FN_UNTILED(maxpool_attributes*, maxpool_props_internal*, double*, double*, int*, int, int, char*);
 
 void MAXPOOL_FN_UNTILED(maxpool_attributes* attribs,
+                        maxpool_props_internal* props,
                         double* in,
                         double* out,
                         int* idx,
                         int compute_id,
                         int compute_num,
-                        int total_ins,
-                        int total_outs,
                         char* ptr) {
-  // if (compute_id == 1) DUMP(20052961);
+  int total_ins = props->total_ins;
+  int total_outs = props->total_outs;
   if (snrt_is_dm_core()) {
 
     // load input data
@@ -570,11 +629,11 @@ void MAXPOOL_FN_UNTILED(maxpool_attributes* attribs,
     #endif
 
     #if MAXPOOL_DIM == 1
-    MAXPOOL_FN_1D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
+    MAXPOOL_FN_1D(attribs, props, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #elif MAXPOOL_DIM == 2
-    MAXPOOL_FN_2D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
+    MAXPOOL_FN_2D(attribs, props, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #elif MAXPOOL_DIM == 3
-    MAXPOOL_FN_3D(attribs, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
+    MAXPOOL_FN_3D(attribs, props, (double*) inputs_start, (double*) outputs_start, idx_out, compute_id, compute_num, total_outs);
     #endif
 
     snrt_fpu_fence();
@@ -615,131 +674,171 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
 
   ptr += ATTRIBS_SIZE;
 
+  maxpool_props_internal props;
+
+
   #if MAXPOOL_DIM == 1
-    int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
-    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
-    int elems_per_matrix = attribs->input_shape[2];
-    int outs_per_matrix = attribs->output_shape[2];
+    props.total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2];
+    props.total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2];
+    props.elems_per_matrix = attribs->input_shape[2];
+    props.outs_per_matrix = attribs->output_shape[2];
+
+    props.use_specialized_1d = (attribs->kernel_shape[0] - 1) * attribs->dilations[0] + 1 <= attribs->input_shape[2];
+    props.padding_present_1d = attribs->pads[0] != 0 || attribs->pads[1] != 0;
+
+    recompute_props_internal_1d(attribs, &props, compute_num, compute_id);
   #elif MAXPOOL_DIM == 2
-    int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3];
-    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3];
-    int elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3];
-    int outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3];
+    props.total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3];
+    props.total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3];
+    props.elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3];
+    props.outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3];
+
+    props.input_size_2d = attribs->input_shape[2] * attribs->input_shape[3];
+    props.pooled_size_2d = attribs->output_shape[2] * attribs->output_shape[3];
+
+    props.use_specialized_2d = (attribs->kernel_shape[0] - 1) * attribs->dilations[0] + 1 <= attribs->input_shape[2] && (attribs->kernel_shape[1] - 1) * attribs->dilations[1] + 1 <= attribs->input_shape[3];
+    props.padding_present_2d = attribs->pads[0] != 0 || attribs->pads[1] != 0 || attribs->pads[2] != 0 || attribs->pads[3] != 0;
+
+    props.pad_top_2d = ceil_div(attribs->pads[0], attribs->strides[0]);
+    props.pad_bot_remove_2d = ceil_div(attribs->kernel_shape[0] * attribs->dilations[0] - 1, attribs->strides[0]);
+    props.pad_bot_bound_2d = attribs->output_shape[2] - props.pad_bot_remove_2d;
+    props.pad_left_2d = ceil_div(attribs->pads[1], attribs->strides[1]);
+    props.pad_right_remove_2d = ceil_div(attribs->kernel_shape[1] * attribs->dilations[1] - 1, attribs->strides[1]);
+    props.pad_right_bound_2d = attribs->output_shape[3] - props.pad_right_remove_2d;
+
+    recompute_props_internal_2d(attribs, &props, compute_num, compute_id);
   #elif MAXPOOL_DIM == 3
-    int total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
-    int total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
-    int elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
-    int outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
+    props.total_ins = attribs->input_shape[0] * attribs->input_shape[1] * attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
+    props.total_outs = attribs->output_shape[0] * attribs->output_shape[1] * attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
+    props.elems_per_matrix = attribs->input_shape[2] * attribs->input_shape[3] * attribs->input_shape[4];
+    props.outs_per_matrix = attribs->output_shape[2] * attribs->output_shape[3] * attribs->output_shape[4];
+
+    recompute_props_internal_3d(attribs, &props, compute_num, compute_id);
   #endif
   // if (compute_id == 1) DUMP(elems_per_matrix);
 
   #if !USE_DOUBLE_BUFFERING
-  MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
+  MAXPOOL_FN_UNTILED(attribs, &props, in, out, idx, compute_id, compute_num, ptr);
   #else
 
   #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-  int bytes_per_batch = elems_per_matrix * sizeof(double) + outs_per_matrix * (sizeof(double) + sizeof(int));
+  props.bytes_per_batch = props.elems_per_matrix * sizeof(double) + props.outs_per_matrix * (sizeof(double) + sizeof(int));
   #else
-  int bytes_per_batch = elems_per_matrix * sizeof(double) + outs_per_matrix * sizeof(double);
+  props.bytes_per_batch = props.elems_per_matrix * sizeof(double) + props.outs_per_matrix * sizeof(double);
   #endif
   
-  int total_channels = attribs->input_shape[0] * attribs->input_shape[1];
-  if (bytes_per_batch * total_channels <= USABLE_CACHE) {
-    MAXPOOL_FN_UNTILED(attribs, in, out, idx, compute_id, compute_num, total_ins, total_outs, ptr);
+  props.total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+  if (props.bytes_per_batch * props.total_channels <= USABLE_CACHE) {
+    MAXPOOL_FN_UNTILED(attribs, &props, in, out, idx, compute_id, compute_num, ptr);
 
     return;
   }
 
-  // if (compute_id == 1) DUMP(10052961);
+  if (compute_id == 1) DUMP(10052961);
 
   char* first_ptr = ptr;
   char* second_ptr = ptr + align(USABLE_CACHE / 2);
   // whether we should use the second half of available cache
   int use_second = 0;
 
-  int batches_per_cache = HALF_CACHE / bytes_per_batch;
+  props.batches_per_cache = HALF_CACHE / props.bytes_per_batch;
   // We tile one matrix at a time.
   // Tiling partial matrices is quite complicated due to stride/dilation/padding parameters.
-  if (batches_per_cache == 0) {
+  if (props.batches_per_cache == 0) {
     printf("Error: Cache must handle at least one matrix.\n");
     return;
   }
-  int elems_per_cache = batches_per_cache * elems_per_matrix;
-  int outs_per_cache = batches_per_cache * outs_per_matrix;
+  props.elems_per_cache = props.batches_per_cache * props.elems_per_matrix;
+  props.outs_per_cache = props.batches_per_cache * props.outs_per_matrix;
 
   maxpool_attributes copy = *attribs;
-  copy.input_shape[0] = batches_per_cache;
+  copy.input_shape[0] = props.batches_per_cache;
   copy.input_shape[1] = 1;
-  copy.output_shape[0] = batches_per_cache;
+  copy.output_shape[0] = props.batches_per_cache;
   copy.output_shape[1] = 1;
 
-  int num_caches = ceil_div(total_channels, batches_per_cache);
+  #if MAXPOOL_DIM == 1
+    recompute_props_internal_1d(attribs, &props, compute_num, compute_id);
+  #elif MAXPOOL_DIM == 2
+    recompute_props_internal_2d(attribs, &props, compute_num, compute_id);
+  #elif MAXPOOL_DIM == 3
+    recompute_props_internal_3d(attribs, &props, compute_num, compute_id);
+  #endif
+
+  props.num_caches = ceil_div(props.total_channels, props.batches_per_cache);
+
+  props.batches_left = (props.total_channels - (props.batches_per_cache * (props.num_caches - 1)));
+  props.ins_left = props.batches_left * props.elems_per_matrix;
+  props.outs_left = props.batches_left * props.outs_per_matrix;
 
   if (snrt_is_dm_core()) {
-    snrt_dma_start_1d(first_ptr, in, elems_per_cache * sizeof(double));
+    snrt_dma_start_1d(first_ptr, in, props.elems_per_cache * sizeof(double));
   }
 
   char* this_ptr;
   char* other_ptr;
   char* idx_ptr = NULL;
   int i;
-  for (i = 1; i < num_caches - 1; ++i) {
+  for (i = 1; i < props.num_caches - 1; ++i) {
     use_second = !use_second;
     this_ptr = use_second ? second_ptr : first_ptr;
     other_ptr = use_second ? first_ptr : second_ptr;
     #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
       #if DMA_INDICES
-      idx_ptr = other_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+      idx_ptr = other_ptr + (props.elems_per_cache + props.outs_per_cache) * sizeof(double);
       #else
-      idx_ptr = idx + outs_per_cache * (i - 1);
+      idx_ptr = idx + props.outs_per_cache * (i - 1);
       #endif
     #endif
 
     if (snrt_is_dm_core()) {
 
       // load input data into this_ptr
-      snrt_dma_start_1d(this_ptr, ((double*) in) + elems_per_cache * i, elems_per_cache * sizeof(double));
+      snrt_dma_start_1d(this_ptr, ((double*) in) + props.elems_per_cache * i, props.elems_per_cache * sizeof(double));
 
       snrt_dma_wait_all();
 
       snrt_cluster_hw_barrier(); // 1: wait for computation to finish in other_ptr
 
       // write output from other_ptr
-      snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
-        ((double*) other_ptr) + elems_per_cache,
-        outs_per_cache * sizeof(double));
+      snrt_dma_start_1d(((double*) out) + props.outs_per_cache * (i - 1),
+        ((double*) other_ptr) + props.elems_per_cache,
+        props.outs_per_cache * sizeof(double));
       #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-      snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
+      snrt_dma_start_1d(((int*) idx) + props.outs_per_cache * (i - 1),
         idx_ptr,
-        outs_per_cache * sizeof(int));
+        props.outs_per_cache * sizeof(int));
       #endif
     }
     if (snrt_is_compute_core()) {
       // do computation on data in other_ptr
       #if MAXPOOL_DIM == 1
       MAXPOOL_FN_1D(&copy,
+        &props,
         (double*) other_ptr,
-        ((double*) other_ptr) + elems_per_cache,
+        ((double*) other_ptr) + props.elems_per_cache,
         (int*) idx_ptr,
         compute_id,
         compute_num,
-        outs_per_cache);
+        props.outs_per_cache);
       #elif MAXPOOL_DIM == 2
       MAXPOOL_FN_2D(&copy,
+        &props,
         (double*) other_ptr,
-        ((double*) other_ptr) + elems_per_cache,
+        ((double*) other_ptr) + props.elems_per_cache,
         (int*) idx_ptr,
         compute_id,
         compute_num,
-        outs_per_cache);
+        props.outs_per_cache);
       #else
       MAXPOOL_FN_3D(&copy,
+        &props,
         (double*) other_ptr,
-        ((double*) other_ptr) + elems_per_cache,
+        ((double*) other_ptr) + props.elems_per_cache,
         (int*) idx_ptr,
         compute_id,
         compute_num,
-        outs_per_cache);
+        props.outs_per_cache);
       #endif
 
       snrt_cluster_hw_barrier(); // 1
@@ -754,51 +853,48 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   other_ptr = use_second ? first_ptr : second_ptr;
   #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
     #if DMA_INDICES
-    idx_ptr = other_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+    idx_ptr = other_ptr + (props.elems_per_cache + props.outs_per_cache) * sizeof(double);
     #else
-    idx_ptr = idx + outs_per_cache * (i - 1);
+    idx_ptr = idx + props.outs_per_cache * (i - 1);
     #endif
   #endif
 
-  int batches_left = (total_channels - (batches_per_cache * (num_caches - 1)));
-  int ins_left = batches_left * elems_per_matrix;
-  int outs_left = batches_left * outs_per_matrix;
   if (snrt_is_dm_core()) {
     // load input data into this_ptr
     snrt_dma_start_1d(this_ptr,
-      ((double*) in) + elems_per_cache * i,
-      ins_left * sizeof(double));
+      ((double*) in) + props.elems_per_cache * i,
+      props.ins_left * sizeof(double));
 
     snrt_dma_wait_all();
 
     snrt_cluster_hw_barrier(); // 1: wait for computation to finish in other_ptr
 
     // write output from other_ptr
-    snrt_dma_start_1d(((double*) out) + outs_per_cache * (i - 1),
-      ((double*) other_ptr) + elems_per_cache,
-      outs_per_cache * sizeof(double));
+    snrt_dma_start_1d(((double*) out) + props.outs_per_cache * (i - 1),
+      ((double*) other_ptr) + props.elems_per_cache,
+      props.outs_per_cache * sizeof(double));
     #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-    snrt_dma_start_1d(((int*) idx) + outs_per_cache * (i - 1),
+    snrt_dma_start_1d(((int*) idx) + props.outs_per_cache * (i - 1),
       idx_ptr,
-      outs_per_cache * sizeof(int));
+      props.outs_per_cache * sizeof(int));
     #endif
     snrt_cluster_hw_barrier(); // 2: wait for computation to finish in this_ptr
 
-    snrt_dma_start_1d(((double*) out) + outs_per_cache * i,
-      ((double*) this_ptr) + elems_per_cache,
-      outs_left * sizeof(double));
+    snrt_dma_start_1d(((double*) out) + props.outs_per_cache * i,
+      ((double*) this_ptr) + props.elems_per_cache,
+      props.outs_left * sizeof(double));
     #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
       #if DMA_INDICES
-      idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+      idx_ptr = this_ptr + (props.elems_per_cache + props.outs_per_cache) * sizeof(double);
       #else
-      idx_ptr = idx + outs_per_cache * i;
+      idx_ptr = idx + props.outs_per_cache * i;
       #endif
     #endif
 
     #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
-    snrt_dma_start_1d(((int*) idx) + outs_per_cache * i,
+    snrt_dma_start_1d(((int*) idx) + props.outs_per_cache * i,
       idx_ptr,
-      outs_left * sizeof(int));
+      props.outs_left * sizeof(int));
     #endif
     snrt_cluster_hw_barrier(); // 3: all done
 
@@ -807,28 +903,31 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     // do computation on data in other_ptr
     #if MAXPOOL_DIM == 1
     MAXPOOL_FN_1D(&copy,
+      &props,
       (double*) other_ptr,
-      ((double*) other_ptr) + elems_per_cache,
+      ((double*) other_ptr) + props.elems_per_cache,
       (int*) idx_ptr,
       compute_id,
       compute_num,
-      outs_per_cache);
+      props.outs_per_cache);
     #elif MAXPOOL_DIM == 2
     MAXPOOL_FN_2D(&copy,
+      &props,
       (double*) other_ptr,
-      ((double*) other_ptr) + elems_per_cache,
+      ((double*) other_ptr) + props.elems_per_cache,
       (int*) idx_ptr,
       compute_id,
       compute_num,
-      outs_per_cache);
+      props.outs_per_cache);
     #else
     MAXPOOL_FN_3D(&copy,
+      &props,
       (double*) other_ptr,
-      ((double*) other_ptr) + elems_per_cache,
+      ((double*) other_ptr) + props.elems_per_cache,
       (int*) idx_ptr,
       compute_id,
       compute_num,
-      outs_per_cache);
+      props.outs_per_cache);
     #endif
 
     snrt_cluster_hw_barrier(); // 1
@@ -837,41 +936,52 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
 
     #if defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)
       #if DMA_INDICES
-      idx_ptr = this_ptr + (elems_per_cache + outs_per_cache) * sizeof(double);
+      idx_ptr = this_ptr + (props.elems_per_cache + props.outs_per_cache) * sizeof(double);
       #else
-      idx_ptr = idx + outs_per_cache * i;
+      idx_ptr = idx + props.outs_per_cache * i;
       #endif
     #endif
 
-    copy.input_shape[0] = batches_left;
+    copy.input_shape[0] = props.batches_left;
     copy.input_shape[1] = 1;
-    copy.output_shape[0] = batches_left;
+    copy.output_shape[0] = props.batches_left;
     copy.output_shape[1] = 1;
 
     #if MAXPOOL_DIM == 1
+      recompute_props_internal_1d(attribs, &props, compute_num, compute_id);
+    #elif MAXPOOL_DIM == 2
+      recompute_props_internal_2d(attribs, &props, compute_num, compute_id);
+    #elif MAXPOOL_DIM == 3
+      recompute_props_internal_3d(attribs, &props, compute_num, compute_id);
+    #endif
+
+    #if MAXPOOL_DIM == 1
     MAXPOOL_FN_1D(&copy,
+      &props,
       (double*) this_ptr,
-      ((double*) this_ptr) + elems_per_cache,
+      ((double*) this_ptr) + props.elems_per_cache,
       (int*) idx_ptr,
       compute_id,
       compute_num,
-      outs_left);
+      props.outs_left);
     #elif MAXPOOL_DIM == 2
     MAXPOOL_FN_2D(&copy,
+      &props,
       (double*) this_ptr,
-      ((double*) this_ptr) + elems_per_cache,
+      ((double*) this_ptr) + props.elems_per_cache,
       (int*) idx_ptr,
       compute_id,
       compute_num,
-      outs_left);
+      props.outs_left);
     #else
     MAXPOOL_FN_3D(&copy,
+      &props,
       (double*) this_ptr,
-      ((double*) this_ptr) + elems_per_cache,
+      ((double*) this_ptr) + props.elems_per_cache,
       (int*) idx_ptr,
       compute_id,
       compute_num,
-      outs_left);
+      props.outs_left);
     #endif
 
     snrt_fpu_fence();
@@ -886,6 +996,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
 }
 
 void MAXPOOL_FN_1D(maxpool_attributes* attr,
+                   maxpool_props_internal* props,
                    double* in,
                    double* out,
                    int* idx,
@@ -895,23 +1006,19 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
   #if ENABLE_SPECIALIZED && !defined(MAXPOOL_ROW_MAJOR) && !defined(MAXPOOL_COL_MAJOR)
   // The optimized algorithm doesn't work if there are kernels that touch padding on both sides.
-  if ((attr->kernel_shape[0] - 1) * attr->dilations[0] + 1 <= attr->input_shape[2]) {
+  if (props->use_specialized_1d) { // use_specialized_1d
     // Due to us double buffering only an integer number of matrices,
     // we are therefore called to process an integer number of matrices.
     int input_size = attr->input_shape[2];
     int pooled_size = attr->output_shape[2];
-    int n_channels = attr->input_shape[0] * attr->input_shape[1];
 
     int new_pooled_size = pooled_size;
     double* in_copy = in;
     double* out_copy = out;
 
-    if (attr->pads[0] != 0 || attr->pads[1] != 0) {
+    if (props->padding_present_1d) { // padding_present_1d
 
-      int work_n_channels = n_channels / n_cores;
-      if (start_step < n_channels % n_cores) ++work_n_channels;
-
-      if (work_n_channels > 0) {
+      if (props->work_n_channels_1d > 0) {
 
         // If we have padding we special case the first and last kernel(s) of each channel.
         // If stride is less than padding it's possible multiple kernels at the start will include padding.
@@ -926,12 +1033,12 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
             snrt_ssr_loop_2d(SNRT_SSR_DM0,
               kernel_left,
-              work_n_channels,
+              props->work_n_channels_1d,
               attr->dilations[0] * sizeof(double),
               n_cores * input_size * sizeof(double));
 
             snrt_ssr_loop_1d(SNRT_SSR_DM1,
-              work_n_channels,
+              props->work_n_channels_1d,
               n_cores * pooled_size * sizeof(double));
 
             int in_offset = neg_mod(padding_left, attr->dilations[0]);
@@ -941,7 +1048,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
             snrt_ssr_enable();
 
             const register int n_frep = kernel_left;
-            const register int total_iters = work_n_channels;
+            const register int total_iters = props->work_n_channels_1d;
 
             ssr_asm_no_index_optimized(n_frep, total_iters);
 
@@ -974,12 +1081,12 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 
             snrt_ssr_loop_2d(SNRT_SSR_DM0,
               vals_left,
-              work_n_channels,
+              props->work_n_channels_1d,
               attr->dilations[0] * sizeof(double),
               n_cores * input_size * sizeof(double));
 
             snrt_ssr_loop_1d(SNRT_SSR_DM1,
-              work_n_channels,
+              props->work_n_channels_1d,
               n_cores * pooled_size * sizeof(double));
             
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_2D, in_copy + offset + start_step * input_size);
@@ -988,7 +1095,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
             snrt_ssr_enable();
 
             const register int n_frep = vals_left;
-            const register int total_iters = work_n_channels;
+            const register int total_iters = props->work_n_channels_1d;
 
             ssr_asm_no_index_optimized(n_frep, total_iters);
 
@@ -1015,28 +1122,22 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     // If n_channels >= n_cores then we can make it almost optimal by distributing entire
     // matrices between the cores. This strategy works at scale,
     // we could additionally implement special cases for very small inputs if desired.
-    if (pooled_size < n_cores && n_channels >= n_cores) {
-      CDUMP(777111777);
-      int work_n_channels = n_channels / n_cores;
-      if (start_step < n_channels % n_cores) ++work_n_channels;
-      
-      if (work_n_channels < 1) return;
-
-      CDUMP(777222777);
+    if (pooled_size < n_cores && props->total_channels >= n_cores) {
+      if (props->work_n_channels_1d < 1) return;
 
       // new_pooled_size represents the number of outputs still needed for each channel after
       // precomputing kernels that involve padding.
       snrt_ssr_loop_3d(SNRT_SSR_DM0,
         attr->kernel_shape[0],
         new_pooled_size,
-        work_n_channels,
+        props->work_n_channels_1d,
         attr->dilations[0] * sizeof(double),
         attr->strides[0] * sizeof(double),
         n_cores * input_size * sizeof(double));
 
       snrt_ssr_loop_2d(SNRT_SSR_DM1,
         new_pooled_size,
-        work_n_channels,
+        props->work_n_channels_1d,
         sizeof(double),
         n_cores * pooled_size * sizeof(double));
 
@@ -1046,14 +1147,14 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
       snrt_ssr_enable();
 
       const register int n_frep = attr->kernel_shape[0];
-      const register int total_iters = new_pooled_size * work_n_channels;
+      const register int total_iters = new_pooled_size * props->work_n_channels_1d;
 
       // frep performs kernel shape fmax ops, total of work_per_channel frep's
       ssr_asm_no_index_optimized(n_frep, total_iters);
 
       snrt_ssr_disable();
       snrt_fpu_fence();
-      CDUMP(777333777);
+
       return;
 
     }
@@ -1067,14 +1168,14 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     snrt_ssr_loop_3d(SNRT_SSR_DM0,
       attr->kernel_shape[0],
       work_per_channel,
-      n_channels,
+      props->total_channels,
       attr->dilations[0] * sizeof(double),
       attr->strides[0] * sizeof(double) * n_cores,
       input_size * sizeof(double));
 
     snrt_ssr_loop_2d(SNRT_SSR_DM1,
       work_per_channel,
-      n_channels,
+      props->total_channels,
       n_cores * sizeof(double),
       pooled_size * sizeof(double));
 
@@ -1085,7 +1186,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
     snrt_ssr_enable();
 
     const register int n_frep = attr->kernel_shape[0];
-    const register int total_iters = work_per_channel * n_channels;
+    const register int total_iters = work_per_channel * props->total_channels;
 
     // frep performs kernel shape fmax ops, total of work_per_channel frep's
     ssr_asm_no_index_optimized(n_frep, total_iters);
@@ -1179,6 +1280,7 @@ void MAXPOOL_FN_1D(maxpool_attributes* attr,
 }
 
 void MAXPOOL_FN_2D(maxpool_attributes* attr,
+                   maxpool_props_internal* props,
                    double* in,
                    double* out,
                    int* idx,
@@ -1193,33 +1295,20 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
   // The condition may be overspecified: other inputs might be permissible.
   // Dilation > 1 in one dimension may be allowed: If height dilation > 1 then compute column by column.
   // If width dilation > 1 then compute row by row.
-  if (attr->pads[0] == 0 && attr->pads[1] == 0 && attr->pads[2] == 0 && attr->pads[3] == 0 &&
-      attr->dilations[0] == 1 && attr->dilations[1] == 1 &&
-      attr->strides[0] == attr->kernel_shape[0] && attr->strides[1] == attr->kernel_shape[1] &&
-      attr->input_shape[2] % attr->kernel_shape[0] == 0 && attr->input_shape[3] % attr->kernel_shape[1] == 0 &&
-      // We can probably use a different algorithm to make this efficient with fewer channels,
-      // but this is enough to demonstrate the optimal case.
-      attr->input_shape[0] * attr->input_shape[1] * attr->output_shape[2] >= n_cores) {
-    
-    int input_size = attr->input_shape[2] * attr->input_shape[3];
-    int pooled_size = attr->output_shape[2] * attr->output_shape[3];
-    int n_channels = attr->input_shape[0] * attr->input_shape[1];
-    int total_rows = n_channels * attr->output_shape[2];
-    
+  if (props->is_good_input_2d) { // is_good_input_2d
+
     int in_h = attr->input_shape[2];
     int in_w = attr->input_shape[3];
     int out_h = attr->output_shape[2];
     int out_w = attr->output_shape[3];
 
-    int work_n_rows = total_rows / n_cores;
-    if (start_step < total_rows % n_cores) ++work_n_rows;
-    if (work_n_rows < 1) return;
+    if (props->work_n_rows_2d < 1) return;
 
     snrt_ssr_loop_4d(SNRT_SSR_DM0,
       attr->kernel_shape[1],
       attr->kernel_shape[0],
       out_w,
-      work_n_rows,
+      props->work_n_rows_2d,
       attr->dilations[1] * sizeof(double),
       in_w * attr->dilations[0] * sizeof(double),
       attr->strides[1] * sizeof(double),
@@ -1227,7 +1316,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
     
     snrt_ssr_loop_2d(SNRT_SSR_DM1,
       out_w,
-      work_n_rows,
+      props->work_n_rows_2d,
       sizeof(double),
       n_cores * out_w * sizeof(double));
     
@@ -1237,7 +1326,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
     snrt_ssr_enable();
 
     const register int n_frep = attr->kernel_shape[0] * attr->kernel_shape[1];
-    const register int total_iters = work_n_rows * out_w;
+    const register int total_iters = props->work_n_rows_2d * out_w;
 
     ssr_asm_no_index_optimized(n_frep, total_iters);
 
@@ -1250,18 +1339,14 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
   // Inputs that have a kernel affected by multiple paddings is not supported.
   // A more complicated special casing algorithm may resolve this.
-  if ((attr->kernel_shape[0] - 1) * attr->dilations[0] + 1 <= attr->input_shape[2] && (attr->kernel_shape[1] - 1) * attr->dilations[1] + 1 <= attr->input_shape[3]) {
-
-    int input_size = attr->input_shape[2] * attr->input_shape[3];
-    int pooled_size = attr->output_shape[2] * attr->output_shape[3];
-    int n_channels = attr->input_shape[0] * attr->input_shape[1];
+  if (props->use_specialized_2d) { // use_specialized_2d
 
     int in_h = attr->input_shape[2];
     int in_w = attr->input_shape[3];
     int out_h = attr->output_shape[2];
     int out_w = attr->output_shape[3];
 
-    if (attr->pads[0] != 0 || attr->pads[1] != 0 || attr->pads[2] != 0 || attr->pads[3] != 0) {
+    if (props->padding_present_2d) { // padding_present_2d
 
       int height = attr->input_shape[2];
       int width = attr->input_shape[3];
@@ -1269,27 +1354,14 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
       int pooled_height = attr->output_shape[2];
       int pooled_width = attr->output_shape[3];
-      int y_step = pooled_size;
+      int y_step = props->pooled_size_2d;
 
       // The bottom and right bounds are a worst case. They can probably be tightened with a better formula.
-      int pad_top = ceil_div(attr->pads[0], attr->strides[0]);
-      int pad_bot_remove = ceil_div(attr->kernel_shape[0] * attr->dilations[0] - 1, attr->strides[0]);
-      int pad_bot_bound = attr->output_shape[2] - pad_bot_remove;
-      int pad_left = ceil_div(attr->pads[1], attr->strides[1]);
-      int pad_right_remove = ceil_div(attr->kernel_shape[1] * attr->dilations[1] - 1, attr->strides[1]);
-      int pad_right_bound = attr->output_shape[3] - pad_right_remove;
-      // if (start_step == 0) DUMP(pad_top);
-      // if (start_step == 0) DUMP(ceil_div(attr->kernel_shape[1] - 1, attr->strides[1]));
-      // if (start_step == 0) DUMP(pad_bot_bound);
-
-      // if (start_step == 0) DUMP(pad_left);
-      // if (start_step == 0) DUMP(ceil_div(attr->kernel_shape[0] - 1, attr->strides[0]));
-      // if (start_step == 0) DUMP(pad_right_bound);
 
       // This is just adapted from the old version of maxpool with SSR/FREP.
       // It's pretty inefficient for computing the kernels with padding and wastes lots of iterations.
       // We could alternatively split the matrix into 8 sections along the edges and vertices.
-      // That lets us batch the four edges, but it is pretty tedious so it is not done here.
+      // It is pretty tedious so it is not done here.
       for (int step = start_step; step < end_step; step += n_cores) {
 
         int i = step / y_step;
@@ -1297,7 +1369,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
         int ph = inst_idx / pooled_width;
         int pw = inst_idx % pooled_width;
         
-        if (ph >= pad_top && ph < pad_bot_bound && pw >= pad_left && pw < pad_right_bound) continue;
+        if (ph >= props->pad_top_2d && ph < props->pad_bot_bound_2d && pw >= props->pad_left_2d && pw < props->pad_right_bound_2d) continue;
 
         int x_d = i * x_step;
         int y_d = i * y_step;
@@ -1338,22 +1410,22 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
       }
 
-      int top_offset = -attr->pads[0] + pad_top * attr->strides[0];
-      int left_offset = -attr->pads[1] + pad_left * attr->strides[1];
+      int top_offset = -attr->pads[0] + props->pad_top_2d * attr->strides[0];
+      int left_offset = -attr->pads[1] + props->pad_left_2d * attr->strides[1];
       // if (start_step == 0) DUMP(top_offset);
       // if (start_step == 0) DUMP(left_offset);
 
       in += in_w * top_offset + left_offset;
-      out += out_w * pad_top + pad_left;
+      out += out_w * props->pad_top_2d + props->pad_left_2d;
       // if (start_step == 0) DUMP(out_w * pad_top + pad_left);
       // if (start_step == 0) DUMP(out_h);
       // if (start_step == 0) DUMP(out_w);
 
-      out_h -= pad_top;
-      out_h -= pad_bot_remove;
+      out_h -= props->pad_top_2d;
+      out_h -= props->pad_bot_remove_2d;
 
-      out_w -= pad_left;
-      out_w -= pad_right_remove;
+      out_w -= props->pad_left_2d;
+      out_w -= props->pad_right_remove_2d;
 
       if (out_h <= 0 || out_w <= 0) return;
 
@@ -1363,12 +1435,12 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
       // return;
     }
 
-    if (n_channels >= n_cores) {
+    if (props->total_channels >= n_cores) {
 
       // The first and simplest strategy is to distribute channels evenly. This is close to optimal at scale
       // as work is unbalanced by at most one channel between any two cores.
       // We are limited to 4D SSR so the channel iteration must be a traditional loop.
-      for (int i = start_step; i < n_channels; i += n_cores) {
+      for (int i = start_step; i < props->total_channels; i += n_cores) {
 
         snrt_ssr_loop_4d(SNRT_SSR_DM0,
           attr->kernel_shape[1],
@@ -1387,8 +1459,8 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
           sizeof(double),
           attr->output_shape[3] * sizeof(double));
         
-        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + input_size * i);
-        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + pooled_size * i);
+        snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + props->input_size_2d * i);
+        snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + props->pooled_size_2d * i);
 
         snrt_ssr_enable();
 
@@ -1411,7 +1483,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 
     if (rows_per_channel < 1) return;
 
-    for (int i = 0; i < n_channels; ++i) {
+    for (int i = 0; i < props->total_channels; ++i) {
       
       snrt_ssr_loop_4d(SNRT_SSR_DM0,
         attr->kernel_shape[1],
@@ -1428,10 +1500,10 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
         out_w,
         rows_per_channel,
         sizeof(double),
-        n_cores * out_w * sizeof(double));
+        n_cores * attr->output_shape[3] * sizeof(double));
       
-      snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + start_step * in_w * attr->strides[0] + input_size * i);
-      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + start_step * out_w + pooled_size * i);
+      snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, in + start_step * in_w * attr->strides[0] + props->input_size_2d * i);
+      snrt_ssr_write(SNRT_SSR_DM1, SNRT_SSR_2D, out + start_step * attr->output_shape[3] + props->pooled_size_2d * i);
 
       snrt_ssr_enable();
 
@@ -1576,6 +1648,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
 }
 
 void MAXPOOL_FN_3D(maxpool_attributes* attr,
+                   maxpool_props_internal* props,
                    double* in,
                    double* out,
                    int* idx,

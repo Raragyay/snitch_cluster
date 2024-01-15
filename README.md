@@ -1,6 +1,12 @@
 ![CI](https://github.com/pulp-platform/snitch_cluster/actions/workflows/ci.yml/badge.svg)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+## Kernels
+Kernels for the DPHPC project can be run on the following branches:
+ - [BatchNorm](https://github.com/Raragyay/snitch_cluster/tree/batchnorm)
+ - [GeMM](https://github.com/Raragyay/snitch_cluster/tree/gemm)
+ - [MaxPool](https://github.com/Raragyay/snitch_cluster/tree/maxpool-optimize)
+
 # Snitch Cluster
 
 This repository hosts the hardware and software for the Snitch cluster and its generator. Snitch is a high-efficiency compute cluster platform focused on floating-point workloads. It is developed as part of the PULP project, a joint effort between ETH Zurich and the University of Bologna.

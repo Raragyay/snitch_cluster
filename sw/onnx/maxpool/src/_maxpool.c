@@ -40,7 +40,7 @@
 #define ENABLE_BENCHMARKING 0
 
 // Assume we have ~100kb of free cache
-#define BASE_USABLE_CACHE 100000
+#define BASE_USABLE_CACHE 106000
 
 // number of usable bytes in l1
 #define USABLE_CACHE BASE_USABLE_CACHE
@@ -651,12 +651,7 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   uint32_t compute_num = snrt_cluster_compute_core_num();
   uint32_t compute_id = snrt_global_core_idx();
 
-  snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL, 0);
-  snrt_start_perf_counter(SNRT_PERF_CNT1, SNRT_PERF_CNT_TCDM_CONGESTED, 0);
-
   char* ptr = (char*) snrt_l1_next();
-  
-  snrt_mcycle();
 
   #if DMA_ATTRIBS
     maxpool_attributes* attribs = (maxpool_attributes*) ptr;
@@ -718,7 +713,12 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   // if (compute_id == 1) DUMP(elems_per_matrix);
 
   #if !USE_DOUBLE_BUFFERING
+  // benchmark for when tiling is disabled
+  snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL, 0);
+  snrt_start_perf_counter(SNRT_PERF_CNT1, SNRT_PERF_CNT_TCDM_CONGESTED, 0);
+  snrt_mcycle();
   MAXPOOL_FN_UNTILED(attribs, &props, in, out, idx, compute_id, compute_num, ptr);
+  return;
   #else
 
   #if (defined(MAXPOOL_ROW_MAJOR) || defined(MAXPOOL_COL_MAJOR)) && DMA_INDICES
@@ -728,13 +728,18 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   #endif
   
   props.total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+
   if (props.bytes_per_batch * props.total_channels <= USABLE_CACHE) {
+    // benchmark for when no tiling needed
+    snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL, 0);
+    snrt_start_perf_counter(SNRT_PERF_CNT1, SNRT_PERF_CNT_TCDM_CONGESTED, 0);
+    snrt_mcycle();
     MAXPOOL_FN_UNTILED(attribs, &props, in, out, idx, compute_id, compute_num, ptr);
 
     return;
   }
 
-  if (compute_id == 1) DUMP(10052961);
+  // if (compute_id == 1) DUMP(10052961);
 
   char* first_ptr = ptr;
   char* second_ptr = ptr + align(USABLE_CACHE / 2);
@@ -751,6 +756,8 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   props.elems_per_cache = props.batches_per_cache * props.elems_per_matrix;
   props.outs_per_cache = props.batches_per_cache * props.outs_per_matrix;
 
+  int true_total_channels = attribs->input_shape[0] * attribs->input_shape[1];
+
   maxpool_attributes copy = *attribs;
   copy.input_shape[0] = props.batches_per_cache;
   copy.input_shape[1] = 1;
@@ -758,18 +765,23 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
   copy.output_shape[1] = 1;
 
   #if MAXPOOL_DIM == 1
-    recompute_props_internal_1d(attribs, &props, compute_num, compute_id);
+    recompute_props_internal_1d(&copy, &props, compute_num, compute_id);
   #elif MAXPOOL_DIM == 2
-    recompute_props_internal_2d(attribs, &props, compute_num, compute_id);
+    recompute_props_internal_2d(&copy, &props, compute_num, compute_id);
   #elif MAXPOOL_DIM == 3
-    recompute_props_internal_3d(attribs, &props, compute_num, compute_id);
+    recompute_props_internal_3d(&copy, &props, compute_num, compute_id);
   #endif
 
-  props.num_caches = ceil_div(props.total_channels, props.batches_per_cache);
+  props.num_caches = ceil_div(true_total_channels, props.batches_per_cache);
 
-  props.batches_left = (props.total_channels - (props.batches_per_cache * (props.num_caches - 1)));
+  props.batches_left = (true_total_channels - (props.batches_per_cache * (props.num_caches - 1)));
   props.ins_left = props.batches_left * props.elems_per_matrix;
   props.outs_left = props.batches_left * props.outs_per_matrix;
+
+  // benchmark for when tiling is needed
+  snrt_start_perf_counter(SNRT_PERF_CNT0, SNRT_PERF_CNT_ICACHE_STALL, 0);
+  snrt_start_perf_counter(SNRT_PERF_CNT1, SNRT_PERF_CNT_TCDM_CONGESTED, 0);
+  snrt_mcycle();
 
   if (snrt_is_dm_core()) {
     snrt_dma_start_1d(first_ptr, in, props.elems_per_cache * sizeof(double));
@@ -948,11 +960,11 @@ void MAXPOOL_FN(maxpool_attributes* attribs_raw, double* in, double* out, int* i
     copy.output_shape[1] = 1;
 
     #if MAXPOOL_DIM == 1
-      recompute_props_internal_1d(attribs, &props, compute_num, compute_id);
+      recompute_props_internal_1d(&copy, &props, compute_num, compute_id);
     #elif MAXPOOL_DIM == 2
-      recompute_props_internal_2d(attribs, &props, compute_num, compute_id);
+      recompute_props_internal_2d(&copy, &props, compute_num, compute_id);
     #elif MAXPOOL_DIM == 3
-      recompute_props_internal_3d(attribs, &props, compute_num, compute_id);
+      recompute_props_internal_3d(&copy, &props, compute_num, compute_id);
     #endif
 
     #if MAXPOOL_DIM == 1
@@ -1287,7 +1299,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
                    int start_step,
                    int n_cores,
                    int end_step) {
-
+  // if (start_step == 0) DUMP(props->work_n_rows_2d);
   #if ENABLE_SPECIALIZED && !defined(MAXPOOL_ROW_MAJOR) && !defined(MAXPOOL_COL_MAJOR)
 
   // Check the special case of a very nice input: 1 dilation, stride = kernel, no padding, kernel tiles perfectly.
@@ -1296,7 +1308,7 @@ void MAXPOOL_FN_2D(maxpool_attributes* attr,
   // Dilation > 1 in one dimension may be allowed: If height dilation > 1 then compute column by column.
   // If width dilation > 1 then compute row by row.
   if (props->is_good_input_2d) { // is_good_input_2d
-
+    
     int in_h = attr->input_shape[2];
     int in_w = attr->input_shape[3];
     int out_h = attr->output_shape[2];

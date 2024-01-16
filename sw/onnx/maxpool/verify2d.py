@@ -25,7 +25,7 @@ def main():
     snitch_bin=args.snitch_bin,
     symbols_bin=args.symbols_bin,
     log=args.log,
-    output_uids=["output_loc2", "idx_loc2"]
+    output_uids=["output_loc", "idx_loc"]
   )
 
   # Extract input operands from ELF file
@@ -34,7 +34,7 @@ def main():
   else:
     elf = Elf(args.snitch_bin)
 
-  ret = verify("ifmap2", "attr2", ["output_loc2", "idx_loc2"], elf=elf, raw_results=raw_results, id=2, no_index=args.no_index)
+  ret = verify("ifmap", "attr2", ["output_loc", "idx_loc"], elf=elf, raw_results=raw_results, id=2, no_index=args.no_index)
   if ret == 0:
     print("2D good")
 

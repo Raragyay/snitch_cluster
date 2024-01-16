@@ -36,6 +36,22 @@ void maxpool_fp64(maxpool_attributes* attr, double* in, double* out, double* idx
 void populate_defaults(maxpool_attributes* attr, int n_dim);
 */
 
+// "ifmap2", "attr2", ["output_loc2", "idx_loc2"]
+maxpool_attributes attr2 = {
+    .n_dim = 2,
+    .input_shape = {8, 1, 32, 32, -1},
+    .output_shape = {0},
+    .auto_pad = NOTSET,
+    .ceil_mode = 0,
+    .dilations = {1, 1, -1},
+    .kernel_shape = {8, 8, -1},
+    .pads = {0, 0, 0, 0, -1, -1},
+    .storage_order = 0,
+    .strides = {1, 1, -1}
+  };
+
+// int idx_loc[4096] = {0};
+
 int main() {
 
   // maxpool_attributes attr_1d = {
@@ -156,6 +172,67 @@ int main() {
   //               ifmap3,
   //               output_loc3);
 
+  maxpool_attributes attr_1d = {
+    .n_dim = 1,
+    .input_shape = {8, 1, 64, -1, -1},
+    .output_shape = {0},
+    .auto_pad = NOTSET,
+    .ceil_mode = 0,
+    .dilations = {1, -1, -1},
+    .kernel_shape = {64, -1, -1},
+    .pads = {0, 0, -1, -1, -1, -1},
+    .storage_order = 0,
+    .strides = {1, -1, -1}
+  };
+
+  maxpool_attributes attr_3d = {
+    .n_dim = 3,
+    .input_shape = {8, 1, 4, 4, 4},
+    .output_shape = {0},
+    .auto_pad = NOTSET,
+    .ceil_mode = 0,
+    .dilations = {1, 1, 1},
+    .kernel_shape = {4, 4, 4},
+    .pads = {0, 0, 0, 0, 0, 0},
+    .storage_order = 0,
+    .strides = {1, 1, 1}
+  };
+
+  maxpool_attributes attr_2d = {
+    .n_dim = 2,
+    .input_shape = {8, 1, 8, 8, -1},
+    .output_shape = {0},
+    .auto_pad = NOTSET,
+    .ceil_mode = 0,
+    .dilations = {1, 1, -1},
+    .kernel_shape = {8, 8, -1},
+    .pads = {0, 0, 0, 0, -1, -1},
+    .storage_order = 0,
+    .strides = {1, 1, -1}
+  };
+  // DUMP(sizeof(double));
+  for (int i = 1; i <= 5; ++i) {
+
+    compute_output_shape(&attr_3d, attr_3d.output_shape);
+    // if (snrt_global_core_idx() == 0) DUMP(attr_2d.output_shape[2] * attr_2d.output_shape[3]);
+    // if (snrt_global_core_idx() == 0) DUMP(attr_2d.output_shape[0] * attr_2d.output_shape[1] * 8 * attr_2d.output_shape[2] * attr_2d.output_shape[3]);
+    // snrt_reset_perf_counter(SNRT_PERF_CNT0);
+    // snrt_reset_perf_counter(SNRT_PERF_CNT1);
+    maxpool_f64_3d_no_index(&attr_3d, ifmap, output_loc);
+
+    snrt_mcycle();
+    snrt_stop_perf_counter(SNRT_PERF_CNT0);
+    snrt_stop_perf_counter(SNRT_PERF_CNT1);
+    uint32_t counter = snrt_get_perf_counter(SNRT_PERF_CNT0);
+    if (snrt_global_core_idx() == 0) DUMP(counter);
+    counter = snrt_get_perf_counter(SNRT_PERF_CNT1);
+    if (snrt_global_core_idx() == 0) DUMP(counter);
+    snrt_reset_perf_counter(SNRT_PERF_CNT0);
+    snrt_reset_perf_counter(SNRT_PERF_CNT1);
+
+    attr_3d.input_shape[2 + ((i+1) % 3)] *= 2;
+
+  }
 
   #if ENABLE_COMPREHENSIVE_TEST
   maxpool_attributes attr_1d = {
